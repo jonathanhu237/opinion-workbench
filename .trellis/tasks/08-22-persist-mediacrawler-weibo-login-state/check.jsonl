@@ -1,0 +1,6 @@
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Review authentication-state logs for accidental Cookie or credential disclosure"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Run proportional backend tests and review error/fallback coverage"}
+{"file": ".trellis/spec/backend/auth-state-guidelines.md", "reason": "Verify the implementation against the executable auth-state storage, validation, logging, and regression contract"}
+{"file": ".trellis/spec/infra/submodule-guidelines.md", "reason": "Verify the fork revision is pushed and the parent records a clean reachable gitlink"}
+{"file": ".trellis/tasks/08-22-persist-mediacrawler-weibo-login-state/research/weibo-login-state-persistence.md", "reason": "Check the implementation and real two-run regression against the researched root cause"}
+{"file": ".trellis/tasks/08-22-persist-mediacrawler-weibo-login-state/research/validation-results.md", "reason": "Verify the recorded first-scan and second-run no-QR evidence without rerunning real authentication"}

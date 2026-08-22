@@ -1,0 +1,2 @@
+{"file": ".trellis/spec/guides/index.md", "reason": "Preserve unrelated runtime artifacts and inspect evidence before any temporary configuration change"}
+{"file": ".trellis/spec/infra/submodule-guidelines.md", "reason": "Keep the MediaCrawler submodule pinned and clean while validating its native runtime"}

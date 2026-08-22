@@ -1,0 +1,4 @@
+{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "Search existing Cookie and atomic-write helpers before adding a reusable auth-state boundary"}
+{"file": ".trellis/spec/backend/auth-state-guidelines.md", "reason": "Follow the executable contract for local browser authentication persistence and safe fallback"}
+{"file": ".trellis/spec/infra/submodule-guidelines.md", "reason": "Keep fork commits, push order, and parent gitlink updates reproducible"}
+{"file": ".trellis/tasks/08-22-persist-mediacrawler-weibo-login-state/research/weibo-login-state-persistence.md", "reason": "Implement the evidence-backed cookie-only persistence design and its fallback/test constraints"}
