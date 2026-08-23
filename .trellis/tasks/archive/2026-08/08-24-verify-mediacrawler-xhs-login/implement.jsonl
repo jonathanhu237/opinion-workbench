@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/auth-state-guidelines.md", "reason": "Implement authoritative live checks, platform URL allowlisting, safe fallback, optional 0600 persistence, manual challenge handling, and secret-safe logging"}
+{"file": ".trellis/spec/infra/submodule-guidelines.md", "reason": "Preserve MediaCrawler fork ownership and commit/push-before-gitlink delivery if XHS source changes are required"}
+{"file": ".trellis/tasks/08-24-verify-mediacrawler-xhs-login/research/source-findings.md", "reason": "Use the inspected XHS login flow, service-side pong contract, native profile behavior, challenge boundary, and current test baseline"}
+{"file": ".trellis/tasks/archive/2026-08/08-23-verify-mediacrawler-kuaishou-login/design.md", "reason": "Reuse the proven native-baseline-first and conditional-store pattern without copying Kuaishou-specific assumptions"}
+{"file": ".trellis/tasks/archive/2026-08/08-23-verify-mediacrawler-douyin-login/design.md", "reason": "Keep official platform challenges visible and manual, with bounded waiting and no automated bypass"}
