@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/auth-state-guidelines.md", "reason": "Verify no automated safety-challenge action, correct auth-state order, safe fallbacks, and secret-safe evidence"}
+{"file": ".trellis/spec/infra/submodule-guidelines.md", "reason": "Verify scoped submodule changes, fork reachability, clean status, and parent gitlink delivery"}
+{"file": ".trellis/tasks/08-23-verify-mediacrawler-douyin-login/research/source-findings.md", "reason": "Check implementation and tests against the actual Douyin pong, URL allowlist, slider, and native baseline findings"}
+{"file": ".trellis/tasks/archive/2026-08/08-23-verify-mediacrawler-kuaishou-login/research/validation-results.md", "reason": "Apply the established two-start no-QR real-regression quality bar while preserving Douyin-specific behavior"}
+{"file": ".trellis/tasks/08-23-verify-mediacrawler-douyin-login/research/validation-results.md", "reason": "Verify the non-sensitive Douyin safety tests, native two-start evidence, cleanup, and quality-check results"}
