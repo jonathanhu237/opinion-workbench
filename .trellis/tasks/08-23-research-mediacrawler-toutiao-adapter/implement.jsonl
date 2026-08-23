@@ -1,0 +1,5 @@
+{"file": ".trellis/spec/backend/auth-state-guidelines.md", "reason": "复用项目专用浏览器认证态的域名白名单、在线校验、0600 文件和人工挑战边界"}
+{"file": ".trellis/spec/infra/submodule-guidelines.md", "reason": "保证派生仓库先提交推送、父仓库后更新 gitlink 的交付顺序"}
+{"file": ".trellis/tasks/08-23-research-mediacrawler-toutiao-adapter/research/toutiao-web-and-official-feasibility.md", "reason": "保留网页字段、链接形态、分页观察、robots 风险与停止条件的原始证据"}
+{"file": ".trellis/tasks/08-23-research-mediacrawler-toutiao-adapter/research/mediacrawler-integration-map.md", "reason": "提供平台注册、crawler、model/store、数据库和测试影响面"}
+{"file": ".trellis/tasks/08-23-research-mediacrawler-toutiao-adapter/research/existing-toutiao-adapters.md", "reason": "避免复制不兼容或不可审计实现，仅复用经核验的架构边界"}

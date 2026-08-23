@@ -20,6 +20,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | To fill |
 | [Browser Authentication State](./auth-state-guidelines.md) | Local credential persistence, safe fallback, and secret-safe logging | Active |
+| [Visible Browser Search Adapter](./browser-search-adapter-guidelines.md) | Search-only browser lifecycle, DOM/link contracts, storage, and live validation | Active |
 
 ---
 
