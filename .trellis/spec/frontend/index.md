@@ -1,38 +1,35 @@
 # Frontend Development Guidelines
 
-> Best practices for frontend development in this project.
+> Project-specific standards for the local React administration application.
 
 ---
 
 ## Overview
 
-This directory contains guidelines for frontend development. Fill in each file with your project's specific conventions.
+The frontend is a single static Vite SPA under `frontend/`. React Router owns routes, TanStack Query is available for server state, React Hook Form with Zod owns future form state, and shadcn `base-nova` components use Base UI primitives. There is no frontend workspace, SSR process, or shared UI package.
 
----
+## Pre-Development Checklist
+
+- Read [Directory Structure](./directory-structure.md) before adding routes, providers, or top-level folders.
+- Read [State Management](./state-management.md) before adding data fetching, forms, URL state, or a client store.
+- Read [Component Guidelines](./component-guidelines.md) before adding shadcn components, icons, or global styles.
+- Read [Quality Guidelines](./quality-guidelines.md) before changing dependencies, scripts, test setup, or build configuration.
+- Read [Type Safety](./type-safety.md) before adding request/response types or Zod schemas.
 
 ## Guidelines Index
 
 | Guide | Description | Status |
-|-------|-------------|--------|
-| [Directory Structure](./directory-structure.md) | Module organization and file layout | To fill |
-| [Component Guidelines](./component-guidelines.md) | Component patterns, props, composition | To fill |
-| [Hook Guidelines](./hook-guidelines.md) | Custom hooks, data fetching patterns | To fill |
-| [State Management](./state-management.md) | Local state, global state, server state | To fill |
-| [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
-| [Type Safety](./type-safety.md) | Type patterns, validation | To fill |
+| --- | --- | --- |
+| [Directory Structure](./directory-structure.md) | Vite SPA module ownership and route/provider boundaries | Established |
+| [Component Guidelines](./component-guidelines.md) | Base UI shadcn ownership, styling, icons, and accessibility | Established |
+| [Hook Guidelines](./hook-guidelines.md) | Custom-hook conventions beyond the current foundation | To fill |
+| [State Management](./state-management.md) | Server, URL, form, and local-state ownership | Established |
+| [Quality Guidelines](./quality-guidelines.md) | Package, format, lint, type, test, build, and smoke gates | Established |
+| [Type Safety](./type-safety.md) | Strict TypeScript and runtime-validation boundaries | Established |
 
----
+## Quality Check
 
-## How to Fill These Guidelines
-
-For each guideline file:
-
-1. Document your project's **actual conventions** (not ideals)
-2. Include **code examples** from your codebase
-3. List **forbidden patterns** and why
-4. Add **common mistakes** your team has made
-
-The goal is to help AI assistants and new team members understand how YOUR project works.
+Run every frozen gate in [Quality Guidelines](./quality-guidelines.md). Route-entry, rendering, component-primitive, or Vite changes also require a loopback browser smoke check covering the affected state and the browser console.
 
 ---
 

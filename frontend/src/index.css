@@ -1,4 +1,8 @@
-@import "tailwindcss";
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import 'shadcn/tailwind.css';
+
+@custom-variant dark (&:is(.dark *));
 
 @theme inline {
   --color-background: var(--background);
@@ -9,16 +13,23 @@
   --color-primary-foreground: var(--primary-foreground);
   --color-secondary: var(--secondary);
   --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-border: var(--border);
+  --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-destructive: var(--destructive);
   --color-live: var(--live);
   --color-warning: var(--warning);
   --font-display: var(--font-display);
   --font-sans: var(--font-sans);
   --font-utility: var(--font-utility);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
 }
 
 :root {
@@ -30,16 +41,20 @@
   --primary-foreground: #ffffff;
   --secondary: #e8f0ed;
   --secondary-foreground: #173c3d;
+  --muted: #e8f0ed;
   --muted-foreground: #607273;
   --accent: #dcebe6;
   --accent-foreground: #123e3d;
   --border: #ccd9d5;
+  --input: #ccd9d5;
   --ring: #176b67;
+  --destructive: #b2453d;
   --live: #248b61;
   --warning: #a35f20;
-  --font-display: "Songti SC", "STSong", "Noto Serif CJK SC", serif;
-  --font-sans: "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
-  --font-utility: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --radius: 0.75rem;
+  --font-display: 'Songti SC', 'STSong', 'Noto Serif CJK SC', serif;
+  --font-sans: 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  --font-utility: 'SFMono-Regular', Consolas, 'Liberation Mono', monospace;
 
   color: var(--foreground);
   background: var(--background);
@@ -115,26 +130,27 @@ a {
   border: 3px solid var(--card);
   border-radius: 999px;
   background: var(--muted-foreground);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--muted-foreground) 30%, transparent);
+  box-shadow: 0 0 0 1px
+    color-mix(in srgb, var(--muted-foreground) 30%, transparent);
 }
 
-.connection-mark[data-state="connected"] .community-cell {
+.connection-mark[data-state='connected'] .community-cell {
   border-color: color-mix(in srgb, var(--live) 42%, transparent);
   background: color-mix(in srgb, var(--live) 10%, var(--card));
 }
 
-.connection-mark[data-state="connected"] .connection-core {
+.connection-mark[data-state='connected'] .connection-core {
   background: var(--live);
   box-shadow:
     0 0 0 1px color-mix(in srgb, var(--live) 35%, transparent),
     0 0 0 8px color-mix(in srgb, var(--live) 12%, transparent);
 }
 
-.connection-mark[data-state="loading"] .connection-core {
+.connection-mark[data-state='loading'] .connection-core {
   animation: connection-pulse 1.5s ease-in-out infinite;
 }
 
-.connection-mark[data-state="unavailable"] .connection-core {
+.connection-mark[data-state='unavailable'] .connection-core {
   background: var(--warning);
 }
 

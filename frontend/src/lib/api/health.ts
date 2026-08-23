@@ -23,7 +23,9 @@ function getApiBaseUrl() {
   return (configuredBaseUrl || '/api/v1').replace(/\/+$/, '')
 }
 
-export async function fetchHealth(signal: AbortSignal): Promise<HealthResponse> {
+export async function fetchHealth(
+  signal: AbortSignal,
+): Promise<HealthResponse> {
   const response = await fetch(`${getApiBaseUrl()}/health`, {
     headers: { Accept: 'application/json' },
     signal,

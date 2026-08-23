@@ -44,9 +44,14 @@ function ConnectionMark({ state }: { state: HealthState['status'] }) {
   )
 }
 
-export default function App() {
-  const [healthState, dispatch] = useReducer(healthReducer, { status: 'loading' })
-  const [checkSequence, requestCheck] = useReducer((value: number) => value + 1, 0)
+export function Home() {
+  const [healthState, dispatch] = useReducer(healthReducer, {
+    status: 'loading',
+  })
+  const [checkSequence, requestCheck] = useReducer(
+    (value: number) => value + 1,
+    0,
+  )
 
   useEffect(() => {
     const controller = new AbortController()
@@ -85,7 +90,7 @@ export default function App() {
               <p className="text-sm font-semibold tracking-[0.08em] text-foreground">
                 龙田街道舆情系统
               </p>
-              <p className="font-utility text-[10px] uppercase tracking-[0.18em] text-muted-foreground">
+              <p className="font-utility text-[10px] tracking-[0.18em] text-muted-foreground uppercase">
                 Local watch desk
               </p>
             </div>
@@ -97,10 +102,10 @@ export default function App() {
 
         <section className="grid flex-1 items-center gap-10 py-10 lg:grid-cols-[1.08fr_0.92fr] lg:gap-16 lg:py-14">
           <div className="max-w-2xl">
-            <p className="mb-5 font-utility text-xs font-semibold uppercase tracking-[0.22em] text-primary">
+            <p className="mb-5 font-utility text-xs font-semibold tracking-[0.22em] text-primary uppercase">
               系统初始化 · 连接检测
             </p>
-            <h1 className="font-display text-[clamp(3rem,8vw,6.5rem)] font-semibold leading-[0.94] tracking-[-0.06em] text-foreground">
+            <h1 className="font-display text-[clamp(3rem,8vw,6.5rem)] leading-[0.94] font-semibold tracking-[-0.06em] text-foreground">
               舆情值守，
               <br />
               <span className="text-primary">从连通开始。</span>
@@ -114,7 +119,7 @@ export default function App() {
             <div className="absolute inset-x-0 top-0 h-1 bg-primary/20" />
             <CardHeader className="grid grid-cols-[1fr_auto] items-start gap-4 sm:gap-6">
               <div>
-                <CardDescription className="font-utility text-[11px] uppercase tracking-[0.18em]">
+                <CardDescription className="font-utility text-[11px] tracking-[0.18em] uppercase">
                   API connection
                 </CardDescription>
                 <CardTitle className="mt-3 font-display text-2xl tracking-[-0.035em] sm:text-3xl">
@@ -143,11 +148,13 @@ export default function App() {
 
                 {healthState.status === 'connected' && (
                   <div className="space-y-3">
-                    <Badge className="bg-live text-white hover:bg-live">运行正常</Badge>
+                    <Badge className="bg-live text-white hover:bg-live">
+                      运行正常
+                    </Badge>
                     <p className="text-sm leading-6 text-muted-foreground">
                       前后端健康检查已完成，可以继续搭建业务功能。
                     </p>
-                    <p className="break-all font-utility text-[11px] tracking-[0.08em] text-foreground/65">
+                    <p className="font-utility text-[11px] tracking-[0.08em] break-all text-foreground/65">
                       {healthState.data.service}
                     </p>
                   </div>
@@ -155,7 +162,10 @@ export default function App() {
 
                 {healthState.status === 'unavailable' && (
                   <div className="space-y-4">
-                    <Badge variant="outline" className="border-warning/35 text-warning">
+                    <Badge
+                      variant="outline"
+                      className="border-warning/35 text-warning"
+                    >
                       需要检查
                     </Badge>
                     <div>
@@ -171,13 +181,15 @@ export default function App() {
               </div>
 
               <div className="mt-5 flex items-center justify-between gap-4 border-t border-border/70 pt-5">
-                <p className="font-utility text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+                <p className="font-utility text-[10px] tracking-[0.16em] text-muted-foreground uppercase">
                   /api/v1/health
                 </p>
                 <Button
                   type="button"
                   size="sm"
-                  variant={healthState.status === 'unavailable' ? 'default' : 'outline'}
+                  variant={
+                    healthState.status === 'unavailable' ? 'default' : 'outline'
+                  }
                   disabled={isLoading}
                   onClick={requestCheck}
                 >
@@ -190,7 +202,9 @@ export default function App() {
 
         <footer className="flex flex-col gap-2 border-t border-foreground/10 py-4 text-xs text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
           <span>服务仅监听本机地址</span>
-          <span className="font-utility uppercase tracking-[0.14em]">Longtian · Shenzhen</span>
+          <span className="font-utility tracking-[0.14em] uppercase">
+            Longtian · Shenzhen
+          </span>
         </footer>
       </div>
     </main>

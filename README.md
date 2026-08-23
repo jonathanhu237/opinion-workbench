@@ -72,7 +72,9 @@ uv run pytest
 
 ```bash
 cd frontend
+mise x node@24 -- pnpm format:check
 mise x node@24 -- pnpm lint
 mise x node@24 -- pnpm typecheck
+mise x node@24 -- pnpm test:run
 mise x node@24 -- pnpm build
 ```

@@ -1,0 +1,5 @@
+{"file":".trellis/spec/frontend/index.md","reason":"Verify the final dependency/tooling result against the project frontend guideline index and update placeholders through the spec workflow if warranted."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Check that old ESLint/Radix configuration and imports are fully removed without duplicating helpers or providers."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Trace loading, success, failure and retry across the existing health API boundary after routing/provider changes."}
+{"file":".trellis/tasks/08-24-establish-frontend-foundation/research/reference-frontend-stack.md","reason":"Check dependency inclusion/exclusion and Base UI migration against researched reference evidence."}
+{"file":".trellis/tasks/08-24-initialize-react-fastapi-app/design.md","reason":"Ensure the original health contract, frontend/backend separation and no-workspace boundary remain intact."}
