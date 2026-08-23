@@ -48,4 +48,4 @@ Date: 2026-08-24 (Asia/Shanghai)
 - 人工挑战边界、成功后才保存、`0600` 权限、完整浏览器重启、无需再次登录及在线状态复核：通过。
 - 搜索和认证均未使用 CDP、持久化 profile、私有响应重放、自动挑战处理或导航重试：通过。
 - 任务临时目录、临时认证态和验证输出清理完成，既有项目运行目录未触碰：通过。
-- MediaCrawler 派生仓库已在 `main` 提交并推送 `815ce9332c74097914c61899a0e37ea1b60e0af3`；远端 `refs/heads/main` 可达该 revision，父仓库 gitlink 更新与任务归档仍待完成。
+- MediaCrawler 派生仓库已在 `main` 提交并推送 `815ce9332c74097914c61899a0e37ea1b60e0af3`；远端 `refs/heads/main` 可达该 revision。父仓库已通过 `812a604` 更新 gitlink 并提交任务证据，任务归档仍待完成。

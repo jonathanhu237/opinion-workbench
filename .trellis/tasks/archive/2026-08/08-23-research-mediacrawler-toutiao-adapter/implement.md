@@ -73,4 +73,5 @@ The exact live runner/command must be recorded after implementation without embe
 
 - [x] Dispatch Trellis implementation review after all code and real-regression evidence are ready.
 - [x] Commit and push MediaCrawler `main` with a Conventional Commit (`815ce9332c74097914c61899a0e37ea1b60e0af3`).
-- [ ] Update the parent submodule pointer, commit parent task artifacts/evidence, then archive the Trellis task only after user review.
+- [x] Update the parent submodule pointer and commit parent task artifacts/evidence (`812a604`).
+- [x] Archive the Trellis task and record the developer journal after Git delivery verification.
