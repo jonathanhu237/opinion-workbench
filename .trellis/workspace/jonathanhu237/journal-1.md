@@ -89,3 +89,24 @@ Added secure local Cookie persistence for Weibo, verified first-scan save and se
 ### Status
 
 [OK] **Completed**
+
+
+## Session 5: Implement MediaCrawler Toutiao adapter
+
+**Date**: 2026-08-24
+**Task**: Implement MediaCrawler Toutiao adapter
+**Branch**: `main`
+
+### Summary
+
+Added and live-validated a visible-browser, search-only Toutiao adapter with optional manual login persistence, JSONL/SQLite storage, privacy safeguards, tests, and project coding specs; pushed fork revision 815ce93 and updated the parent gitlink.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `812a604` | (see git log) |
+
+### Status
+
+[OK] **Completed**
