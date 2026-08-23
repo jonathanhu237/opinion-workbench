@@ -35,6 +35,9 @@ Valid future candidates might include a cross-route upload queue or an unsaved m
 
 - `QueryClient` is created once at module scope in `src/app/providers.tsx`; never construct it during render.
 - Query keys identify backend resources plus all parameters that affect their result.
+- When multiple routes consume the same resource, expose one shared query hook and retain TanStack
+  Query's normal cache lifetime. Do not set `gcTime: 0` merely to force fresh route renders; use
+  mutation invalidation, active-state polling, or explicit refetch based on the resource contract.
 - Mutations invalidate or update the relevant query cache instead of copying server data into component/global state.
 - URL-addressable filters remain in React Router even when they also participate in a query key.
 - Network policy, API base URL, and response validation belong in `lib/api/`, not in generic providers.
@@ -44,6 +47,8 @@ Valid future candidates might include a cross-route upload queue or an unsaved m
 ## Common Mistakes
 
 - Creating a new `QueryClient` during render and losing cache on every update.
+- Giving a shared cross-route query `gcTime: 0`, causing avoidable request churn every time the last
+  observer unmounts during navigation.
 - Copying the same server resource into TanStack Query and a client store.
 - Keeping filters or pagination only in component state, making views impossible to restore.
 - Copying React Hook Form values into parallel component state.

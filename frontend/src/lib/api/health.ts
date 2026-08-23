@@ -1,3 +1,5 @@
+import { getApiBaseUrl } from '@/lib/api/client'
+
 export const HEALTH_SERVICE = 'longtian-public-opinion-api' as const
 
 export type HealthResponse = {
@@ -16,11 +18,6 @@ function isHealthResponse(payload: unknown): payload is HealthResponse {
 
   const candidate = payload as Record<string, unknown>
   return candidate.status === 'ok' && candidate.service === HEALTH_SERVICE
-}
-
-function getApiBaseUrl() {
-  const configuredBaseUrl = import.meta.env.VITE_API_BASE_URL?.trim()
-  return (configuredBaseUrl || '/api/v1').replace(/\/+$/, '')
 }
 
 export async function fetchHealth(

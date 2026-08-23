@@ -1,18 +1,26 @@
-import { createBrowserRouter, Outlet } from 'react-router'
+import { createBrowserRouter, type RouteObject } from 'react-router'
 
-import { Home } from '@/routes/home'
+import { AppShell } from '@/app/shell'
+import { PlatformAccounts } from '@/routes/platform-accounts'
 import { RouteErrorBoundary } from '@/routes/route-error-boundary'
+import { Workbench } from '@/routes/workbench'
 
-export const router = createBrowserRouter([
+export const appRoutes: RouteObject[] = [
   {
     path: '/',
-    element: <Outlet />,
+    element: <AppShell />,
     errorElement: <RouteErrorBoundary />,
     children: [
       {
         index: true,
-        element: <Home />,
+        element: <Workbench />,
+      },
+      {
+        path: 'platform-accounts',
+        element: <PlatformAccounts />,
       },
     ],
   },
-])
+]
+
+export const router = createBrowserRouter(appRoutes)

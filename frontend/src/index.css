@@ -85,91 +85,193 @@ a {
   -webkit-tap-highlight-color: transparent;
 }
 
-.status-card {
-  box-shadow: 0 24px 70px -44px rgba(16, 45, 48, 0.55);
-}
-
-.connection-mark {
+.community-watch-mark {
   position: relative;
-  width: 74px;
-  height: 74px;
+  display: block;
+  width: 2.75rem;
+  height: 2.75rem;
   flex: 0 0 auto;
 }
 
-.community-cell {
+.community-watch-cell {
   position: absolute;
-  width: 25px;
-  height: 25px;
-  border: 1px solid color-mix(in srgb, var(--primary) 32%, transparent);
-  border-radius: 7px;
-  background: color-mix(in srgb, var(--secondary) 78%, transparent);
+  width: 1.05rem;
+  height: 1.05rem;
+  border: 1px solid color-mix(in srgb, var(--primary) 34%, transparent);
+  border-radius: 0.32rem;
+  background: color-mix(in srgb, var(--secondary) 78%, var(--card));
 }
 
-.community-cell-a {
+.community-watch-cell-a {
   inset: 0 auto auto 0;
 }
 
-.community-cell-b {
+.community-watch-cell-b {
   inset: 0 0 auto auto;
 }
 
-.community-cell-c {
+.community-watch-cell-c {
   inset: auto auto 0 0;
 }
 
-.community-cell-d {
+.community-watch-cell-d {
   inset: auto 0 0 auto;
 }
 
-.connection-core {
+.community-watch-core {
   position: absolute;
   inset: 50% auto auto 50%;
-  width: 14px;
-  height: 14px;
+  width: 0.62rem;
+  height: 0.62rem;
   transform: translate(-50%, -50%);
-  border: 3px solid var(--card);
+  border: 2px solid var(--card);
   border-radius: 999px;
-  background: var(--muted-foreground);
-  box-shadow: 0 0 0 1px
-    color-mix(in srgb, var(--muted-foreground) 30%, transparent);
-}
-
-.connection-mark[data-state='connected'] .community-cell {
-  border-color: color-mix(in srgb, var(--live) 42%, transparent);
-  background: color-mix(in srgb, var(--live) 10%, var(--card));
-}
-
-.connection-mark[data-state='connected'] .connection-core {
   background: var(--live);
   box-shadow:
-    0 0 0 1px color-mix(in srgb, var(--live) 35%, transparent),
-    0 0 0 8px color-mix(in srgb, var(--live) 12%, transparent);
+    0 0 0 1px color-mix(in srgb, var(--live) 38%, transparent),
+    0 0 0 0.32rem color-mix(in srgb, var(--live) 10%, transparent);
 }
 
-.connection-mark[data-state='loading'] .connection-core {
-  animation: connection-pulse 1.5s ease-in-out infinite;
+.connection-panel {
+  overflow: hidden;
+  width: 100%;
+  border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
+  border-radius: calc(var(--radius) * 1.4);
+  background: color-mix(in srgb, var(--card) 93%, transparent);
+  box-shadow: 0 28px 72px -50px rgba(16, 45, 48, 0.62);
 }
 
-.connection-mark[data-state='unavailable'] .connection-core {
+.platform-bus {
+  position: relative;
+  margin: 0;
+  padding: 0.55rem 1.25rem 0.7rem 3.45rem;
+  list-style: none;
+}
+
+.platform-bus::before {
+  position: absolute;
+  top: 2.85rem;
+  bottom: 2.95rem;
+  left: 1.92rem;
+  width: 1px;
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--primary) 45%, transparent),
+    color-mix(in srgb, var(--border) 90%, transparent)
+  );
+  content: '';
+}
+
+.platform-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 1rem;
+  align-items: center;
+  min-height: 5.45rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
+}
+
+.platform-row:last-child {
+  border-bottom: 0;
+}
+
+.platform-node {
+  position: absolute;
+  top: 50%;
+  left: -1.85rem;
+  width: 0.72rem;
+  height: 0.72rem;
+  transform: translate(-50%, -50%);
+  border: 2px solid var(--card);
+  border-radius: 999px;
+  background: var(--muted-foreground);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--border) 90%, transparent);
+}
+
+.platform-row[data-status='connected'] .platform-node {
+  background: var(--live);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--live) 42%, transparent);
+}
+
+.platform-row[data-status='action_required'] .platform-node {
   background: var(--warning);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--warning) 42%, transparent);
 }
 
-@keyframes connection-pulse {
-  50% {
-    box-shadow: 0 0 0 11px color-mix(in srgb, var(--primary) 0%, transparent);
+.platform-row[data-status='failed'] .platform-node,
+.platform-row[data-status='disconnected'] .platform-node {
+  background: var(--destructive);
+}
+
+.platform-row-active .platform-node::after {
+  position: absolute;
+  inset: -0.46rem;
+  border: 1px solid color-mix(in srgb, var(--primary) 40%, transparent);
+  border-radius: inherit;
+  content: '';
+  animation: signal-pulse 1.6s ease-out infinite;
+}
+
+.platform-identity {
+  display: grid;
+  grid-template-columns: 2.75rem minmax(0, 1fr);
+  gap: 0.8rem;
+  align-items: center;
+  min-width: 0;
+}
+
+.platform-mark {
+  display: grid;
+  width: 2.75rem;
+  height: 2.75rem;
+  place-items: center;
+  border: 1px solid color-mix(in srgb, var(--primary) 22%, var(--border));
+  border-radius: 0.7rem;
+  background: color-mix(in srgb, var(--secondary) 70%, var(--card));
+  color: var(--primary);
+  font-family: var(--font-utility);
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.signal-loader {
+  width: 1rem;
+  height: 1rem;
+  border: 3px solid var(--card);
+  border-radius: 999px;
+  background: var(--primary);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--primary) 42%, transparent),
+    0 0 0 8px color-mix(in srgb, var(--primary) 10%, transparent);
+}
+
+@keyframes signal-pulse {
+  to {
+    transform: scale(1.75);
+    opacity: 0;
   }
 }
 
-@media (max-width: 420px) {
-  .connection-mark {
-    width: 62px;
-    height: 62px;
+@media (max-width: 560px) {
+  .platform-bus {
+    padding-right: 1rem;
+    padding-left: 3rem;
   }
 
-  .community-cell {
-    width: 21px;
-    height: 21px;
-    border-radius: 6px;
+  .platform-bus::before {
+    left: 1.65rem;
+  }
+
+  .platform-row {
+    grid-template-columns: 1fr;
+    gap: 0.65rem;
+    padding: 1rem 0;
+  }
+
+  .platform-node {
+    left: -1.36rem;
   }
 }
 

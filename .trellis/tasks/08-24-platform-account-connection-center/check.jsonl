@@ -1,0 +1,9 @@
+{"file":".trellis/spec/frontend/index.md","reason":"Verify the final connection-center layout, query/mutation ownership, runtime validation, accessibility, and complete frontend quality gate."}
+{"file":".trellis/spec/backend/index.md","reason":"Verify routers, response filtering, lifespan/dependency ownership, async safety, tests, and backend quality gates."}
+{"file":".trellis/spec/backend/auth-state-guidelines.md","reason":"Audit every boundary for credential secrecy, authoritative online verification, manual challenges, and safe failure behavior."}
+{"file":".trellis/spec/infra/submodule-guidelines.md","reason":"Check submodule cleanliness, reachable derivative revision, delivery order, and parent gitlink reproducibility before any Git delivery."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Trace every status and error from child event through service/API decoding to the visible frontend outcome."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Check for duplicated platform catalogs, status mappings, response decoders, process management, providers, and UI primitives."}
+{"file":".trellis/tasks/08-24-platform-account-connection-center/research/account-connection-evidence.md","reason":"Verify all recorded current-code risks were addressed, especially formal auth mode, fail-closed behavior, and borrowed Chrome cleanup."}
+{"file":".trellis/tasks/08-24-initialize-react-fastapi-app/research/browser-session-reuse.md","reason":"Confirm the shipped flow uses the approved existing Chrome path and documents the remaining authorization/unattended limitations honestly."}
+{"file":".trellis/tasks/08-24-initialize-react-fastapi-app/research/mediacrawler-dependency-decision.md","reason":"Confirm FastAPI launches a bounded subprocess and never imports or reuses MediaCrawler's WebUI/runtime globals."}
