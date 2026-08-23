@@ -47,3 +47,24 @@ Added secure local Cookie persistence for Weibo, verified first-scan save and se
 ### Status
 
 [OK] **Completed**
+
+
+## Session 3: 验证并持久化 MediaCrawler 快手登录态
+
+**Date**: 2026-08-23
+**Task**: 验证并持久化 MediaCrawler 快手登录态
+**Branch**: `main`
+
+### Summary
+
+验证快手原生 profile 重启后仍需扫码；将通用 BrowserAuthStateStore 最小接入快手，增加登录后二次 pong 校验和编排测试，完成真实两次启动免扫码回归。MediaCrawler 派生仓库提交 3b5421f 已推送，任务已归档。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a3cfae6` | (see git log) |
+
+### Status
+
+[OK] **Completed**

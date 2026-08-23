@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 2
-- **Last Active**: 2026-08-22
+- **Total Sessions**: 3
+- **Last Active**: 2026-08-23
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~49 | Active |
+| `journal-1.md` | ~70 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 3 | 2026-08-23 | 验证并持久化 MediaCrawler 快手登录态 | `a3cfae6` | `main` |
 | 2 | 2026-08-22 | Persist MediaCrawler Weibo login state | `6e97175` | `main` |
 | 1 | 2026-08-22 | Add MediaCrawler submodule | `63d3392` | `codex/add-mediacrawler-submodule` |
 <!-- @@@/auto:session-history -->
