@@ -40,6 +40,7 @@ create browser context
 - Runtime authentication files must live under a Git-ignored path such as `browser_data/auth_state/<platform>.json`.
 - Logs may include platform, path, item count, and outcome. They must not include Cookie names, values, serialized state, authorization headers, or HTTP Cookie headers.
 - Disabling the existing login-state feature flag must skip both restore and save operations.
+- A platform may display a delayed safety-verification overlay after the ordinary login UI has loaded. Do not automate, evade, or simulate completion of that challenge. Keep the dedicated browser visible for manual handling, and save state only after the normal live authentication check subsequently succeeds.
 
 No environment variables are required by the current implementation.
 
@@ -56,13 +57,14 @@ No environment variables are required by the current implementation.
 | Session Cookie uses `expires = -1` | Preserve it; do not misclassify it as expired |
 | `add_cookies()` fails | Emit a non-sensitive warning and return `False` |
 | Restore succeeds but live authentication check fails | Run interactive login and overwrite state after success |
+| A platform safety-verification overlay blocks interactive login | Pause or end with a non-sensitive instruction for manual handling; never automate or bypass the challenge |
 | Save fails | Continue the current authenticated run; warn without secret values |
 
 ### 5. Good / Base / Bad Cases
 
-- **Good:** A platform allowlist captures only required Cookies, atomically writes an ignored `0600` file, restores before the first authentication check, rejects malformed entries without crashing, and falls back when no usable state remains or the live check fails.
+- **Good:** A platform allowlist captures only required Cookies, atomically writes an ignored `0600` file, restores before the first authentication check, rejects malformed entries without crashing, falls back when no usable state remains or the live check fails, and leaves platform safety challenges to the user.
 - **Base:** No state exists, so the live check still runs and the unchanged interactive login flow remains available; state is created after authentication is confirmed.
-- **Bad:** The program logs a Cookie value, trusts file presence as proof of login, imports Cookies for unrelated domains, or lets malformed state crash the crawler.
+- **Bad:** The program logs a Cookie value, trusts file presence as proof of login, imports Cookies for unrelated domains, lets malformed state crash the crawler, or scripts a slider/CAPTCHA bypass.
 
 ### 6. Tests Required
 
@@ -75,6 +77,7 @@ No environment variables are required by the current implementation.
 7. Orchestration: assert restore occurs before client creation/live login check, save occurs only after confirmed authentication, and the disabled flag performs no I/O.
 8. Secret logging: use sentinel credential values in representative invalid-state and browser-API failure fixtures, and assert neither logs nor exception text contain them.
 9. Real regression: after one interactive login, fully stop the browser and prove the next start's first live check passes without displaying a QR code.
+10. Safety challenge: when an official overlay appears during manual regression, record only its non-sensitive presence and verify no automated bypass action is introduced.
 
 ### 7. Wrong vs Correct
 

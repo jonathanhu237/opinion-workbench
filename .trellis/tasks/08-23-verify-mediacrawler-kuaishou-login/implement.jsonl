@@ -1,0 +1,3 @@
+{"file": ".trellis/spec/backend/auth-state-guidelines.md", "reason": "Reuse the approved local authentication-state contract if the native Kuaishou profile fails across restart"}
+{"file": ".trellis/spec/infra/submodule-guidelines.md", "reason": "Preserve fork commit/push and parent gitlink ordering if Kuaishou source changes are required"}
+{"file": ".trellis/tasks/archive/2026-08/08-22-persist-mediacrawler-weibo-login-state/research/weibo-login-state-persistence.md", "reason": "Reuse the evidence-backed Cookie-only persistence boundary and two-run validation approach"}
