@@ -110,3 +110,24 @@ Added and live-validated a visible-browser, search-only Toutiao adapter with opt
 ### Status
 
 [OK] **Completed**
+
+
+## Session 6: 验证并持久化 MediaCrawler 小红书登录态
+
+**Date**: 2026-08-24
+**Task**: 验证并持久化 MediaCrawler 小红书登录态
+**Branch**: `main`
+
+### Summary
+
+验证小红书原生 CDP profile 重启后仍需扫码；将通用 BrowserAuthStateStore 最小接入 XHS，增加登录后二次服务端校验、认证失败禁止采集和编排测试，完成真实两次启动免扫码回归。MediaCrawler 派生仓库提交 1b89c8f 已推送，任务已归档。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `be080a0` | (see git log) |
+
+### Status
+
+[OK] **Completed**
