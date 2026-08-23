@@ -68,3 +68,24 @@ Added secure local Cookie persistence for Weibo, verified first-scan save and se
 ### Status
 
 [OK] **Completed**
+
+
+## Session 4: 验证 MediaCrawler 抖音原生登录态
+
+**Date**: 2026-08-23
+**Task**: 验证 MediaCrawler 抖音原生登录态
+**Branch**: `main`
+
+### Summary
+
+将抖音安全挑战改为仅提示并等待人工处理，移除自动识别、拖动、刷新和重试绕过路径；完成真实两次启动回归，确认原生 CDP profile 可免扫码复用，因此无需接入 BrowserAuthStateStore。MediaCrawler 派生仓库提交 33f951c 已推送。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `c8424ed` | (see git log) |
+
+### Status
+
+[OK] **Completed**
