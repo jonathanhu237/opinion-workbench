@@ -1,4 +1,12 @@
-import { ArrowRight, CircleCheck, CircleDashed, Radio } from 'lucide-react'
+import {
+  ArrowRight,
+  CircleCheck,
+  CircleDashed,
+  CircleUserRound,
+  ListChecks,
+  MapPinned,
+  Server,
+} from 'lucide-react'
 import { Link } from 'react-router'
 
 import { useAppShell } from '@/app/shell'
@@ -6,7 +14,6 @@ import { Badge } from '@/components/ui/badge'
 import { buttonVariants } from '@/components/ui/button'
 import {
   Card,
-  CardAction,
   CardContent,
   CardDescription,
   CardHeader,
@@ -15,39 +22,45 @@ import {
 import { usePlatformConnections } from '@/hooks/use-platform-connections'
 import { cn } from '@/lib/utils'
 
-function SummaryCard({
-  label,
-  value,
-  detail,
-  state,
-}: {
+type DutyMetricProps = {
+  icon: typeof Server
   label: string
   value: string
   detail: string
   state: 'live' | 'attention' | 'quiet'
-}) {
+  stateLabel: string
+}
+
+function DutyMetric({
+  icon: Icon,
+  label,
+  value,
+  detail,
+  state,
+  stateLabel,
+}: DutyMetricProps) {
   return (
-    <Card size="sm" className="min-h-32 bg-card/88">
-      <CardHeader>
-        <CardDescription>{label}</CardDescription>
-        <CardAction>
-          <span
-            className={cn(
-              'block size-2 rounded-full bg-muted-foreground',
-              state === 'live' && 'bg-live',
-              state === 'attention' && 'bg-warning',
-            )}
-            aria-hidden="true"
-          />
-        </CardAction>
-      </CardHeader>
-      <CardContent>
-        <p className="font-display text-2xl font-semibold tracking-[-0.035em] text-foreground">
-          {value}
-        </p>
-        <p className="mt-2 text-xs leading-5 text-muted-foreground">{detail}</p>
-      </CardContent>
-    </Card>
+    <div className="min-w-0 p-4 sm:p-5">
+      <div className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+        <Icon className="size-4" aria-hidden="true" />
+        <span>{label}</span>
+      </div>
+      <p className="mt-4 font-display text-2xl font-semibold tracking-[-0.035em] text-foreground">
+        {value}
+      </p>
+      <div className="mt-2 flex items-center gap-2 text-xs leading-5 text-muted-foreground">
+        <span
+          className={cn(
+            'size-2 shrink-0 rounded-full bg-muted-foreground',
+            state === 'live' && 'bg-live',
+            state === 'attention' && 'bg-warning',
+          )}
+          aria-hidden="true"
+        />
+        <span className="sr-only">{stateLabel}：</span>
+        <span>{detail}</span>
+      </div>
+    </div>
   )
 }
 
@@ -58,11 +71,9 @@ export function Workbench() {
   const connectedCount = platforms.filter(
     (platform) => platform.status === 'connected',
   ).length
-  const comingSoonCount = platforms.filter(
-    (platform) => platform.availability === 'coming_soon',
-  ).length
   const catalogReadable = connectionsQuery.data !== undefined
   const weibo = platforms.find((platform) => platform.platform === 'wb')
+  const weiboConnected = weibo?.status === 'connected'
 
   const serviceValue =
     healthState.status === 'connected'
@@ -72,23 +83,37 @@ export function Workbench() {
         : '检测中'
   const serviceDetail =
     healthState.status === 'connected'
-      ? 'FastAPI 本机服务响应正常'
+      ? '本机后端响应正常'
       : healthState.status === 'unavailable'
-        ? '请先启动或重试本机服务'
-        : '正在确认本机服务状态'
+        ? '请启动或重试本机服务'
+        : '正在确认服务状态'
+  const platformDetail = connectionsQuery.isPending
+    ? '正在读取平台状态'
+    : connectionsQuery.isError
+      ? catalogReadable
+        ? '显示上次成功读取的状态'
+        : '平台状态暂时无法读取'
+      : '本次后端会话的在线结果'
+  const platformStateLabel = connectionsQuery.isPending
+    ? '读取中'
+    : connectionsQuery.isError
+      ? '读取失败'
+      : connectedCount > 0
+        ? '已有连接'
+        : '尚未连接'
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <section className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <p className="font-utility text-[10px] font-semibold tracking-[0.18em] text-primary uppercase">
-            System readiness
+          <p className="text-xs font-medium tracking-[0.12em] text-primary">
+            今日值守
           </p>
-          <h2 className="mt-2 font-display text-3xl font-semibold tracking-[-0.04em] text-foreground">
+          <h2 className="mt-1.5 font-display text-2xl font-semibold tracking-[-0.035em] text-foreground sm:text-[1.75rem]">
             系统准备情况
           </h2>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-            这里仅显示当前本机服务与平台连接的真实状态。采集任务和舆情数据尚未建立。
+            这里只记录本机服务与平台账号的真实状态；尚未建立的数据保持为空。
           </p>
         </div>
         <Badge
@@ -99,90 +124,154 @@ export function Workbench() {
         </Badge>
       </section>
 
-      <section className="grid gap-3 sm:grid-cols-3" aria-label="系统状态概览">
-        <SummaryCard
-          label="本机服务"
-          value={serviceValue}
-          detail={serviceDetail}
-          state={
-            healthState.status === 'connected'
-              ? 'live'
-              : healthState.status === 'unavailable'
-                ? 'attention'
-                : 'quiet'
-          }
-        />
-        <SummaryCard
-          label="已连接平台"
-          value={
-            catalogReadable ? `${connectedCount} / ${platforms.length}` : '—'
-          }
-          detail={
-            connectionsQuery.isError
-              ? '平台状态暂时无法读取'
-              : '基于本次后端会话的在线检测结果'
-          }
-          state={connectedCount > 0 ? 'live' : 'quiet'}
-        />
-        <SummaryCard
-          label="待接入平台"
-          value={catalogReadable ? `${comingSoonCount}` : '—'}
-          detail="抖音、快手、小红书与今日头条仍在规划中"
-          state="quiet"
-        />
-      </section>
+      <Card
+        className="duty-ledger gap-0 bg-card py-0"
+        aria-label="值守准备台账"
+      >
+        <CardHeader className="gap-1 border-b border-border px-4 py-3 sm:px-5">
+          <CardTitle className="text-sm">值守准备台账</CardTitle>
+          <CardDescription className="text-xs">
+            当前状态会随本机服务和平台在线检测更新。
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="grid divide-y divide-border px-0 lg:grid-cols-3 lg:divide-x lg:divide-y-0">
+          <DutyMetric
+            icon={Server}
+            label="本机服务"
+            value={serviceValue}
+            detail={serviceDetail}
+            state={
+              healthState.status === 'connected'
+                ? 'live'
+                : healthState.status === 'unavailable'
+                  ? 'attention'
+                  : 'quiet'
+            }
+            stateLabel={
+              healthState.status === 'connected'
+                ? '正常'
+                : healthState.status === 'unavailable'
+                  ? '异常'
+                  : '检测中'
+            }
+          />
+          <DutyMetric
+            icon={CircleUserRound}
+            label="平台账号"
+            value={
+              catalogReadable ? `${connectedCount} / ${platforms.length}` : '—'
+            }
+            detail={platformDetail}
+            state={connectedCount > 0 ? 'live' : 'quiet'}
+            stateLabel={platformStateLabel}
+          />
+          <DutyMetric
+            icon={MapPinned}
+            label="监控范围"
+            value="尚未配置"
+            detail="关键词与地址范围功能尚未接入"
+            state="quiet"
+            stateLabel="规划中"
+          />
+        </CardContent>
+      </Card>
 
-      <section className="grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
-        <Card className="bg-card/90">
-          <CardHeader className="border-b border-border/70">
-            <CardTitle>运行准备</CardTitle>
+      <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
+        <Card className="gap-0 bg-card py-0">
+          <CardHeader className="border-b border-border px-4 py-4 sm:px-5">
+            <CardTitle>值守启用顺序</CardTitle>
             <CardDescription>
-              先确认平台账号，再进入后续采集能力建设。
+              先确认平台登录，再配置范围和采集任务。
             </CardDescription>
           </CardHeader>
-          <CardContent>
-            <div className="flex flex-col gap-5 sm:flex-row sm:items-center">
-              <div
-                className="grid size-14 shrink-0 place-items-center rounded-xl border border-primary/20 bg-secondary text-primary"
-                aria-hidden="true"
-              >
-                {weibo?.status === 'connected' ? (
-                  <CircleCheck className="size-6" />
-                ) : (
-                  <Radio className="size-6" />
-                )}
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="font-semibold text-foreground">
-                  {weibo?.status === 'connected'
-                    ? '微博连接已确认'
-                    : '平台账号仍需确认'}
-                </p>
+          <CardContent className="divide-y divide-border px-0">
+            <div className="grid gap-4 p-4 sm:grid-cols-[2.5rem_minmax(0,1fr)_auto] sm:items-center sm:px-5">
+              <span className="font-utility text-xs text-primary">01</span>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  {weiboConnected ? (
+                    <CircleCheck
+                      className="size-4 text-live"
+                      aria-hidden="true"
+                    />
+                  ) : (
+                    <CircleUserRound
+                      className="size-4 text-primary"
+                      aria-hidden="true"
+                    />
+                  )}
+                  <p className="font-medium text-foreground">确认平台账号</p>
+                </div>
                 <p className="mt-1 text-sm leading-6 text-muted-foreground">
-                  {weibo?.status === 'connected'
-                    ? '在线登录探针已通过；采集任务功能仍未接入。'
-                    : '前往平台账号页面检测微博登录状态，其他平台暂不提供连接操作。'}
+                  {weiboConnected
+                    ? '微博在线检测已经通过；其余四个平台仍待接入。'
+                    : '先检测微博登录状态，其余四个平台暂不提供连接操作。'}
                 </p>
               </div>
               <Link
                 to="/platform-accounts"
-                className={buttonVariants({ variant: 'outline' })}
+                className={cn(
+                  buttonVariants({ variant: 'outline' }),
+                  'min-h-11 w-full sm:min-h-8 sm:w-auto',
+                )}
               >
                 管理平台账号
                 <ArrowRight data-icon="inline-end" aria-hidden="true" />
               </Link>
             </div>
+
+            <div className="grid gap-3 p-4 sm:grid-cols-[2.5rem_minmax(0,1fr)_auto] sm:items-center sm:px-5">
+              <span className="font-utility text-xs text-muted-foreground">
+                02
+              </span>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <MapPinned
+                    className="size-4 text-muted-foreground"
+                    aria-hidden="true"
+                  />
+                  <p className="font-medium text-foreground">配置监控范围</p>
+                </div>
+                <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                  龙田街道、四个社区与地址关键词将在后续接入。
+                </p>
+              </div>
+              <Badge variant="outline" className="text-muted-foreground">
+                规划中
+              </Badge>
+            </div>
+
+            <div className="grid gap-3 p-4 sm:grid-cols-[2.5rem_minmax(0,1fr)_auto] sm:items-center sm:px-5">
+              <span className="font-utility text-xs text-muted-foreground">
+                03
+              </span>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <ListChecks
+                    className="size-4 text-muted-foreground"
+                    aria-hidden="true"
+                  />
+                  <p className="font-medium text-foreground">建立采集任务</p>
+                </div>
+                <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                  目前没有可运行的定时采集或舆情处理任务。
+                </p>
+              </div>
+              <Badge variant="outline" className="text-muted-foreground">
+                规划中
+              </Badge>
+            </div>
           </CardContent>
         </Card>
 
-        <Card className="bg-card/90">
-          <CardHeader className="border-b border-border/70">
+        <Card className="gap-0 bg-card py-0">
+          <CardHeader className="border-b border-border px-4 py-4 sm:px-5">
             <CardTitle>今日采集</CardTitle>
             <CardDescription>采集任务模块尚未接入。</CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="p-5">
             <div className="flex items-start gap-4">
-              <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground">
+              <span className="grid size-10 shrink-0 place-items-center rounded-lg border border-border bg-muted text-muted-foreground">
                 <CircleDashed className="size-5" aria-hidden="true" />
               </span>
               <div>
@@ -190,9 +279,6 @@ export function Workbench() {
                 <p className="mt-1 text-sm leading-6 text-muted-foreground">
                   当前没有采集结果、风险事件或待处理任务可展示。
                 </p>
-                <Badge variant="outline" className="mt-3 text-muted-foreground">
-                  规划中
-                </Badge>
               </div>
             </div>
           </CardContent>

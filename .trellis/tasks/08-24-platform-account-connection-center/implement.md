@@ -83,6 +83,21 @@
 - [x] Run the full frozen frontend gate and loopback desktop/mobile browser smoke check with no
   console warnings, focus loss, or overflow.
 
+## Phase D3: Project-skill design pass
+
+- [x] Apply the project-local `ui-ux-pro-max` design-system, shadcn, React, navigation, and focus
+  searches; record which evidence is accepted and which generic output is rejected.
+- [x] Replace the custom desktop-aside/mobile-Sheet split with the reviewed shadcn Sidebar,
+  SidebarProvider, and SidebarTrigger composition while preserving route semantics.
+- [x] Refine the workbench into the ruled duty-ledger hierarchy using only truthful health and
+  platform data; remove generic SaaS-card and English-eyebrow cues that do not help the operator.
+- [x] Preserve the four-community watch mark, civic palette, Chinese typography, platform
+  connection behavior, honest planned modules, and no-external-font constraint.
+- [x] Enforce 44px narrow-screen targets, sticky-header focus clearance, visible focus, reduced
+  motion, and responsive behavior at 375/768/1024/1440 widths.
+- [x] Update behavior tests, run the frozen frontend gate, run shadcn integrity checks, and perform
+  a fresh loopback desktop/mobile visual and console review without triggering authentication.
+
 ## Phase E: Automated verification
 
 - [x] MediaCrawler: run focused auth/CDP/Weibo tests, the maintained `tests/` suite, compile/static

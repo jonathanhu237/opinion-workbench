@@ -56,9 +56,9 @@ const guidanceCopy: Record<Exclude<PlatformGuidance, 'none'>, string> = {
 function statusBadgeClass(status: PlatformConnectionStatus) {
   switch (status) {
     case 'connected':
-      return 'border-live/25 bg-live/10 text-live'
+      return 'border-live/25 bg-live/10 text-foreground'
     case 'action_required':
-      return 'border-warning/30 bg-warning/10 text-warning'
+      return 'border-warning/30 bg-warning/10 text-warning-foreground'
     case 'failed':
     case 'disconnected':
       return 'border-destructive/25 bg-destructive/8 text-destructive'
@@ -170,7 +170,7 @@ function PlatformRow({
             type="button"
             size="sm"
             variant={connection.status === 'connected' ? 'outline' : 'default'}
-            className="min-w-20"
+            className="min-h-11 min-w-24 sm:min-h-7 sm:min-w-20"
             disabled={disabled}
             onClick={() => onStart(connection.platform)}
           >
@@ -263,10 +263,10 @@ export function PlatformAccounts() {
   return (
     <div className="space-y-5">
       <section>
-        <p className="font-utility text-[10px] font-semibold tracking-[0.18em] text-primary uppercase">
-          Account readiness
+        <p className="text-xs font-medium tracking-[0.12em] text-primary">
+          账号接入
         </p>
-        <h2 className="mt-2 font-display text-3xl font-semibold tracking-[-0.04em] text-foreground">
+        <h2 className="mt-1.5 font-display text-2xl font-semibold tracking-[-0.035em] text-foreground sm:text-[1.75rem]">
           平台账号连接
         </h2>
         <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
@@ -279,8 +279,8 @@ export function PlatformAccounts() {
         <Card className="connection-panel self-start bg-card/94">
           <CardHeader className="border-b border-border/75 sm:grid-cols-[1fr_auto]">
             <div>
-              <p className="font-utility text-[10px] tracking-[0.18em] text-muted-foreground uppercase">
-                Shared browser channel
+              <p className="text-[10px] tracking-[0.14em] text-muted-foreground">
+                本机浏览器通道
               </p>
               <CardTitle className="mt-1.5 font-display text-xl font-semibold tracking-[-0.03em]">
                 平台连接信号
@@ -310,7 +310,7 @@ export function PlatformAccounts() {
               <div role="alert" className="max-w-sm">
                 <Badge
                   variant="outline"
-                  className="border-warning/30 text-warning"
+                  className="border-warning/30 text-warning-foreground"
                 >
                   状态读取失败
                 </Badge>
@@ -323,7 +323,7 @@ export function PlatformAccounts() {
                 <Button
                   type="button"
                   size="sm"
-                  className="mt-5"
+                  className="mt-5 min-h-11 sm:min-h-7"
                   onClick={() => void connectionsQuery.refetch()}
                 >
                   重新读取

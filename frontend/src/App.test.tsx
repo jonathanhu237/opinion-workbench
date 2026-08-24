@@ -97,6 +97,7 @@ function catalog(
 const mockedFetchHealth = vi.mocked(fetchHealth)
 const mockedFetchPlatformConnections = vi.mocked(fetchPlatformConnections)
 const mockedStartAttempt = vi.mocked(startPlatformConnectionAttempt)
+const defaultMatchMedia = window.matchMedia
 
 function renderRoute(initialEntry = '/') {
   const queryClient = new QueryClient({
@@ -118,6 +119,12 @@ function renderRoute(initialEntry = '/') {
 
 describe('Longtian public opinion application', () => {
   beforeEach(() => {
+    Object.defineProperty(window, 'innerWidth', {
+      configurable: true,
+      writable: true,
+      value: 1024,
+    })
+    window.matchMedia = defaultMatchMedia
     mockedFetchHealth.mockReset()
     mockedFetchPlatformConnections.mockReset()
     mockedStartAttempt.mockReset()
@@ -138,8 +145,10 @@ describe('Longtian public opinion application', () => {
     expect(
       screen.getByRole('heading', { name: '系统准备情况' }),
     ).toBeInTheDocument()
-    expect(await screen.findByText('本机服务已连接')).toBeInTheDocument()
-    expect(screen.getByText('1 / 5')).toBeInTheDocument()
+    expect(await screen.findByText('服务正常')).toBeInTheDocument()
+    const dutyLedger = screen.getByLabelText('值守准备台账')
+    expect(within(dutyLedger).getByText('1 / 5')).toBeInTheDocument()
+    expect(within(dutyLedger).getByText('尚未配置')).toBeInTheDocument()
     expect(screen.getByText('尚未建立采集任务')).toBeInTheDocument()
     expect(
       screen.getByText('当前没有采集结果、风险事件或待处理任务可展示。'),
@@ -163,11 +172,44 @@ describe('Longtian public opinion application', () => {
       'page',
     )
     expect(workbenchLink).not.toHaveAttribute('aria-current')
+    expect(screen.getByRole('main')).toHaveFocus()
+  })
+
+  it('offers a keyboard skip link to the named main content region', () => {
+    renderRoute()
+
+    expect(screen.getByRole('link', { name: '跳到主要内容' })).toHaveAttribute(
+      'href',
+      '#main-content',
+    )
+    expect(screen.getByRole('main')).toHaveAccessibleName('工作台')
+  })
+
+  it('labels platform readiness as loading until the catalog arrives', async () => {
+    let resolveCatalog:
+      ((value: PlatformConnectionsResponse) => void) | undefined
+    mockedFetchPlatformConnections.mockReturnValue(
+      new Promise((resolve) => {
+        resolveCatalog = resolve
+      }),
+    )
+
+    renderRoute()
+
+    expect(await screen.findByText('正在读取平台状态')).toBeInTheDocument()
+    expect(screen.queryByText('本次后端会话的在线结果')).toBeNull()
+
+    resolveCatalog?.(catalog())
+
+    expect(
+      await screen.findByText('本次后端会话的在线结果'),
+    ).toBeInTheDocument()
   })
 
   it('keeps future modules disabled and honestly labeled', () => {
     renderRoute()
 
+    const navigation = screen.getByRole('navigation', { name: '主导航' })
     for (const label of [
       '采集任务',
       '舆情信息',
@@ -177,20 +219,25 @@ describe('Longtian public opinion application', () => {
     ]) {
       expect(screen.queryByRole('link', { name: new RegExp(label) })).toBeNull()
       expect(
-        screen.getByText(label).closest('[aria-disabled="true"]'),
-      ).toBeInTheDocument()
+        within(navigation).getByRole('button', { name: label }),
+      ).toBeDisabled()
     }
-    expect(screen.getAllByText('规划中')).toHaveLength(6)
+    expect(within(navigation).getAllByText('规划中')).toHaveLength(5)
   })
 
-  it('opens an accessible mobile navigation sheet and closes it after navigation', async () => {
+  it('opens the shadcn mobile sidebar and closes it after navigation', async () => {
     const user = userEvent.setup()
+    window.innerWidth = 375
     renderRoute()
 
-    await user.click(screen.getByRole('button', { name: '打开主导航' }))
+    await waitFor(() =>
+      expect(screen.queryByText('四社区 · 本机值守')).not.toBeInTheDocument(),
+    )
+    await user.click(screen.getByRole('button', { name: '切换主导航' }))
     const dialog = await screen.findByRole('dialog', { name: '主导航' })
+    expect(within(dialog).getByText('四社区 · 本机值守')).toBeInTheDocument()
     expect(
-      within(dialog).getByText('选择龙田舆情系统的功能页面'),
+      within(dialog).getByRole('navigation', { name: '主导航' }),
     ).toBeInTheDocument()
 
     await user.click(within(dialog).getByRole('link', { name: '平台账号' }))
@@ -199,6 +246,32 @@ describe('Longtian public opinion application', () => {
       await screen.findByRole('heading', { name: '平台账号', level: 1 }),
     ).toBeInTheDocument()
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+  })
+
+  it('keeps sidebar mode aligned with the CSS breakpoint at fractional zoom widths', async () => {
+    const user = userEvent.setup()
+    window.innerWidth = 768
+    window.matchMedia = vi.fn((query: string): MediaQueryList => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: () => undefined,
+      removeListener: () => undefined,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      dispatchEvent: () => false,
+    }))
+
+    renderRoute()
+
+    await waitFor(() =>
+      expect(screen.queryByText('四社区 · 本机值守')).not.toBeInTheDocument(),
+    )
+    await user.click(screen.getByRole('button', { name: '切换主导航' }))
+
+    expect(
+      await screen.findByRole('dialog', { name: '主导航' }),
+    ).toBeInTheDocument()
   })
 
   it('shows five honest platform states with only Weibo actionable', async () => {
@@ -229,12 +302,12 @@ describe('Longtian public opinion application', () => {
 
     renderRoute('/platform-accounts')
 
-    expect(await screen.findByText('本机服务不可用')).toBeInTheDocument()
+    expect(await screen.findByText('服务异常')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '检测连接' })).toBeDisabled()
 
     await user.click(screen.getByRole('button', { name: '重试' }))
 
-    expect(await screen.findByText('本机服务已连接')).toBeInTheDocument()
+    expect(await screen.findByText('服务正常')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '检测连接' })).toBeEnabled()
     expect(mockedFetchHealth).toHaveBeenCalledTimes(2)
   })

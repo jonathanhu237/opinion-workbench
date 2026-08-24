@@ -45,6 +45,17 @@ Route pages are application-owned compositions. Generic administration primitive
 - Decorative artwork must be hidden from assistive technology; status and error messages use appropriate live regions.
 - All non-essential motion must respect `prefers-reduced-motion`.
 
+## Responsive behavior
+
+- When JavaScript selects a component mode that CSS also controls, use the same media-query string
+  as the Tailwind breakpoint. For the current mobile/desktop navigation boundary, both sides use
+  `48rem`: CSS uses `@media (width < 48rem)` and JavaScript uses
+  `window.matchMedia('(max-width: 47.999rem)')` (or the equivalent library hook).
+- Do not infer the mode from rounded `window.innerWidth` values. Fractional CSS-pixel widths caused
+  by browser zoom can otherwise put JavaScript and CSS on opposite sides of the boundary.
+- Behavior tests for a responsive primitive must stub `matchMedia`, exercise both sides of the
+  shared boundary, and include the exact boundary width so drift is caught.
+
 ---
 
 ## Common Mistakes
@@ -54,3 +65,5 @@ Route pages are application-owned compositions. Generic administration primitive
 - Mixing Radix and Base UI implementations without a separately approved migration.
 - Replacing the project theme when regenerating a component instead of merging only required framework tokens.
 - Using a generic Lucide icon in place of a protected platform or organization mark.
+- Using `window.innerWidth <= 768` for a Tailwind `48rem` mode switch; the rounded JavaScript value
+  can disagree with the browser's CSS media query at fractional zoom widths.

@@ -9,6 +9,8 @@
   --color-foreground: var(--foreground);
   --color-card: var(--card);
   --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
   --color-secondary: var(--secondary);
@@ -23,6 +25,15 @@
   --color-destructive: var(--destructive);
   --color-live: var(--live);
   --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
   --font-display: var(--font-display);
   --font-sans: var(--font-sans);
   --font-utility: var(--font-utility);
@@ -33,24 +44,35 @@
 }
 
 :root {
-  --background: #f5f8f7;
-  --foreground: #102d30;
-  --card: #fbfdfc;
-  --card-foreground: #102d30;
-  --primary: #176b67;
+  --background: #f4f7f4;
+  --foreground: #0d3b3a;
+  --card: #ffffff;
+  --card-foreground: #0d3b3a;
+  --popover: #ffffff;
+  --popover-foreground: #0d3b3a;
+  --primary: #16736d;
   --primary-foreground: #ffffff;
-  --secondary: #e8f0ed;
+  --secondary: #e7efec;
   --secondary-foreground: #173c3d;
-  --muted: #e8f0ed;
-  --muted-foreground: #607273;
+  --muted: #e7efec;
+  --muted-foreground: #566f6d;
   --accent: #dcebe6;
   --accent-foreground: #123e3d;
-  --border: #ccd9d5;
-  --input: #ccd9d5;
-  --ring: #176b67;
+  --border: #d3ded9;
+  --input: #d3ded9;
+  --ring: #16736d;
   --destructive: #b2453d;
   --live: #248b61;
-  --warning: #a35f20;
+  --warning: #b86b26;
+  --warning-foreground: #9b561c;
+  --sidebar: #0d3b3a;
+  --sidebar-foreground: #f0f6f3;
+  --sidebar-primary: #16736d;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #164b49;
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-border: #315856;
+  --sidebar-ring: #83c7c0;
   --radius: 0.75rem;
   --font-display: 'Songti SC', 'STSong', 'Noto Serif CJK SC', serif;
   --font-sans: 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
@@ -65,6 +87,10 @@
   -moz-osx-font-smoothing: grayscale;
 }
 
+html {
+  scroll-padding-top: 5rem;
+}
+
 * {
   border-color: var(--border);
 }
@@ -73,16 +99,17 @@ body {
   min-width: 320px;
   min-height: 100svh;
   margin: 0;
-  background:
-    linear-gradient(rgba(23, 107, 103, 0.038) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(23, 107, 103, 0.038) 1px, transparent 1px),
-    var(--background);
-  background-size: 40px 40px;
+  background: var(--background);
 }
 
 button,
 a {
   -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+:where(a, button, [tabindex]):focus-visible {
+  scroll-margin-block: 5rem 1rem;
 }
 
 .community-watch-mark {
@@ -97,9 +124,9 @@ a {
   position: absolute;
   width: 1.05rem;
   height: 1.05rem;
-  border: 1px solid color-mix(in srgb, var(--primary) 34%, transparent);
+  border: 1px solid color-mix(in srgb, var(--sidebar-ring) 46%, transparent);
   border-radius: 0.32rem;
-  background: color-mix(in srgb, var(--secondary) 78%, var(--card));
+  background: color-mix(in srgb, var(--sidebar-accent) 78%, transparent);
 }
 
 .community-watch-cell-a {
@@ -124,7 +151,7 @@ a {
   width: 0.62rem;
   height: 0.62rem;
   transform: translate(-50%, -50%);
-  border: 2px solid var(--card);
+  border: 2px solid var(--sidebar);
   border-radius: 999px;
   background: var(--live);
   box-shadow:
@@ -132,13 +159,18 @@ a {
     0 0 0 0.32rem color-mix(in srgb, var(--live) 10%, transparent);
 }
 
+.duty-ledger {
+  border-top: 3px solid var(--primary);
+  box-shadow: 0 22px 56px -48px rgba(13, 59, 58, 0.72);
+}
+
 .connection-panel {
   overflow: hidden;
   width: 100%;
   border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
-  border-radius: calc(var(--radius) * 1.4);
-  background: color-mix(in srgb, var(--card) 93%, transparent);
-  box-shadow: 0 28px 72px -50px rgba(16, 45, 48, 0.62);
+  border-radius: var(--radius);
+  background: var(--card);
+  box-shadow: 0 22px 56px -48px rgba(13, 59, 58, 0.72);
 }
 
 .platform-bus {
@@ -272,6 +304,13 @@ a {
 
   .platform-node {
     left: -1.36rem;
+  }
+}
+
+@media (width < 48rem) {
+  [data-slot='button'],
+  [data-slot='sidebar-menu-button'] {
+    min-height: 2.75rem;
   }
 }
 

@@ -3,25 +3,32 @@ import {
   FileClock,
   FileSearch,
   ListChecks,
-  Menu,
   MessageSquareText,
   Settings2,
   SlidersHorizontal,
 } from 'lucide-react'
-import { useEffect, useReducer, useState, type ComponentType } from 'react'
+import { useEffect, useReducer, useRef, type ComponentType } from 'react'
 import { NavLink, Outlet, useLocation, useOutletContext } from 'react-router'
 
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Separator } from '@/components/ui/separator'
 import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-  SheetTrigger,
-} from '@/components/ui/sheet'
+  Sidebar,
+  SidebarContent,
+  SidebarFooter,
+  SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
+  SidebarHeader,
+  SidebarInset,
+  SidebarMenu,
+  SidebarMenuBadge,
+  SidebarMenuButton,
+  SidebarMenuItem,
+  SidebarProvider,
+  SidebarSeparator,
+  SidebarTrigger,
+  useSidebar,
+} from '@/components/ui/sidebar'
 import { fetchHealth, type HealthResponse } from '@/lib/api/health'
 import { cn } from '@/lib/utils'
 
@@ -80,64 +87,73 @@ function FourCommunityMark() {
 
 function ProductIdentity() {
   return (
-    <div className="flex items-center gap-3">
+    <div className="flex min-w-0 items-center gap-3">
       <FourCommunityMark />
-      <div>
-        <p className="font-display text-lg leading-none font-semibold tracking-[-0.03em] text-foreground">
+      <div className="min-w-0">
+        <p className="font-display text-lg leading-none font-semibold tracking-[-0.03em] text-sidebar-foreground">
           龙田舆情
         </p>
-        <p className="mt-1.5 font-utility text-[9px] tracking-[0.18em] text-muted-foreground uppercase">
-          Local watch desk
+        <p className="mt-1.5 truncate text-[11px] tracking-[0.08em] text-sidebar-foreground/65">
+          四社区 · 本机值守
         </p>
       </div>
     </div>
   )
 }
 
-function PrimaryNavigation({ onNavigate }: { onNavigate?: () => void }) {
+function PrimaryNavigation() {
+  const location = useLocation()
+  const { setOpenMobile } = useSidebar()
+
   return (
-    <nav aria-label="主导航" className="space-y-1">
-      {navigationItems.map((item) => {
-        const Icon = item.icon
+    <nav aria-label="主导航">
+      <SidebarMenu>
+        {navigationItems.map((item) => {
+          const Icon = item.icon
 
-        if (item.to !== undefined) {
+          if (item.to !== undefined) {
+            const isActive =
+              item.to === '/'
+                ? location.pathname === '/'
+                : location.pathname === item.to
+
+            return (
+              <SidebarMenuItem key={item.label}>
+                <SidebarMenuButton
+                  render={
+                    <NavLink
+                      to={item.to}
+                      end={item.to === '/'}
+                      onClick={() => setOpenMobile(false)}
+                    />
+                  }
+                  isActive={isActive}
+                  className="min-h-11 gap-3 rounded-lg px-3 text-sidebar-foreground/78 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground md:min-h-10 data-active:bg-sidebar-primary data-active:text-sidebar-primary-foreground data-active:shadow-[inset_3px_0_0_var(--sidebar-ring)]"
+                >
+                  <Icon className="size-4" aria-hidden />
+                  <span>{item.label}</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            )
+          }
+
           return (
-            <NavLink
-              key={item.label}
-              to={item.to}
-              end={item.to === '/'}
-              onClick={onNavigate}
-              className={({ isActive }) =>
-                cn(
-                  'flex min-h-10 items-center gap-3 rounded-lg px-3 text-sm font-medium text-muted-foreground transition-colors outline-none hover:bg-secondary/70 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring',
-                  isActive &&
-                    'bg-primary text-primary-foreground shadow-sm hover:bg-primary hover:text-primary-foreground',
-                )
-              }
-            >
-              <Icon className="size-4" aria-hidden />
-              <span>{item.label}</span>
-            </NavLink>
+            <SidebarMenuItem key={item.label}>
+              <SidebarMenuButton
+                type="button"
+                disabled
+                className="min-h-11 gap-3 rounded-lg px-3 text-sidebar-foreground/60 disabled:opacity-100 md:min-h-10"
+              >
+                <Icon className="size-4" aria-hidden />
+                <span>{item.label}</span>
+              </SidebarMenuButton>
+              <SidebarMenuBadge className="right-2 rounded-full border border-sidebar-border px-1.5 text-[10px] font-normal text-sidebar-foreground/65">
+                规划中
+              </SidebarMenuBadge>
+            </SidebarMenuItem>
           )
-        }
-
-        return (
-          <div
-            key={item.label}
-            className="flex min-h-10 cursor-not-allowed items-center gap-3 rounded-lg px-3 text-sm text-muted-foreground/65"
-            aria-disabled="true"
-          >
-            <Icon className="size-4" aria-hidden />
-            <span>{item.label}</span>
-            <Badge
-              variant="outline"
-              className="ml-auto h-4 border-border/80 px-1.5 text-[9px] font-normal text-muted-foreground"
-            >
-              规划中
-            </Badge>
-          </div>
-        )
-      })}
+        })}
+      </SidebarMenu>
     </nav>
   )
 }
@@ -149,11 +165,19 @@ function LocalServiceStatus({
   state: HealthState
   onRetry: () => void
 }) {
+  const label =
+    state.status === 'loading'
+      ? '服务检测中'
+      : state.status === 'connected'
+        ? '服务正常'
+        : '服务异常'
+
   return (
     <div
-      className="flex min-h-8 items-center gap-2 rounded-full border border-border bg-card/85 py-1 pr-1 pl-3 shadow-sm"
+      className="flex min-h-11 items-center gap-2 rounded-full border border-border bg-card py-1 pr-1 pl-3 shadow-[0_8px_24px_-20px_rgba(13,59,58,0.7)] md:min-h-8"
       role={state.status === 'unavailable' ? 'alert' : 'status'}
       aria-live="polite"
+      title={state.status === 'unavailable' ? state.message : undefined}
     >
       <span
         className={cn(
@@ -164,12 +188,16 @@ function LocalServiceStatus({
         aria-hidden="true"
       />
       <span className="text-xs whitespace-nowrap text-muted-foreground">
-        {state.status === 'loading' && '本机服务检测中'}
-        {state.status === 'connected' && '本机服务已连接'}
-        {state.status === 'unavailable' && '本机服务不可用'}
+        {label}
       </span>
       {state.status === 'unavailable' && (
-        <Button type="button" size="xs" variant="ghost" onClick={onRetry}>
+        <Button
+          type="button"
+          size="xs"
+          variant="ghost"
+          className="min-h-9 px-2 md:min-h-6"
+          onClick={onRetry}
+        >
           重试
         </Button>
       )}
@@ -183,7 +211,7 @@ export function useAppShell() {
 
 export function AppShell() {
   const location = useLocation()
-  const [navigationOpen, setNavigationOpen] = useState(false)
+  const previousPath = useRef(location.pathname)
   const [healthState, dispatch] = useReducer(healthReducer, {
     status: 'loading',
   })
@@ -215,68 +243,76 @@ export function AppShell() {
     return () => controller.abort()
   }, [checkSequence])
 
+  useEffect(() => {
+    if (previousPath.current === location.pathname) {
+      return
+    }
+
+    previousPath.current = location.pathname
+    document.getElementById('main-content')?.focus()
+  }, [location.pathname])
+
   const pageTitle =
     location.pathname === '/platform-accounts' ? '平台账号' : '工作台'
 
   return (
-    <div className="min-h-svh lg:grid lg:grid-cols-[15rem_minmax(0,1fr)]">
-      <aside className="hidden border-r border-border/80 bg-card/72 lg:sticky lg:top-0 lg:flex lg:h-svh lg:flex-col">
-        <div className="px-5 pt-6 pb-5">
+    <SidebarProvider>
+      <a
+        href="#main-content"
+        className="fixed top-2 left-2 z-100 -translate-y-20 rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground shadow-lg transition-transform focus-visible:translate-y-0 focus-visible:ring-3 focus-visible:ring-ring/50 motion-reduce:transition-none"
+      >
+        跳到主要内容
+      </a>
+
+      <Sidebar collapsible="offcanvas" className="border-sidebar-border">
+        <SidebarHeader className="flex-row items-center justify-between px-5 pt-6 pb-5">
           <ProductIdentity />
-        </div>
-        <Separator />
-        <div className="flex-1 px-3 py-5">
-          <PrimaryNavigation />
-        </div>
-        <div className="px-5 py-5">
-          <p className="text-xs leading-5 text-muted-foreground">
+          <SidebarTrigger
+            aria-label="关闭主导航"
+            className="size-11 text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground md:hidden"
+          />
+        </SidebarHeader>
+        <SidebarSeparator />
+        <SidebarContent className="px-2 py-3">
+          <SidebarGroup className="p-0">
+            <SidebarGroupLabel className="px-3 text-[10px] tracking-[0.16em] text-sidebar-foreground/60">
+              值守功能
+            </SidebarGroupLabel>
+            <SidebarGroupContent>
+              <PrimaryNavigation />
+            </SidebarGroupContent>
+          </SidebarGroup>
+        </SidebarContent>
+        <SidebarSeparator />
+        <SidebarFooter className="px-5 py-5">
+          <p className="text-xs leading-5 text-sidebar-foreground/56">
             单机值守模式
             <br />
             数据与浏览器操作仅留在本机
           </p>
-        </div>
-      </aside>
+        </SidebarFooter>
+      </Sidebar>
 
-      <div className="min-w-0">
-        <header className="sticky top-0 z-30 flex h-16 items-center gap-3 border-b border-border/80 bg-background/88 px-4 backdrop-blur-md sm:px-6 lg:px-8">
-          <Sheet open={navigationOpen} onOpenChange={setNavigationOpen}>
-            <SheetTrigger
-              render={
-                <Button
-                  type="button"
-                  size="icon"
-                  variant="outline"
-                  className="lg:hidden"
-                  aria-label="打开主导航"
-                />
-              }
-            >
-              <Menu aria-hidden="true" />
-            </SheetTrigger>
-            <SheetContent
-              side="left"
-              className="w-[18rem] max-w-[88vw] gap-0 bg-card"
-            >
-              <SheetHeader className="border-b border-border px-5 py-5 text-left">
-                <ProductIdentity />
-                <SheetTitle className="sr-only">主导航</SheetTitle>
-                <SheetDescription className="sr-only">
-                  选择龙田舆情系统的功能页面
-                </SheetDescription>
-              </SheetHeader>
-              <div className="flex-1 px-3 py-5">
-                <PrimaryNavigation
-                  onNavigate={() => setNavigationOpen(false)}
-                />
-              </div>
-            </SheetContent>
-          </Sheet>
+      <SidebarInset
+        id="main-content"
+        tabIndex={-1}
+        aria-labelledby="page-title"
+        className="min-w-0 scroll-mt-20 outline-none"
+      >
+        <header className="sticky top-0 z-30 flex min-h-16 items-center gap-3 border-b border-border bg-background/94 px-3 backdrop-blur-sm sm:px-6 lg:px-8">
+          <SidebarTrigger
+            aria-label="切换主导航"
+            className="size-11 border border-border bg-card hover:bg-secondary md:size-8"
+          />
 
           <div className="min-w-0">
-            <p className="font-utility text-[9px] tracking-[0.16em] text-muted-foreground uppercase">
-              龙田街道 · 本机值守台
+            <p className="truncate text-[10px] tracking-[0.12em] text-muted-foreground">
+              龙田街道舆情值守
             </p>
-            <h1 className="truncate text-base font-semibold text-foreground">
+            <h1
+              id="page-title"
+              className="truncate text-base font-semibold text-foreground"
+            >
               {pageTitle}
             </h1>
           </div>
@@ -286,10 +322,10 @@ export function AppShell() {
           </div>
         </header>
 
-        <main className="mx-auto w-full max-w-[92rem] p-4 sm:p-6 lg:p-8">
+        <div className="mx-auto w-full max-w-[92rem] p-4 sm:p-6 lg:p-8">
           <Outlet context={{ healthState } satisfies ShellContext} />
-        </main>
-      </div>
-    </div>
+        </div>
+      </SidebarInset>
+    </SidebarProvider>
   )
 }

@@ -308,3 +308,67 @@ monitoring readiness rather than invented growth metrics.
 - Dedicated application Profile and Cookie export/import modes.
 - SSE/WebSocket progress; one-second polling is sufficient for one local user and one bounded task.
 - Production packaging and automatic installation of Chrome, uv, or MediaCrawler dependencies.
+
+## 12. Skill-guided administration refinement
+
+After the first administration shell was committed as a safe baseline, the project-local
+`ui-ux-pro-max` and `frontend-design` skills were applied to a second visual pass.
+
+### Evidence accepted from UI/UX Pro Max
+
+- Treat this as a dense operations dashboard (`density=8`), not a spacious landing page.
+- Show telemetry as current only when it comes from a real source; otherwise render an explicit
+  unavailable, unchecked, or empty state.
+- Use the shadcn Sidebar composition for primary application navigation and its trigger for the
+  narrow-screen transition instead of maintaining a parallel custom sidebar state machine.
+- Keep JavaScript sidebar-mode detection on the same `48rem` media-query boundary as Tailwind;
+  rounded `innerWidth` values can otherwise disagree with CSS at fractional browser zoom.
+- Preserve complete keyboard navigation, 44px touch targets on narrow screens, visible focus,
+  reduced motion, and sticky-header focus clearance.
+- Keep reusable server-resource logic in a shared React hook and retain normal TanStack Query cache
+  behavior across route changes.
+
+### Generic recommendations rejected
+
+The generated dark glassmorphism palette, Fira typography, bright green CTA, and generic
+real-time-SaaS hero are not adopted. They would make a Chinese street-level public-opinion desk look
+like a cybersecurity template, weaken the existing civic identity, add a network font dependency,
+and repeat the same visual language the user already rejected.
+
+### Revised design plan
+
+| Role | Token / treatment |
+| --- | --- |
+| watch ink | `#0D3B3A`, used for the navigation field and high-confidence labels |
+| Longtian teal | `#16736D`, reserved for current route, focus, and actionable controls |
+| duty paper | `#F4F7F4`, quiet cool paper rather than warm editorial cream |
+| record surface | `#FFFFFF`, used for operational content and ledgers |
+| rule line | `#D3DED9`, visible enough to structure dense information |
+| attention | `#B86B26`; destructive remains the existing muted red |
+
+Songti SC remains a restrained display face for one page-level operational phrase; PingFang SC /
+Microsoft YaHei remains the primary Chinese UI face; SFMono/Consolas is limited to timestamps and
+technical labels. No external webfont is loaded.
+
+The memorable element remains the four-community watch mark, but it is paired with a compact
+**duty ledger** rather than a card gallery. One ruled summary surface groups service, account, and
+coverage readiness; rows and dividers encode operational relationships instead of decorating the
+page.
+
+```text
++------------------------+--------------------------------------------------+
+| [four-community mark]  | 工作台                              本机服务 ●    |
+| 龙田街道舆情值守       +--------------------------------------------------+
+|                        | 今日值守 / 系统准备情况                            |
+| ● 工作台               | +----------------------------------------------+ |
+| ○ 平台账号             | | 本机服务  | 平台账号  | 监控范围             | |
+| · 采集任务   规划中    | | 已连接    | 1 / 5     | 尚未配置             | |
+| · 舆情信息   规划中    | +----------------------------------------------+ |
+| · 监控关键词 规划中    |                                                  |
+| · 舆情日报   规划中    | 接入进度 / 下一步（真实状态与禁用步骤）           |
+| · 系统设置   规划中    |                                                  |
++------------------------+--------------------------------------------------+
+```
+
+Motion stays subordinate: Sidebar/Sheet spatial transition and the single active connection signal
+are enough. No staggered card entrance or ambient background animation is introduced.
