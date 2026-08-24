@@ -196,3 +196,24 @@ Implemented and verified the Douyin authentication-only connection path across t
 ### Status
 
 [OK] **Completed**
+
+
+## Session 10: Add Toutiao account connection
+
+**Date**: 2026-08-24
+**Task**: Add Toutiao account connection
+**Branch**: `main`
+
+### Summary
+
+Added and live-validated a fail-closed Toutiao borrowed-Chrome account connection flow; promoted Toutiao as the fourth enabled platform, fixed enabled-only readiness metrics, and preserved Xiaohongshu as coming soon. MediaCrawler derivative commit: 8d2fd40.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `2672a3a` | (see git log) |
+
+### Status
+
+[OK] **Completed**
