@@ -68,7 +68,7 @@
 - [x] Update the platform-connection executable spec from `wb | ks` to `wb | dy | ks`, including
       the fail-closed online-proof and cross-platform event contract.
 - [x] Present automated and real-acceptance evidence and request commit/push approval.
-- [ ] After approval, commit/push MediaCrawler first, then the parent product changes and gitlink;
+- [x] After approval, commit/push MediaCrawler first, then the parent product changes and gitlink;
       archive the task and record the journal.
 
 ## Rollback points
