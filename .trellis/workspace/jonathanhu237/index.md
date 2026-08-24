@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 8
+- **Total Sessions**: 9
 - **Last Active**: 2026-08-24
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~177 | Active |
+| `journal-1.md` | ~198 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 9 | 2026-08-24 | Douyin account connection | `e113d2f` | `main` |
 | 8 | 2026-08-24 | Kuaishou account connection | `a9f41e0` | `main` |
 | 7 | 2026-08-24 | Deliver platform account connection center | `514bc13`, `9be65eb`, `ee25f6e` | `main` |
 | 6 | 2026-08-24 | 验证并持久化 MediaCrawler 小红书登录态 | `be080a0` | `main` |

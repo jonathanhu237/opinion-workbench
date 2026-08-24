@@ -175,3 +175,24 @@ Implemented and verified the Kuaishou authentication-only connection path across
 ### Status
 
 [OK] **Completed**
+
+
+## Session 9: Douyin account connection
+
+**Date**: 2026-08-24
+**Task**: Douyin account connection
+**Branch**: `main`
+
+### Summary
+
+Implemented and verified the Douyin authentication-only connection path across the MediaCrawler derivative, FastAPI, and React; added a fail-closed official online probe, completed real borrowed-Chrome acceptance with all 22 tabs preserved, enabled the third platform, updated the executable contract, and pushed MediaCrawler commit f23411e.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e113d2f` | (see git log) |
+
+### Status
+
+[OK] **Completed**
