@@ -154,3 +154,24 @@ Delivered and verified the local single-user platform account connection center 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 8: Kuaishou account connection
+
+**Date**: 2026-08-24
+**Task**: Kuaishou account connection
+**Branch**: `main`
+
+### Summary
+
+Implemented and verified the Kuaishou authentication-only connection path across the MediaCrawler derivative, FastAPI, and React; completed a real borrowed-Chrome acceptance run, preserved user tabs, updated the executable platform-connection spec, and pushed MediaCrawler commit 18083e5.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a9f41e0` | (see git log) |
+
+### Status
+
+[OK] **Completed**
