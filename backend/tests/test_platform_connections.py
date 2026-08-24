@@ -6,6 +6,7 @@ from collections import deque
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
@@ -18,11 +19,37 @@ PREFIX = b"__MEDIACRAWLER_AUTH_EVENT__"
 FIXED_NOW = datetime(2026, 8, 24, 12, 30, tzinfo=UTC)
 
 
-def auth_event(phase: str, **extra: object) -> bytes:
-    fields = {"version": 1, "platform": "wb", "phase": phase, **extra}
+def auth_event(phase: str, *, platform: str = "wb", **extra: object) -> bytes:
+    fields = {"version": 1, "platform": platform, "phase": phase, **extra}
     import json
 
     return PREFIX + json.dumps(fields).encode() + b"\n"
+
+
+def expected_auth_command(platform: str) -> tuple[str, ...]:
+    return (
+        "uv",
+        "run",
+        "--frozen",
+        "--project",
+        "/repo/third_party/MediaCrawler",
+        "python",
+        "main.py",
+        "--platform",
+        platform,
+        "--type",
+        "auth",
+        "--lt",
+        "qrcode",
+        "--headless",
+        "no",
+        "--get_comment",
+        "no",
+        "--get_sub_comment",
+        "no",
+        "--save_data_option",
+        "jsonl",
+    )
 
 
 class FakeLineReader:
@@ -103,9 +130,12 @@ class FakeTerminator:
         process.finish(-15)
 
 
-async def wait_for_terminal(service: PlatformConnectionService) -> dict[str, object]:
+async def wait_for_terminal(
+    service: PlatformConnectionService, platform: str = "wb"
+) -> dict[str, object]:
     for _ in range(200):
-        connection = (await service.list_connections()).platforms[0]
+        connections = (await service.list_connections()).platforms
+        connection = next(item for item in connections if item.platform == platform)
         if connection.status in {"connected", "disconnected", "failed"}:
             return connection.model_dump(mode="json")
         await asyncio.sleep(0.001)
@@ -163,8 +193,8 @@ def test_list_returns_exact_ordered_catalog() -> None:
             {
                 "platform": "ks",
                 "display_name": "快手",
-                "availability": "coming_soon",
-                "status": "coming_soon",
+                "availability": "enabled",
+                "status": "not_checked",
                 "guidance": "none",
                 "last_checked_at": None,
                 "active_attempt_id": None,
@@ -201,6 +231,7 @@ def test_list_returns_exact_ordered_catalog() -> None:
             "platform_not_found",
             "未找到该平台。",
         ),
+        ("ks --type search", 404, "platform_not_found", "未找到该平台。"),
         ("dy", 409, "platform_not_available", "该平台暂未接入。"),
     ],
 )
@@ -228,10 +259,11 @@ def test_start_returns_202_and_rejects_concurrent_attempt() -> None:
     ) as client:
         accepted = client.post("/api/v1/platform-connections/wb/attempts")
         assert launcher.started.wait(timeout=1)
-        conflict = client.post("/api/v1/platform-connections/wb/attempts")
+        conflict = client.post("/api/v1/platform-connections/ks/attempts")
         unavailable_during_attempt = client.post(
             "/api/v1/platform-connections/dy/attempts"
         )
+        current_catalog = client.get("/api/v1/platform-connections").json()
 
     body = accepted.json()
     assert accepted.status_code == 202
@@ -248,7 +280,38 @@ def test_start_returns_202_and_rejects_concurrent_attempt() -> None:
     assert unavailable_during_attempt.json()["detail"]["code"] == (
         "connection_attempt_active"
     )
+    assert current_catalog["platforms"][0]["status"] == "checking"
+    assert current_catalog["platforms"][2]["status"] == "not_checked"
     assert len(launcher.calls) == 1
+    assert terminator.calls == [(process, 0.01)]
+
+
+def test_kuaishou_start_returns_exact_202_projection() -> None:
+    process = FakeProcess(hang=True)
+    service, launcher, terminator = build_service(process)
+
+    with TestClient(
+        create_app(platform_connection_service_factory=lambda: service)
+    ) as client:
+        response = client.post("/api/v1/platform-connections/ks/attempts")
+        assert launcher.started.wait(timeout=1)
+
+    body = response.json()
+    assert response.status_code == 202
+    assert str(UUID(body["attempt_id"])) == body["attempt_id"]
+    assert body == {
+        "attempt_id": body["attempt_id"],
+        "platform": {
+            "platform": "ks",
+            "display_name": "快手",
+            "availability": "enabled",
+            "status": "checking",
+            "guidance": "none",
+            "last_checked_at": None,
+            "active_attempt_id": body["attempt_id"],
+        },
+    }
+    assert launcher.calls[0][0] == expected_auth_command("ks")
     assert terminator.calls == [(process, 0.01)]
 
 
@@ -281,31 +344,103 @@ def test_success_requires_connected_event_and_zero_exit() -> None:
         }
         command, cwd = launcher.calls[0]
         assert cwd == Path("/repo/third_party/MediaCrawler")
-        assert command == (
-            "uv",
-            "run",
-            "--frozen",
-            "--project",
-            "/repo/third_party/MediaCrawler",
-            "python",
-            "main.py",
-            "--platform",
-            "wb",
-            "--type",
-            "auth",
-            "--lt",
-            "qrcode",
-            "--headless",
-            "no",
-            "--get_comment",
-            "no",
-            "--get_sub_comment",
-            "no",
-            "--save_data_option",
-            "jsonl",
-        )
+        assert command == expected_auth_command("wb")
         assert accepted.attempt_id is not None
         assert terminator.calls == []
+
+    asyncio.run(scenario())
+
+
+def test_kuaishou_success_uses_its_trusted_platform_command() -> None:
+    async def scenario() -> None:
+        process = FakeProcess(
+            stdout=[
+                auth_event("checking", platform="ks"),
+                auth_event("connected", platform="ks"),
+            ],
+            exit_code=0,
+        )
+        service, launcher, terminator = build_service(process)
+
+        accepted = await service.start_attempt("ks")
+        result = await wait_for_terminal(service, "ks")
+
+        assert result == {
+            "platform": "ks",
+            "display_name": "快手",
+            "availability": "enabled",
+            "status": "connected",
+            "guidance": "none",
+            "last_checked_at": "2026-08-24T12:30:00Z",
+            "active_attempt_id": None,
+        }
+        assert accepted.platform.platform == "ks"
+        assert launcher.calls == [
+            (
+                expected_auth_command("ks"),
+                Path("/repo/third_party/MediaCrawler"),
+            )
+        ]
+        assert terminator.calls == []
+
+    asyncio.run(scenario())
+
+
+def test_kuaishou_explicit_disconnected_event_maps_to_retry() -> None:
+    async def scenario() -> None:
+        process = FakeProcess(
+            stdout=[
+                auth_event("checking", platform="ks"),
+                auth_event("waiting_for_login", platform="ks"),
+                auth_event("checking", platform="ks"),
+                auth_event("disconnected", platform="ks"),
+            ],
+            exit_code=20,
+        )
+        service, _, terminator = build_service(process)
+
+        await service.start_attempt("ks")
+        result = await wait_for_terminal(service, "ks")
+
+        assert result["status"] == "disconnected"
+        assert result["guidance"] == "retry"
+        assert result["last_checked_at"] == "2026-08-24T12:30:00Z"
+        assert terminator.calls == []
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("attempt_platform", "event_platform"),
+    [("wb", "ks"), ("ks", "wb")],
+)
+def test_cross_platform_auth_event_fails_the_active_attempt(
+    attempt_platform: str, event_platform: str
+) -> None:
+    async def scenario() -> None:
+        process = FakeProcess(
+            stdout=[auth_event("checking", platform=event_platform)],
+            hang=True,
+        )
+        service, launcher, terminator = build_service(process)
+
+        await service.start_attempt(attempt_platform)
+        result = await wait_for_terminal(service, attempt_platform)
+
+        assert result["platform"] == attempt_platform
+        assert result["status"] == "failed"
+        assert result["guidance"] == "retry"
+        other_platform = "ks" if attempt_platform == "wb" else "wb"
+        other = next(
+            connection
+            for connection in (await service.list_connections()).platforms
+            if connection.platform == other_platform
+        )
+        assert other.status == "not_checked"
+        assert other.active_attempt_id is None
+        assert other.last_checked_at is None
+        assert launcher.calls[0][0] == expected_auth_command(attempt_platform)
+        assert terminator.calls == [(process, 0.01)]
 
     asyncio.run(scenario())
 
@@ -316,7 +451,10 @@ def test_terminal_attempt_releases_the_single_worker_slot() -> None:
             stdout=[auth_event("checking"), auth_event("connected")]
         )
         second_process = FakeProcess(
-            stdout=[auth_event("checking"), auth_event("connected")]
+            stdout=[
+                auth_event("checking", platform="ks"),
+                auth_event("connected", platform="ks"),
+            ]
         )
         launcher = FakeLauncher(first_process, second_process)
         terminator = FakeTerminator()
@@ -329,8 +467,8 @@ def test_terminal_attempt_releases_the_single_worker_slot() -> None:
 
         first = await service.start_attempt("wb")
         assert (await wait_for_terminal(service))["status"] == "connected"
-        second = await service.start_attempt("wb")
-        assert (await wait_for_terminal(service))["status"] == "connected"
+        second = await service.start_attempt("ks")
+        assert (await wait_for_terminal(service, "ks"))["status"] == "connected"
 
         assert first.attempt_id != second.attempt_id
         assert len(launcher.calls) == 2
@@ -348,16 +486,24 @@ def test_terminal_attempt_releases_the_single_worker_slot() -> None:
         (["checking", "waiting_for_login"], "action_required", "complete_login"),
     ],
 )
+@pytest.mark.parametrize("platform", ["wb", "ks"])
 def test_protocol_phases_update_the_visible_projection(
-    phases: list[str], expected_status: str, expected_guidance: str
+    phases: list[str],
+    expected_status: str,
+    expected_guidance: str,
+    platform: str,
 ) -> None:
     async def scenario() -> None:
-        process = FakeProcess(stdout=[auth_event(phase) for phase in phases], hang=True)
+        process = FakeProcess(
+            stdout=[auth_event(phase, platform=platform) for phase in phases],
+            hang=True,
+        )
         service, _, _ = build_service(process)
-        await service.start_attempt("wb")
+        await service.start_attempt(platform)
 
         for _ in range(100):
-            connection = (await service.list_connections()).platforms[0]
+            connections = (await service.list_connections()).platforms
+            connection = next(item for item in connections if item.platform == platform)
             if (
                 connection.status == expected_status
                 and connection.guidance == expected_guidance

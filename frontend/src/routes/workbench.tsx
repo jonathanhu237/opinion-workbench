@@ -71,9 +71,21 @@ export function Workbench() {
   const connectedCount = platforms.filter(
     (platform) => platform.status === 'connected',
   ).length
+  const enabledPlatforms = platforms.filter(
+    (platform) => platform.availability === 'enabled',
+  )
+  const enabledConnectedCount = enabledPlatforms.filter(
+    (platform) => platform.status === 'connected',
+  ).length
   const catalogReadable = connectionsQuery.data !== undefined
-  const weibo = platforms.find((platform) => platform.platform === 'wb')
-  const weiboConnected = weibo?.status === 'connected'
+  const allEnabledConnected =
+    enabledPlatforms.length > 0 &&
+    enabledConnectedCount === enabledPlatforms.length
+  const accountReadinessCopy = allEnabledConnected
+    ? '微博与快手在线检测均已通过；其余三个平台仍待接入。'
+    : enabledConnectedCount > 0
+      ? `已连接 ${enabledConnectedCount} / ${enabledPlatforms.length} 个可用平台；可以继续检测微博或快手。`
+      : '先检测微博与快手登录状态；其余三个平台暂不提供连接操作。'
 
   const serviceValue =
     healthState.status === 'connected'
@@ -189,7 +201,7 @@ export function Workbench() {
               <span className="font-utility text-xs text-primary">01</span>
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
-                  {weiboConnected ? (
+                  {allEnabledConnected ? (
                     <CircleCheck
                       className="size-4 text-live"
                       aria-hidden="true"
@@ -203,9 +215,7 @@ export function Workbench() {
                   <p className="font-medium text-foreground">确认平台账号</p>
                 </div>
                 <p className="mt-1 text-sm leading-6 text-muted-foreground">
-                  {weiboConnected
-                    ? '微博在线检测已经通过；其余四个平台仍待接入。'
-                    : '先检测微博登录状态，其余四个平台暂不提供连接操作。'}
+                  {accountReadinessCopy}
                 </p>
               </div>
               <Link

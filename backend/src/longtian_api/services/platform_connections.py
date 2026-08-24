@@ -29,11 +29,7 @@ CONNECTED_EXIT_CODE = 0
 AUTH_DISCONNECTED_EXIT_CODE = 20
 BROWSER_UNAVAILABLE_EXIT_CODE = 21
 
-_AUTH_COMMAND_ARGS = (
-    "python",
-    "main.py",
-    "--platform",
-    "wb",
+_AUTH_COMMAND_SUFFIX = (
     "--type",
     "auth",
     "--lt",
@@ -47,6 +43,12 @@ _AUTH_COMMAND_ARGS = (
     "--save_data_option",
     "jsonl",
 )
+
+AuthPlatformId = Literal["wb", "ks"]
+_AUTH_PLATFORM_BY_ID: dict[PlatformId, AuthPlatformId] = {
+    "wb": "wb",
+    "ks": "ks",
+}
 
 AuthPhase = Literal[
     "waiting_for_browser",
@@ -62,7 +64,7 @@ class _AuthEvent(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     version: Literal[1]
-    platform: Literal["wb"]
+    platform: AuthPlatformId
     phase: AuthPhase
 
 
@@ -158,7 +160,8 @@ class PlatformConnectionService:
                     code="connection_attempt_active",
                     message="已有平台连接任务正在进行，请稍后重试。",
                 )
-            if connection.availability == "coming_soon":
+            auth_platform = _AUTH_PLATFORM_BY_ID.get(connection.platform)
+            if connection.availability == "coming_soon" or auth_platform is None:
                 raise PlatformConnectionError(
                     status_code=409,
                     code="platform_not_available",
@@ -175,7 +178,7 @@ class PlatformConnectionService:
             )
             self._connections[connection.platform] = accepted
             self._current_task = asyncio.create_task(
-                self._run_attempt(connection.platform, attempt_id),
+                self._run_attempt(auth_platform, attempt_id),
                 name=f"platform-connection-{connection.platform}-{attempt_id}",
             )
             return PlatformConnectionAttemptResponse(
@@ -211,7 +214,7 @@ class PlatformConnectionService:
             self._current_task = None
             self._current_process = None
 
-    async def _run_attempt(self, platform: PlatformId, attempt_id: UUID) -> None:
+    async def _run_attempt(self, platform: AuthPlatformId, attempt_id: UUID) -> None:
         terminal_status: Literal["connected", "disconnected", "failed"] = "failed"
         terminal_guidance: PlatformConnectionGuidance = "retry"
         was_cancelled = False
@@ -253,12 +256,12 @@ class PlatformConnectionService:
             raise asyncio.CancelledError
 
     async def _execute_worker(
-        self, platform: PlatformId, attempt_id: UUID
+        self, platform: AuthPlatformId, attempt_id: UUID
     ) -> tuple[
         Literal["connected", "disconnected", "failed"],
         PlatformConnectionGuidance,
     ]:
-        command = self._worker_command()
+        command = self._worker_command(platform)
         process = await self._process_launcher(command, self._media_crawler_dir)
         async with self._lock:
             self._current_process = process
@@ -271,7 +274,7 @@ class PlatformConnectionService:
         previous_phase: AuthPhase | None = None
         try:
             while line := await process.stdout.readline():
-                event = _parse_auth_event(line)
+                event = _parse_auth_event(line, expected_platform=platform)
                 if event is None:
                     continue
                 _validate_transition(previous_phase, event.phase)
@@ -352,14 +355,18 @@ class PlatformConnectionService:
         async with self._lock:
             return self._current_process
 
-    def _worker_command(self) -> tuple[str, ...]:
+    def _worker_command(self, platform: AuthPlatformId) -> tuple[str, ...]:
         return (
             "uv",
             "run",
             "--frozen",
             "--project",
             str(self._media_crawler_dir),
-            *_AUTH_COMMAND_ARGS,
+            "python",
+            "main.py",
+            "--platform",
+            platform,
+            *_AUTH_COMMAND_SUFFIX,
         )
 
 
@@ -386,8 +393,8 @@ def _initial_catalog() -> dict[PlatformId, PlatformConnection]:
         "ks": PlatformConnection(
             platform="ks",
             display_name="快手",
-            availability="coming_soon",
-            status="coming_soon",
+            availability="enabled",
+            status="not_checked",
             guidance="none",
             last_checked_at=None,
             active_attempt_id=None,
@@ -413,7 +420,9 @@ def _initial_catalog() -> dict[PlatformId, PlatformConnection]:
     }
 
 
-def _parse_auth_event(line: bytes) -> _AuthEvent | None:
+def _parse_auth_event(
+    line: bytes, *, expected_platform: AuthPlatformId
+) -> _AuthEvent | None:
     if not line.startswith(AUTH_EVENT_PREFIX):
         return None
     if len(line) > MAX_AUTH_EVENT_LINE_BYTES:
@@ -422,7 +431,10 @@ def _parse_auth_event(line: bytes) -> _AuthEvent | None:
     payload = line[len(AUTH_EVENT_PREFIX) :].strip()
     try:
         raw_event = json.loads(payload)
-        return _AuthEvent.model_validate(raw_event)
+        event = _AuthEvent.model_validate(raw_event)
+        if event.platform != expected_platform:
+            raise _ProtocolError
+        return event
     except (
         UnicodeDecodeError,
         json.JSONDecodeError,

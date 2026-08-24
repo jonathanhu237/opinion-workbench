@@ -22,14 +22,14 @@ Worker command shape:
 
 ```text
 uv run --frozen --project third_party/MediaCrawler python main.py
-  --platform <platform> --type auth --lt qrcode --headless no
+  --platform <wb|ks> --type auth --lt qrcode --headless no
   --get_comment no --get_sub_comment no --save_data_option jsonl
 ```
 
 Versioned child event:
 
 ```text
-__MEDIACRAWLER_AUTH_EVENT__{"version":1,"platform":"wb","phase":"checking"}
+__MEDIACRAWLER_AUTH_EVENT__{"version":1,"platform":"ks","phase":"checking"}
 ```
 
 ### 3. Contracts
@@ -37,6 +37,11 @@ __MEDIACRAWLER_AUTH_EVENT__{"version":1,"platform":"wb","phase":"checking"}
 - `GET` returns exactly `{ "platforms": PlatformConnection[] }` in catalog order.
 - `POST` returns HTTP 202 as `{ "attempt_id": UUID, "platform": PlatformConnection }` and never
   waits for manual browser work.
+- Authentication availability is a trusted product allowlist. The current supported child
+  platforms are exactly `wb | ks`; a known catalog entry is not automatically executable.
+- Build the worker command from the trusted allowlist with `create_subprocess_exec`. The backend
+  must pass the requested platform as one exact argument and require every child event's
+  `platform` to equal the active attempt. An event for the other supported platform fails closed.
 - Only one authentication worker may be active. Product state remains in memory and is reset by a
   backend restart.
 - Allowed worker phases are `waiting_for_browser`, `waiting_for_approval`, `checking`,
@@ -50,6 +55,9 @@ __MEDIACRAWLER_AUTH_EVENT__{"version":1,"platform":"wb","phase":"checking"}
   worker failure.
 - `connected` requires the platform's authoritative online probe. Cookie names, files, or process
   exit alone are never sufficient.
+- For Kuaishou, a new or changed `passToken` after the visible login begins is only a wake-up hint
+  for the follow-up online probe. Capture the initial token value so stale local evidence cannot
+  produce an early success or skip the bounded manual-login wait.
 - Authentication mode must force existing visible Chrome, loopback CDP, no proxy, no explicit
   authentication-state persistence, and no search/detail/creator/comment/media/store/database
   work.
@@ -65,6 +73,7 @@ __MEDIACRAWLER_AUTH_EVENT__{"version":1,"platform":"wb","phase":"checking"}
 | Unknown platform | HTTP 404 `platform_not_found`; start no process |
 | Known unavailable platform | HTTP 409 `platform_not_available`; start no process |
 | Another attempt is active | HTTP 409 `connection_attempt_active`; preserve current attempt |
+| Supported child event names the other platform | Fail closed; do not mutate either platform |
 | Unknown, oversized, malformed, extra-field, or out-of-order child event | Fail closed; discard raw line |
 | Exit 0 without terminal `connected` | `failed`; never infer authentication |
 | Exit 20 without an explicit terminal `disconnected` event | `failed`; reject the mismatch |
@@ -82,8 +91,9 @@ __MEDIACRAWLER_AUTH_EVENT__{"version":1,"platform":"wb","phase":"checking"}
   `chrome://inspect/#remote-debugging`, reports the required user action, times out safely, and
   leaves every existing Chrome tab open.
 - **Bad:** FastAPI imports MediaCrawler runtime globals, accepts arbitrary child JSON, passes
-  credentials on the command line, trusts Cookie presence, falls back to a dedicated browser, or
-  calls `context.close()` / `browser.close()` on a borrowed Chrome instance.
+  credentials on the command line, accepts a `wb` event for an active `ks` attempt, trusts Cookie
+  presence, falls back to a dedicated browser, or calls `context.close()` / `browser.close()` on a
+  borrowed Chrome instance.
 
 ### 6. Tests Required
 
@@ -92,7 +102,8 @@ __MEDIACRAWLER_AUTH_EVENT__{"version":1,"platform":"wb","phase":"checking"}
    owned process-group TERM/KILL behavior.
 3. Exact worker command with `create_subprocess_exec`, no shell, and no credential-bearing args.
 4. Protocol version/platform/phase/extra-field/line-size/transition/exit mismatch cases; assert raw
-   child text never reaches product state or errors.
+   child text never reaches product state or errors. Cover both mismatch directions (`wb -> ks`
+   and `ks -> wb`) and assert neither platform is mutated by the foreign event.
 5. Authentication config sentinels that fail if any search, detail, creator, comment, media,
    persistence, or store entry point is reached.
 6. Borrowed cleanup regression: one pre-existing sentinel page remains, only registered pages
@@ -101,6 +112,9 @@ __MEDIACRAWLER_AUTH_EVENT__{"version":1,"platform":"wb","phase":"checking"}
    live-region guidance, responsive overflow, and console checks.
 8. Real loopback acceptance records only phases, terminal category, timestamps, counts, listener
    address, and ownership results.
+9. Kuaishou stale-token regression: an initially present `passToken` after a failed online probe
+   must not finish visible login; only token appearance/change may trigger the early recheck, and
+   only a successful online probe may emit `connected`.
 
 ### 7. Wrong vs Correct
 
@@ -116,8 +130,13 @@ await borrowed_context.close()
 #### Correct
 
 ```python
-process = await asyncio.create_subprocess_exec(*fixed_auth_args, start_new_session=True)
-event = _parse_auth_event(await process.stdout.readline())
+platform = AUTH_PLATFORM_BY_ID[requested_platform]  # trusted `wb | ks`
+process = await asyncio.create_subprocess_exec(
+    *fixed_auth_args(platform), start_new_session=True
+)
+event = _parse_auth_event(
+    await process.stdout.readline(), expected_platform=platform
+)
 _validate_transition(previous_phase, event.phase)
 status = "connected" if event.phase == "connected" and await process.wait() == 0 else "failed"
 await cdp_manager.close_owned_pages()

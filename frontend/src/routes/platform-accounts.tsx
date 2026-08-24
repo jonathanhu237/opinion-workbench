@@ -22,7 +22,6 @@ import {
   startPlatformConnectionAttempt,
   type PlatformConnection,
   type PlatformConnectionStatus,
-  type PlatformGuidance,
   type PlatformId,
 } from '@/lib/api/platform-connections'
 import { cn } from '@/lib/utils'
@@ -43,14 +42,6 @@ const statusLabels: Record<PlatformConnectionStatus, string> = {
   disconnected: '未连接',
   failed: '检测失败',
   coming_soon: '待接入',
-}
-
-const guidanceCopy: Record<Exclude<PlatformGuidance, 'none'>, string> = {
-  enable_remote_debugging:
-    'Chrome 已打开远程调试设置，请在其中启用本机调试连接。',
-  approve_connection: '请在 Chrome 中批准本机连接，然后保留浏览器窗口。',
-  complete_login: '请在 Chrome 的微博官方页面完成扫码或安全验证。',
-  retry: '本次检测未完成。确认 Chrome 可用后，可以重新检测。',
 }
 
 function statusBadgeClass(status: PlatformConnectionStatus) {
@@ -89,26 +80,54 @@ function guidanceFor(connection: PlatformConnection | undefined) {
   if (connection === undefined) {
     return '正在读取平台连接状态…'
   }
-  if (connection.guidance !== 'none') {
-    return guidanceCopy[connection.guidance]
+
+  switch (connection.guidance) {
+    case 'enable_remote_debugging':
+      return 'Chrome 已打开远程调试设置，请在其中启用本机调试连接。'
+    case 'approve_connection':
+      return '请在 Chrome 中批准本机连接，然后保留浏览器窗口。'
+    case 'complete_login':
+      return `请在 Chrome 的${connection.display_name}官方页面完成扫码或安全验证。`
+    case 'retry':
+      return '本次检测未完成。确认 Chrome 可用后，可以重新检测。'
+    case 'none':
+      break
   }
 
   switch (connection.status) {
     case 'not_checked':
-      return '先检测微博是否仍然登录。需要登录时，系统会把操作交给可见的 Chrome。'
+      return `先检测${connection.display_name}是否仍然登录。需要登录时，系统会把操作交给可见的 Chrome。`
     case 'checking':
-      return '正在检查微博登录状态，请暂时保留 Chrome 窗口。'
+      return `正在检查${connection.display_name}登录状态，请暂时保留 Chrome 窗口。`
     case 'connected':
-      return '微博账号已通过在线检测，可以继续准备后续采集功能。'
+      return `${connection.display_name}账号已通过在线检测，可以继续准备后续采集功能。`
     case 'disconnected':
-      return '微博尚未连接。重新检测后，请在可见的 Chrome 中完成登录。'
+      return `${connection.display_name}尚未连接。重新检测后，请在可见的 Chrome 中完成登录。`
     case 'failed':
       return '连接检测遇到技术问题。确认本机 Chrome 可用后重新检测。'
     case 'action_required':
-      return '请按 Chrome 窗口中的提示完成当前操作。'
+      return `请按 Chrome 中${connection.display_name}官方页面的提示完成当前操作。`
     case 'coming_soon':
       return '该平台将在后续版本中接入。'
   }
+}
+
+function relevantConnection(platforms: PlatformConnection[]) {
+  const enabled = platforms.filter(
+    (connection) => connection.availability === 'enabled',
+  )
+  const active = enabled.find(isPlatformConnectionActive)
+  if (active !== undefined) {
+    return active
+  }
+
+  const lastChecked = enabled
+    .filter((connection) => connection.last_checked_at !== null)
+    .sort((left, right) =>
+      (right.last_checked_at ?? '').localeCompare(left.last_checked_at ?? ''),
+    )[0]
+
+  return lastChecked ?? enabled[0]
 }
 
 function attemptButtonLabel(status: PlatformConnectionStatus) {
@@ -231,7 +250,6 @@ export function PlatformAccounts() {
   )
 
   const platforms = connectionsQuery.data?.platforms ?? []
-  const weibo = platforms.find((connection) => connection.platform === 'wb')
   const operationActive =
     attemptMutation.isPending || platforms.some(isPlatformConnectionActive)
   const mutationMessage =
@@ -250,7 +268,7 @@ export function PlatformAccounts() {
     queryMessage ??
     (healthState.status === 'unavailable'
       ? '本机服务不可用。请确认 FastAPI 已在 127.0.0.1:8000 启动。'
-      : guidanceFor(weibo))
+      : guidanceFor(relevantConnection(platforms)))
 
   const startAttempt = (platform: PlatformId) => {
     if (operationActive || healthState.status !== 'connected') {

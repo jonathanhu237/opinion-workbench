@@ -62,6 +62,7 @@ function connection(
 
 function catalog(
   weibo: Partial<PlatformConnection> = {},
+  kuaishou: Partial<PlatformConnection> = {},
 ): PlatformConnectionsResponse {
   return {
     platforms: [
@@ -75,8 +76,7 @@ function catalog(
       connection({
         platform: 'ks',
         display_name: '快手',
-        availability: 'coming_soon',
-        status: 'coming_soon',
+        ...kuaishou,
       }),
       connection({
         platform: 'xhs',
@@ -149,6 +149,9 @@ describe('Longtian public opinion application', () => {
     const dutyLedger = screen.getByLabelText('值守准备台账')
     expect(within(dutyLedger).getByText('1 / 5')).toBeInTheDocument()
     expect(within(dutyLedger).getByText('尚未配置')).toBeInTheDocument()
+    expect(
+      screen.getByText('已连接 1 / 2 个可用平台；可以继续检测微博或快手。'),
+    ).toBeInTheDocument()
     expect(screen.getByText('尚未建立采集任务')).toBeInTheDocument()
     expect(
       screen.getByText('当前没有采集结果、风险事件或待处理任务可展示。'),
@@ -274,7 +277,7 @@ describe('Longtian public opinion application', () => {
     ).toBeInTheDocument()
   })
 
-  it('shows five honest platform states with only Weibo actionable', async () => {
+  it('shows five honest platform states with Weibo and Kuaishou actionable', async () => {
     renderRoute('/platform-accounts')
 
     expect(await screen.findByText('微博')).toBeInTheDocument()
@@ -282,16 +285,16 @@ describe('Longtian public opinion application', () => {
     expect(screen.getByText('快手')).toBeInTheDocument()
     expect(screen.getByText('小红书')).toBeInTheDocument()
     expect(screen.getByText('今日头条')).toBeInTheDocument()
-    expect(screen.getAllByText('待接入')).toHaveLength(4)
-    expect(screen.getAllByText('暂不可用')).toHaveLength(4)
-    expect(screen.getByRole('button', { name: '检测连接' })).toBeEnabled()
+    expect(screen.getAllByText('待接入')).toHaveLength(3)
+    expect(screen.getAllByText('暂不可用')).toHaveLength(3)
+    expect(screen.getAllByRole('button', { name: '检测连接' })).toHaveLength(2)
     expect(
       screen
         .getAllByRole('button')
         .filter((button) =>
           /检测连接|重新检测|处理中/.test(button.textContent ?? ''),
         ),
-    ).toHaveLength(1)
+    ).toHaveLength(2)
   })
 
   it('allows an unavailable local service to be retried', async () => {
@@ -303,12 +306,20 @@ describe('Longtian public opinion application', () => {
     renderRoute('/platform-accounts')
 
     expect(await screen.findByText('服务异常')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '检测连接' })).toBeDisabled()
+    const attemptButtons = screen.getAllByRole('button', {
+      name: '检测连接',
+    })
+    expect(attemptButtons).toHaveLength(2)
+    for (const button of attemptButtons) {
+      expect(button).toBeDisabled()
+    }
 
     await user.click(screen.getByRole('button', { name: '重试' }))
 
     expect(await screen.findByText('服务正常')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '检测连接' })).toBeEnabled()
+    for (const button of attemptButtons) {
+      expect(button).toBeEnabled()
+    }
     expect(mockedFetchHealth).toHaveBeenCalledTimes(2)
   })
 
@@ -385,7 +396,9 @@ describe('Longtian public opinion application', () => {
     )
 
     renderRoute('/platform-accounts')
-    const button = await screen.findByRole('button', { name: '检测连接' })
+    const [button] = await screen.findAllByRole('button', {
+      name: '检测连接',
+    })
 
     await user.click(button)
     expect(button).toBeDisabled()
@@ -415,12 +428,82 @@ describe('Longtian public opinion application', () => {
     )
 
     renderRoute('/platform-accounts')
-    await user.click(await screen.findByRole('button', { name: '检测连接' }))
+    const [weiboButton] = await screen.findAllByRole('button', {
+      name: '检测连接',
+    })
+    await user.click(weiboButton)
 
     expect(await screen.findByRole('alert')).toHaveTextContent(
       '已有平台连接任务正在运行，请完成后再试。',
     )
     expect(mockedStartAttempt).toHaveBeenCalledTimes(1)
+  })
+
+  it('starts Kuaishou and follows its platform-specific manual guidance', async () => {
+    const user = userEvent.setup()
+    mockedFetchPlatformConnections
+      .mockResolvedValueOnce(catalog())
+      .mockResolvedValue(
+        catalog(
+          {},
+          {
+            status: 'action_required',
+            guidance: 'complete_login',
+            active_attempt_id: attemptId,
+          },
+        ),
+      )
+    mockedStartAttempt.mockResolvedValue({
+      attempt_id: attemptId,
+      platform: connection({
+        platform: 'ks',
+        display_name: '快手',
+        status: 'checking',
+        active_attempt_id: attemptId,
+      }),
+    })
+
+    renderRoute('/platform-accounts')
+    const kuaishouName = await screen.findByText('快手')
+    const kuaishouRow = kuaishouName.closest('li')
+    if (kuaishouRow === null) {
+      throw new Error('Kuaishou row was not rendered')
+    }
+
+    await user.click(
+      within(kuaishouRow).getByRole('button', { name: '检测连接' }),
+    )
+
+    expect(mockedStartAttempt).toHaveBeenCalledWith(
+      'ks',
+      expect.any(AbortSignal),
+    )
+    expect(
+      await screen.findByText('请在 Chrome 的快手官方页面完成扫码或安全验证。'),
+    ).toBeInTheDocument()
+  })
+
+  it('shows guidance for the most recently checked enabled platform', async () => {
+    mockedFetchPlatformConnections.mockResolvedValue(
+      catalog(
+        {
+          status: 'connected',
+          last_checked_at: '2026-08-24T07:00:00Z',
+        },
+        {
+          status: 'connected',
+          last_checked_at: '2026-08-24T08:00:00Z',
+        },
+      ),
+    )
+
+    renderRoute('/platform-accounts')
+
+    expect(
+      await screen.findByText(
+        '快手账号已通过在线检测，可以继续准备后续采集功能。',
+      ),
+    ).toBeInTheDocument()
   })
 
   it('polls an active connection until the online result is connected', async () => {
