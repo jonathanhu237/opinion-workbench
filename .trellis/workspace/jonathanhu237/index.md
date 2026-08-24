@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 6
+- **Total Sessions**: 7
 - **Last Active**: 2026-08-24
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~133 | Active |
+| `journal-1.md` | ~156 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 7 | 2026-08-24 | Deliver platform account connection center | `514bc13`, `9be65eb`, `ee25f6e` | `main` |
 | 6 | 2026-08-24 | 验证并持久化 MediaCrawler 小红书登录态 | `be080a0` | `main` |
 | 5 | 2026-08-24 | Implement MediaCrawler Toutiao adapter | `812a604` | `main` |
 | 4 | 2026-08-23 | 验证 MediaCrawler 抖音原生登录态 | `c8424ed` | `main` |

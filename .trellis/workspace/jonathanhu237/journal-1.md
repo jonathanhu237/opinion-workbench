@@ -131,3 +131,26 @@ Added and live-validated a visible-browser, search-only Toutiao adapter with opt
 ### Status
 
 [OK] **Completed**
+
+
+## Session 7: Deliver platform account connection center
+
+**Date**: 2026-08-24
+**Task**: Deliver platform account connection center
+**Branch**: `main`
+
+### Summary
+
+Delivered and verified the local single-user platform account connection center with a safe Weibo borrowed-Chrome authentication flow, React/FastAPI integration, and the skill-guided shadcn administration dashboard; pushed all work to main and archived the completed task.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `514bc13` | (see git log) |
+| `9be65eb` | (see git log) |
+| `ee25f6e` | (see git log) |
+
+### Status
+
+[OK] **Completed**
