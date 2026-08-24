@@ -87,7 +87,7 @@ function guidanceFor(connection: PlatformConnection | undefined) {
     case 'approve_connection':
       return '请在 Chrome 中批准本机连接，然后保留浏览器窗口。'
     case 'complete_login':
-      return `请在 Chrome 的${connection.display_name}官方页面完成扫码或安全验证。`
+      return `请在 Chrome 的${connection.display_name}官方页面完成扫码、短信或安全验证。`
     case 'retry':
       return '本次检测未完成。确认 Chrome 可用后，可以重新检测。'
     case 'none':
@@ -289,7 +289,7 @@ export function PlatformAccounts() {
         </h2>
         <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
           检测平台账号能否在本机 Chrome
-          中继续使用。登录、扫码和安全验证都由你在可见浏览器中完成。
+          中继续使用。登录、扫码、短信和安全验证都由你在可见浏览器中完成。
         </p>
       </section>
 

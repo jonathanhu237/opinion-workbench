@@ -74,6 +74,10 @@ export function Workbench() {
   const enabledPlatforms = platforms.filter(
     (platform) => platform.availability === 'enabled',
   )
+  const enabledPlatformNames = enabledPlatforms
+    .map((platform) => platform.display_name)
+    .join('、')
+  const comingSoonCount = platforms.length - enabledPlatforms.length
   const enabledConnectedCount = enabledPlatforms.filter(
     (platform) => platform.status === 'connected',
   ).length
@@ -81,11 +85,15 @@ export function Workbench() {
   const allEnabledConnected =
     enabledPlatforms.length > 0 &&
     enabledConnectedCount === enabledPlatforms.length
+  const pendingPlatformCopy =
+    comingSoonCount > 0 ? `；其余 ${comingSoonCount} 个平台仍待接入。` : '。'
   const accountReadinessCopy = allEnabledConnected
-    ? '微博与快手在线检测均已通过；其余三个平台仍待接入。'
+    ? `${enabledPlatformNames}在线检测均已通过${pendingPlatformCopy}`
     : enabledConnectedCount > 0
-      ? `已连接 ${enabledConnectedCount} / ${enabledPlatforms.length} 个可用平台；可以继续检测微博或快手。`
-      : '先检测微博与快手登录状态；其余三个平台暂不提供连接操作。'
+      ? `已连接 ${enabledConnectedCount} / ${enabledPlatforms.length} 个可用平台；可以继续检测${enabledPlatformNames}。`
+      : enabledPlatforms.length > 0
+        ? `先检测${enabledPlatformNames}登录状态${pendingPlatformCopy}`
+        : '当前暂无可检测的平台账号。'
 
   const serviceValue =
     healthState.status === 'connected'

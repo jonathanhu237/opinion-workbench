@@ -184,8 +184,8 @@ def test_list_returns_exact_ordered_catalog() -> None:
             {
                 "platform": "dy",
                 "display_name": "抖音",
-                "availability": "coming_soon",
-                "status": "coming_soon",
+                "availability": "enabled",
+                "status": "not_checked",
                 "guidance": "none",
                 "last_checked_at": None,
                 "active_attempt_id": None,
@@ -232,7 +232,8 @@ def test_list_returns_exact_ordered_catalog() -> None:
             "未找到该平台。",
         ),
         ("ks --type search", 404, "platform_not_found", "未找到该平台。"),
-        ("dy", 409, "platform_not_available", "该平台暂未接入。"),
+        ("xhs", 409, "platform_not_available", "该平台暂未接入。"),
+        ("toutiao", 409, "platform_not_available", "该平台暂未接入。"),
     ],
 )
 def test_start_rejects_unknown_and_unavailable_platforms(
@@ -313,6 +314,62 @@ def test_kuaishou_start_returns_exact_202_projection() -> None:
     }
     assert launcher.calls[0][0] == expected_auth_command("ks")
     assert terminator.calls == [(process, 0.01)]
+
+
+def test_douyin_start_returns_exact_202_projection() -> None:
+    process = FakeProcess(hang=True)
+    service, launcher, terminator = build_service(process)
+
+    assert service._worker_command("dy") == expected_auth_command("dy")
+    with TestClient(
+        create_app(platform_connection_service_factory=lambda: service)
+    ) as client:
+        response = client.post("/api/v1/platform-connections/dy/attempts")
+        assert launcher.started.wait(timeout=1)
+
+    body = response.json()
+    assert response.status_code == 202
+    assert str(UUID(body["attempt_id"])) == body["attempt_id"]
+    assert body == {
+        "attempt_id": body["attempt_id"],
+        "platform": {
+            "platform": "dy",
+            "display_name": "抖音",
+            "availability": "enabled",
+            "status": "checking",
+            "guidance": "none",
+            "last_checked_at": None,
+            "active_attempt_id": body["attempt_id"],
+        },
+    }
+    assert launcher.calls[0][0] == expected_auth_command("dy")
+    assert terminator.calls == [(process, 0.01)]
+
+
+def test_douyin_success_uses_its_trusted_platform_command() -> None:
+    async def scenario() -> None:
+        process = FakeProcess(
+            stdout=[
+                auth_event("checking", platform="dy"),
+                auth_event("connected", platform="dy"),
+            ],
+            exit_code=0,
+        )
+        service, launcher, terminator = build_service(process)
+
+        accepted = await service.start_attempt("dy")
+        result = await wait_for_terminal(service, "dy")
+
+        assert result["status"] == "connected"
+        assert result["guidance"] == "none"
+        assert result["last_checked_at"] == "2026-08-24T12:30:00Z"
+        assert accepted.platform.platform == "dy"
+        assert launcher.calls == [
+            (expected_auth_command("dy"), Path("/repo/third_party/MediaCrawler"))
+        ]
+        assert terminator.calls == []
+
+    asyncio.run(scenario())
 
 
 def test_success_requires_connected_event_and_zero_exit() -> None:
@@ -412,7 +469,14 @@ def test_kuaishou_explicit_disconnected_event_maps_to_retry() -> None:
 
 @pytest.mark.parametrize(
     ("attempt_platform", "event_platform"),
-    [("wb", "ks"), ("ks", "wb")],
+    [
+        ("wb", "dy"),
+        ("wb", "ks"),
+        ("dy", "wb"),
+        ("dy", "ks"),
+        ("ks", "wb"),
+        ("ks", "dy"),
+    ],
 )
 def test_cross_platform_auth_event_fails_the_active_attempt(
     attempt_platform: str, event_platform: str
@@ -430,19 +494,53 @@ def test_cross_platform_auth_event_fails_the_active_attempt(
         assert result["platform"] == attempt_platform
         assert result["status"] == "failed"
         assert result["guidance"] == "retry"
-        other_platform = "ks" if attempt_platform == "wb" else "wb"
-        other = next(
+        other_auth_platforms = [
             connection
             for connection in (await service.list_connections()).platforms
-            if connection.platform == other_platform
-        )
-        assert other.status == "not_checked"
-        assert other.active_attempt_id is None
-        assert other.last_checked_at is None
+            if connection.platform in {"wb", "dy", "ks"}
+            and connection.platform != attempt_platform
+        ]
+        assert len(other_auth_platforms) == 2
+        for other in other_auth_platforms:
+            assert other.status == "not_checked"
+            assert other.active_attempt_id is None
+            assert other.last_checked_at is None
         assert launcher.calls[0][0] == expected_auth_command(attempt_platform)
         assert terminator.calls == [(process, 0.01)]
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("expected_platform", "event_platform"),
+    [
+        ("wb", "dy"),
+        ("wb", "ks"),
+        ("dy", "wb"),
+        ("dy", "ks"),
+        ("ks", "wb"),
+        ("ks", "dy"),
+    ],
+)
+def test_every_supported_cross_platform_event_is_rejected(
+    expected_platform: str, event_platform: str
+) -> None:
+    with pytest.raises(service_module._ProtocolError):
+        service_module._parse_auth_event(
+            auth_event("checking", platform=event_platform),
+            expected_platform=expected_platform,
+        )
+
+
+def test_douyin_event_is_valid_only_for_douyin_attempt() -> None:
+    event = service_module._parse_auth_event(
+        auth_event("checking", platform="dy"),
+        expected_platform="dy",
+    )
+
+    assert event is not None
+    assert event.platform == "dy"
+    assert event.phase == "checking"
 
 
 def test_terminal_attempt_releases_the_single_worker_slot() -> None:
