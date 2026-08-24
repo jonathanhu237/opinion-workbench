@@ -58,7 +58,7 @@
 - [x] Run the Trellis full-scope check and update reusable specs if implementation exposes a new
   executable contract.
 - [x] Present verification and real-acceptance evidence before requesting commit/push approval.
-- [ ] After approval, commit/push MediaCrawler first, then update and commit/push the parent gitlink
+- [x] After approval, commit/push MediaCrawler first, then update and commit/push the parent gitlink
   with product changes.
 
 ## Rollback points
