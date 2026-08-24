@@ -217,3 +217,24 @@ Added and live-validated a fail-closed Toutiao borrowed-Chrome account connectio
 ### Status
 
 [OK] **Completed**
+
+
+## Session 11: Add Xiaohongshu account connection
+
+**Date**: 2026-08-24
+**Task**: Add Xiaohongshu account connection
+**Branch**: `main`
+
+### Summary
+
+Added the Xiaohongshu borrowed-Chrome account connection across the MediaCrawler derivative, FastAPI platform catalog, and React connection center. MediaCrawler commit 45e38fe was pushed first; strict login verification, automated regressions, independent quality gates, live UI/API acceptance, and Chrome tab cleanup all passed.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `335043a` | (see git log) |
+
+### Status
+
+[OK] **Completed**
