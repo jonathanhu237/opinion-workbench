@@ -55,7 +55,7 @@
 - [x] After explicit delivery approval, commit and push the MediaCrawler derivative `main`, verify the
       remote revision, then commit the parent gitlink, application changes, specs, and task artifacts
       directly to parent `main`.
-- [ ] Archive this Trellis task and record the developer journal; do not create a PR or Codex branch.
+- [x] Archive this Trellis task and record the developer journal; do not create a PR or Codex branch.
 
 ## Validation commands
 
