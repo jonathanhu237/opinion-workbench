@@ -22,20 +22,36 @@ const platforms: PlatformConnection[] = [
   ...[
     ['dy', '抖音'],
     ['ks', '快手'],
-    ['xhs', '小红书'],
-    ['toutiao', '今日头条'],
   ].map(
     ([platform, display_name]) =>
       ({
         platform,
         display_name,
-        availability: 'coming_soon',
-        status: 'coming_soon',
+        availability: 'enabled',
+        status: 'not_checked',
         guidance: 'none',
         last_checked_at: null,
         active_attempt_id: null,
       }) as PlatformConnection,
   ),
+  {
+    platform: 'xhs',
+    display_name: '小红书',
+    availability: 'coming_soon',
+    status: 'coming_soon',
+    guidance: 'none',
+    last_checked_at: null,
+    active_attempt_id: null,
+  },
+  {
+    platform: 'toutiao',
+    display_name: '今日头条',
+    availability: 'enabled',
+    status: 'not_checked',
+    guidance: 'none',
+    last_checked_at: null,
+    active_attempt_id: null,
+  },
 ]
 
 describe('platform connections API boundary', () => {

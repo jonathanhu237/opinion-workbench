@@ -64,6 +64,7 @@ function catalog(
   weibo: Partial<PlatformConnection> = {},
   kuaishou: Partial<PlatformConnection> = {},
   douyin: Partial<PlatformConnection> = {},
+  toutiao: Partial<PlatformConnection> = {},
 ): PlatformConnectionsResponse {
   return {
     platforms: [
@@ -87,8 +88,7 @@ function catalog(
       connection({
         platform: 'toutiao',
         display_name: '今日头条',
-        availability: 'coming_soon',
-        status: 'coming_soon',
+        ...toutiao,
       }),
     ],
   }
@@ -147,11 +147,11 @@ describe('Longtian public opinion application', () => {
     ).toBeInTheDocument()
     expect(await screen.findByText('服务正常')).toBeInTheDocument()
     const dutyLedger = screen.getByLabelText('值守准备台账')
-    expect(within(dutyLedger).getByText('1 / 5')).toBeInTheDocument()
+    expect(within(dutyLedger).getByText('1 / 4')).toBeInTheDocument()
     expect(within(dutyLedger).getByText('尚未配置')).toBeInTheDocument()
     expect(
       screen.getByText(
-        '已连接 1 / 3 个可用平台；可以继续检测微博、抖音、快手。',
+        '已连接 1 / 4 个可用平台；可以继续检测微博、抖音、快手、今日头条。',
       ),
     ).toBeInTheDocument()
     expect(screen.getByText('尚未建立采集任务')).toBeInTheDocument()
@@ -279,7 +279,7 @@ describe('Longtian public opinion application', () => {
     ).toBeInTheDocument()
   })
 
-  it('shows five honest platform states with Weibo, Douyin, and Kuaishou actionable', async () => {
+  it('shows five honest platform states with only Xiaohongshu unavailable', async () => {
     renderRoute('/platform-accounts')
 
     expect(await screen.findByText('微博')).toBeInTheDocument()
@@ -287,16 +287,16 @@ describe('Longtian public opinion application', () => {
     expect(screen.getByText('快手')).toBeInTheDocument()
     expect(screen.getByText('小红书')).toBeInTheDocument()
     expect(screen.getByText('今日头条')).toBeInTheDocument()
-    expect(screen.getAllByText('待接入')).toHaveLength(2)
-    expect(screen.getAllByText('暂不可用')).toHaveLength(2)
-    expect(screen.getAllByRole('button', { name: '检测连接' })).toHaveLength(3)
+    expect(screen.getAllByText('待接入')).toHaveLength(1)
+    expect(screen.getAllByText('暂不可用')).toHaveLength(1)
+    expect(screen.getAllByRole('button', { name: '检测连接' })).toHaveLength(4)
     expect(
       screen
         .getAllByRole('button')
         .filter((button) =>
           /检测连接|重新检测|处理中/.test(button.textContent ?? ''),
         ),
-    ).toHaveLength(3)
+    ).toHaveLength(4)
   })
 
   it('allows an unavailable local service to be retried', async () => {
@@ -311,7 +311,7 @@ describe('Longtian public opinion application', () => {
     const attemptButtons = screen.getAllByRole('button', {
       name: '检测连接',
     })
-    expect(attemptButtons).toHaveLength(3)
+    expect(attemptButtons).toHaveLength(4)
     for (const button of attemptButtons) {
       expect(button).toBeDisabled()
     }
@@ -519,7 +519,7 @@ describe('Longtian public opinion application', () => {
       throw new Error('Douyin row was not rendered')
     }
 
-    expect(screen.getAllByRole('button', { name: '检测连接' })).toHaveLength(3)
+    expect(screen.getAllByRole('button', { name: '检测连接' })).toHaveLength(4)
     await user.click(
       within(douyinRow).getByRole('button', { name: '检测连接' }),
     )
@@ -535,9 +535,99 @@ describe('Longtian public opinion application', () => {
     ).toBeInTheDocument()
   })
 
-  it('derives three-platform readiness copy from an enabled Douyin catalog', async () => {
+  it('starts Toutiao and follows its platform-specific manual guidance', async () => {
+    const user = userEvent.setup()
+    mockedFetchPlatformConnections
+      .mockResolvedValueOnce(catalog())
+      .mockResolvedValue(
+        catalog(
+          {},
+          {},
+          {},
+          {
+            status: 'action_required',
+            guidance: 'complete_login',
+            active_attempt_id: attemptId,
+          },
+        ),
+      )
+    mockedStartAttempt.mockResolvedValue({
+      attempt_id: attemptId,
+      platform: connection({
+        platform: 'toutiao',
+        display_name: '今日头条',
+        status: 'checking',
+        active_attempt_id: attemptId,
+      }),
+    })
+
+    renderRoute('/platform-accounts')
+    const toutiaoName = await screen.findByText('今日头条')
+    const toutiaoRow = toutiaoName.closest('li')
+    if (toutiaoRow === null) {
+      throw new Error('Toutiao row was not rendered')
+    }
+
+    await user.click(
+      within(toutiaoRow).getByRole('button', { name: '检测连接' }),
+    )
+
+    expect(mockedStartAttempt).toHaveBeenCalledWith(
+      'toutiao',
+      expect.any(AbortSignal),
+    )
+    expect(
+      await screen.findByText(
+        '请在 Chrome 的今日头条官方页面完成扫码、短信或安全验证。',
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it('polls an active Toutiao connection until the online result is connected', async () => {
+    mockedFetchPlatformConnections
+      .mockResolvedValueOnce(
+        catalog(
+          {},
+          {},
+          {},
+          {
+            status: 'checking',
+            active_attempt_id: attemptId,
+          },
+        ),
+      )
+      .mockResolvedValue(
+        catalog(
+          {},
+          {},
+          {},
+          {
+            status: 'connected',
+            last_checked_at: '2026-08-24T08:00:00Z',
+          },
+        ),
+      )
+
+    renderRoute('/platform-accounts')
+
+    expect(await screen.findByText('检测中')).toBeInTheDocument()
+    expect(
+      await screen.findByText('已连接', {}, { timeout: 2200 }),
+    ).toBeInTheDocument()
+    expect(
+      await screen.findByText(
+        '今日头条账号已通过在线检测，可以继续准备后续采集功能。',
+      ),
+    ).toBeInTheDocument()
+    await waitFor(() =>
+      expect(mockedFetchPlatformConnections).toHaveBeenCalledTimes(2),
+    )
+  })
+
+  it('derives four-platform readiness copy from an enabled Toutiao catalog', async () => {
     mockedFetchPlatformConnections.mockResolvedValue(
       catalog(
+        { status: 'connected' },
         { status: 'connected' },
         { status: 'connected' },
         { status: 'connected' },
@@ -548,7 +638,20 @@ describe('Longtian public opinion application', () => {
 
     expect(
       await screen.findByText(
-        '微博、抖音、快手在线检测均已通过；其余 2 个平台仍待接入。',
+        '微博、抖音、快手、今日头条在线检测均已通过；其余 1 个平台仍待接入。',
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it('derives zero-of-four readiness copy before any platform is checked', async () => {
+    renderRoute('/')
+
+    const dutyLedger = screen.getByLabelText('值守准备台账')
+    expect(await within(dutyLedger).findByText('0 / 4')).toBeInTheDocument()
+    expect(within(dutyLedger).queryByText('0 / 5')).not.toBeInTheDocument()
+    expect(
+      await screen.findByText(
+        '先检测微博、抖音、快手、今日头条登录状态；其余 1 个平台仍待接入。',
       ),
     ).toBeInTheDocument()
   })

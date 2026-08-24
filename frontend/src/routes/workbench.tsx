@@ -68,9 +68,6 @@ export function Workbench() {
   const { healthState } = useAppShell()
   const connectionsQuery = usePlatformConnections()
   const platforms = connectionsQuery.data?.platforms ?? []
-  const connectedCount = platforms.filter(
-    (platform) => platform.status === 'connected',
-  ).length
   const enabledPlatforms = platforms.filter(
     (platform) => platform.availability === 'enabled',
   )
@@ -118,7 +115,7 @@ export function Workbench() {
     ? '读取中'
     : connectionsQuery.isError
       ? '读取失败'
-      : connectedCount > 0
+      : enabledConnectedCount > 0
         ? '已有连接'
         : '尚未连接'
 
@@ -179,10 +176,12 @@ export function Workbench() {
             icon={CircleUserRound}
             label="平台账号"
             value={
-              catalogReadable ? `${connectedCount} / ${platforms.length}` : '—'
+              catalogReadable
+                ? `${enabledConnectedCount} / ${enabledPlatforms.length}`
+                : '—'
             }
             detail={platformDetail}
-            state={connectedCount > 0 ? 'live' : 'quiet'}
+            state={enabledConnectedCount > 0 ? 'live' : 'quiet'}
             stateLabel={platformStateLabel}
           />
           <DutyMetric

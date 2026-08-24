@@ -44,11 +44,12 @@ _AUTH_COMMAND_SUFFIX = (
     "jsonl",
 )
 
-AuthPlatformId = Literal["wb", "dy", "ks"]
+AuthPlatformId = Literal["wb", "dy", "ks", "toutiao"]
 _AUTH_PLATFORM_BY_ID: dict[PlatformId, AuthPlatformId] = {
     "wb": "wb",
     "dy": "dy",
     "ks": "ks",
+    "toutiao": "toutiao",
 }
 
 AuthPhase = Literal[
@@ -412,8 +413,8 @@ def _initial_catalog() -> dict[PlatformId, PlatformConnection]:
         "toutiao": PlatformConnection(
             platform="toutiao",
             display_name="今日头条",
-            availability="coming_soon",
-            status="coming_soon",
+            availability="enabled",
+            status="not_checked",
             guidance="none",
             last_checked_at=None,
             active_attempt_id=None,
