@@ -22,7 +22,7 @@ Worker command shape:
 
 ```text
 uv run --frozen --project third_party/MediaCrawler python main.py
-  --platform <wb|dy|ks|toutiao> --type auth --lt qrcode --headless no
+  --platform <wb|dy|ks|xhs|toutiao> --type auth --lt qrcode --headless no
   --get_comment no --get_sub_comment no --save_data_option jsonl
 ```
 
@@ -37,9 +37,9 @@ __MEDIACRAWLER_AUTH_EVENT__{"version":1,"platform":"dy","phase":"checking"}
 - `GET` returns exactly `{ "platforms": PlatformConnection[] }` in catalog order.
 - `POST` returns HTTP 202 as `{ "attempt_id": UUID, "platform": PlatformConnection }` and never
   waits for manual browser work.
-- Authentication availability is a trusted product allowlist. The current supported child
-  platforms are exactly `wb | dy | ks | toutiao`; a known catalog entry is not automatically
-  executable.
+- Worker support and product availability are separate trusted allowlists. The supported child
+  platforms are exactly `wb | dy | ks | xhs | toutiao`; a known or worker-supported catalog entry
+  is not executable until its catalog availability is `enabled`.
 - Build the worker command from the trusted allowlist with `create_subprocess_exec`. The backend
   must pass the requested platform as one exact argument and require every child event's
   `platform` to equal the active attempt. An event for any other supported platform fails closed.
@@ -75,6 +75,16 @@ __MEDIACRAWLER_AUTH_EVENT__{"version":1,"platform":"dy","phase":"checking"}
 - Toutiao borrowed-browser manual work retains the already opened official page and only polls the
   ordinary login-state classifier. It does not navigate, refresh, click the login entry, inject
   Cookies, extract QR material, read input, or interact with a safety challenge.
+- For Xiaohongshu, `connected` requires a fresh navigation to the domestic official homepage,
+  allowlisted Cookies refreshed from the current borrowed BrowserContext, and the existing signed
+  official self-info `pong()`. The response is positive only when `data.result.success` is the JSON
+  boolean `true`; truthy strings, numbers, malformed shapes, challenge responses, and network
+  failures fail closed. Cookie or visible-UI changes are wake-up hints for another `pong()`, never
+  terminal proof.
+- Xiaohongshu borrowed-browser manual work may click the ordinary official login entry once when
+  the login panel is absent, then waits with a bounded, low-frequency online recheck. It never
+  extracts or displays QR material outside Chrome, fills phone/password/code inputs, injects
+  Cookies, or detects, manipulates, refreshes, or bypasses a safety challenge.
 - Authentication mode must force existing visible Chrome, loopback CDP, no proxy, no explicit
   authentication-state persistence, and no search/detail/creator/comment/media/store/database
   work.
@@ -108,8 +118,9 @@ __MEDIACRAWLER_AUTH_EVENT__{"version":1,"platform":"dy","phase":"checking"}
 - **Good:** React starts one attempt and polls; FastAPI validates constant-only events; the worker
   borrows Chrome, runs the online probe, closes its own page, and reports connected without
   exposing authentication data.
-- **Good:** A catalog with four enabled entries plus one `coming_soon` entry renders readiness as
-  `0..4 / 4`, exposes four connection actions, and keeps the unavailable entry visible.
+- **Good:** The current five-enabled catalog renders readiness as `0..5 / 5`, exposes five
+  connection actions, and contains no unavailable row. A future mixed catalog still excludes each
+  `coming_soon` entry from both readiness terms and action controls.
 - **Base:** Chrome remote debugging is disabled. The worker opens
   `chrome://inspect/#remote-debugging`, reports the required user action, times out safely, and
   leaves every existing Chrome tab open.
@@ -117,8 +128,9 @@ __MEDIACRAWLER_AUTH_EVENT__{"version":1,"platform":"dy","phase":"checking"}
   credentials on the command line, accepts a `wb` event for an active `ks` attempt, trusts Cookie
   presence, falls back to a dedicated browser, or calls `context.close()` / `browser.close()` on a
   borrowed Chrome instance.
-- **Bad:** React divides connected accounts by the total catalog length, producing `0 / 5` when
-  only four platforms are executable.
+- **Bad:** React divides connected accounts by the total catalog length. In a synthetic catalog
+  with four enabled entries and one future `coming_soon` entry, it incorrectly produces `0 / 5`
+  instead of `0 / 4`.
 
 ### 6. Tests Required
 
@@ -128,15 +140,16 @@ __MEDIACRAWLER_AUTH_EVENT__{"version":1,"platform":"dy","phase":"checking"}
 3. Exact worker command with `create_subprocess_exec`, no shell, and no credential-bearing args.
 4. Protocol version/platform/phase/extra-field/line-size/transition/exit mismatch cases; assert raw
    child text never reaches product state or errors. Cover every mismatch pair among
-   `wb | dy | ks | toutiao` and assert all 12 ordered mismatches mutate no foreign platform.
+   `wb | dy | ks | xhs | toutiao` and assert all 20 ordered mismatches mutate no foreign platform.
 5. Authentication config sentinels that fail if any search, detail, creator, comment, media,
    persistence, or store entry point is reached.
 6. Borrowed cleanup regression: one pre-existing sentinel page remains, only registered pages
    close, context/browser/process cleanup is not called, and owned-browser behavior remains intact.
 7. Frontend runtime validation, active polling, duplicate-action disabling, safe error mapping,
-   live-region guidance, responsive overflow, and console checks. Assert the workbench numerator
-   and denominator both use only enabled entries (`0..4 / 4` for the current catalog), while the
-   `coming_soon` row remains visible and has no connection action.
+   live-region guidance, responsive overflow, and console checks. Assert the current catalog renders
+   `0..5 / 5` with five actions and no unavailable row. Retain a synthetic mixed-catalog regression
+   proving any future `coming_soon` row remains visible/non-actionable and is excluded from both
+   readiness terms.
 8. Real loopback acceptance records only phases, terminal category, timestamps, counts, listener
    address, and ownership results.
 9. Kuaishou stale-token regression: an initially present `passToken` after a failed online probe
@@ -150,6 +163,9 @@ __MEDIACRAWLER_AUTH_EVENT__{"version":1,"platform":"dy","phase":"checking"}
     anonymous, challenge, contradictory/malformed shapes, trusted origin before and after
     evaluation, browser failure, manual no-click/no-navigation behavior, and the mandatory
     post-login online recheck.
+12. Xiaohongshu online-probe regression: cover strict boolean success, false and malformed response
+    shapes, network failure, stale Cookie/UI hints, QR non-extraction, manual-only challenges,
+    bounded wait/cancellation, task-page-only cleanup, and the mandatory post-login online recheck.
 
 ### 7. Wrong vs Correct
 
@@ -165,7 +181,7 @@ await borrowed_context.close()
 #### Correct
 
 ```python
-platform = AUTH_PLATFORM_BY_ID[requested_platform]  # trusted `wb | dy | ks | toutiao`
+platform = AUTH_PLATFORM_BY_ID[requested_platform]  # trusted `wb | dy | ks | xhs | toutiao`
 process = await asyncio.create_subprocess_exec(
     *fixed_auth_args(platform), start_new_session=True
 )

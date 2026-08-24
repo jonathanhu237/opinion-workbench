@@ -65,6 +65,7 @@ function catalog(
   kuaishou: Partial<PlatformConnection> = {},
   douyin: Partial<PlatformConnection> = {},
   toutiao: Partial<PlatformConnection> = {},
+  xiaohongshu: Partial<PlatformConnection> = {},
 ): PlatformConnectionsResponse {
   return {
     platforms: [
@@ -82,8 +83,7 @@ function catalog(
       connection({
         platform: 'xhs',
         display_name: '小红书',
-        availability: 'coming_soon',
-        status: 'coming_soon',
+        ...xiaohongshu,
       }),
       connection({
         platform: 'toutiao',
@@ -147,11 +147,11 @@ describe('Longtian public opinion application', () => {
     ).toBeInTheDocument()
     expect(await screen.findByText('服务正常')).toBeInTheDocument()
     const dutyLedger = screen.getByLabelText('值守准备台账')
-    expect(within(dutyLedger).getByText('1 / 4')).toBeInTheDocument()
+    expect(within(dutyLedger).getByText('1 / 5')).toBeInTheDocument()
     expect(within(dutyLedger).getByText('尚未配置')).toBeInTheDocument()
     expect(
       screen.getByText(
-        '已连接 1 / 4 个可用平台；可以继续检测微博、抖音、快手、今日头条。',
+        '已连接 1 / 5 个可用平台；可以继续检测微博、抖音、快手、小红书、今日头条。',
       ),
     ).toBeInTheDocument()
     expect(screen.getByText('尚未建立采集任务')).toBeInTheDocument()
@@ -279,7 +279,7 @@ describe('Longtian public opinion application', () => {
     ).toBeInTheDocument()
   })
 
-  it('shows five honest platform states with only Xiaohongshu unavailable', async () => {
+  it('shows five enabled platform states', async () => {
     renderRoute('/platform-accounts')
 
     expect(await screen.findByText('微博')).toBeInTheDocument()
@@ -287,16 +287,16 @@ describe('Longtian public opinion application', () => {
     expect(screen.getByText('快手')).toBeInTheDocument()
     expect(screen.getByText('小红书')).toBeInTheDocument()
     expect(screen.getByText('今日头条')).toBeInTheDocument()
-    expect(screen.getAllByText('待接入')).toHaveLength(1)
-    expect(screen.getAllByText('暂不可用')).toHaveLength(1)
-    expect(screen.getAllByRole('button', { name: '检测连接' })).toHaveLength(4)
+    expect(screen.queryByText('待接入')).not.toBeInTheDocument()
+    expect(screen.queryByText('暂不可用')).not.toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: '检测连接' })).toHaveLength(5)
     expect(
       screen
         .getAllByRole('button')
         .filter((button) =>
           /检测连接|重新检测|处理中/.test(button.textContent ?? ''),
         ),
-    ).toHaveLength(4)
+    ).toHaveLength(5)
   })
 
   it('allows an unavailable local service to be retried', async () => {
@@ -311,7 +311,7 @@ describe('Longtian public opinion application', () => {
     const attemptButtons = screen.getAllByRole('button', {
       name: '检测连接',
     })
-    expect(attemptButtons).toHaveLength(4)
+    expect(attemptButtons).toHaveLength(5)
     for (const button of attemptButtons) {
       expect(button).toBeDisabled()
     }
@@ -519,7 +519,7 @@ describe('Longtian public opinion application', () => {
       throw new Error('Douyin row was not rendered')
     }
 
-    expect(screen.getAllByRole('button', { name: '检测连接' })).toHaveLength(4)
+    expect(screen.getAllByRole('button', { name: '检测连接' })).toHaveLength(5)
     await user.click(
       within(douyinRow).getByRole('button', { name: '检测连接' }),
     )
@@ -583,6 +583,97 @@ describe('Longtian public opinion application', () => {
     ).toBeInTheDocument()
   })
 
+  it('starts enabled Xiaohongshu and keeps official challenges manual', async () => {
+    const user = userEvent.setup()
+    mockedFetchPlatformConnections
+      .mockResolvedValueOnce(catalog())
+      .mockResolvedValue(
+        catalog(
+          {},
+          {},
+          {},
+          {},
+          {
+            status: 'action_required',
+            guidance: 'complete_login',
+            active_attempt_id: attemptId,
+          },
+        ),
+      )
+    mockedStartAttempt.mockResolvedValue({
+      attempt_id: attemptId,
+      platform: connection({
+        platform: 'xhs',
+        display_name: '小红书',
+        status: 'checking',
+        active_attempt_id: attemptId,
+      }),
+    })
+
+    renderRoute('/platform-accounts')
+    const xhsName = await screen.findByText('小红书')
+    const xhsRow = xhsName.closest('li')
+    if (xhsRow === null) {
+      throw new Error('Xiaohongshu row was not rendered')
+    }
+
+    expect(screen.getAllByRole('button', { name: '检测连接' })).toHaveLength(5)
+    await user.click(within(xhsRow).getByRole('button', { name: '检测连接' }))
+
+    expect(mockedStartAttempt).toHaveBeenCalledWith(
+      'xhs',
+      expect.any(AbortSignal),
+    )
+    expect(
+      await screen.findByText(
+        '请在 Chrome 的小红书官方页面完成扫码、短信或安全验证。',
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it('polls an enabled Xiaohongshu attempt to its online result', async () => {
+    mockedFetchPlatformConnections
+      .mockResolvedValueOnce(
+        catalog(
+          {},
+          {},
+          {},
+          {},
+          {
+            status: 'checking',
+            active_attempt_id: attemptId,
+          },
+        ),
+      )
+      .mockResolvedValue(
+        catalog(
+          {},
+          {},
+          {},
+          {},
+          {
+            status: 'connected',
+            last_checked_at: '2026-08-24T08:00:00Z',
+          },
+        ),
+      )
+
+    renderRoute('/platform-accounts')
+
+    expect(await screen.findByText('检测中')).toBeInTheDocument()
+    expect(
+      await screen.findByText('已连接', {}, { timeout: 2200 }),
+    ).toBeInTheDocument()
+    expect(
+      await screen.findByText(
+        '小红书账号已通过在线检测，可以继续准备后续采集功能。',
+      ),
+    ).toBeInTheDocument()
+    await waitFor(() =>
+      expect(mockedFetchPlatformConnections).toHaveBeenCalledTimes(2),
+    )
+  })
+
   it('polls an active Toutiao connection until the online result is connected', async () => {
     mockedFetchPlatformConnections
       .mockResolvedValueOnce(
@@ -624,7 +715,7 @@ describe('Longtian public opinion application', () => {
     )
   })
 
-  it('derives four-platform readiness copy from an enabled Toutiao catalog', async () => {
+  it('derives partial five-platform readiness copy', async () => {
     mockedFetchPlatformConnections.mockResolvedValue(
       catalog(
         { status: 'connected' },
@@ -638,20 +729,60 @@ describe('Longtian public opinion application', () => {
 
     expect(
       await screen.findByText(
-        '微博、抖音、快手、今日头条在线检测均已通过；其余 1 个平台仍待接入。',
+        '已连接 4 / 5 个可用平台；可以继续检测微博、抖音、快手、小红书、今日头条。',
       ),
     ).toBeInTheDocument()
   })
 
-  it('derives zero-of-four readiness copy before any platform is checked', async () => {
+  it('derives zero-of-five readiness copy before any platform is checked', async () => {
+    renderRoute('/')
+
+    const dutyLedger = screen.getByLabelText('值守准备台账')
+    expect(await within(dutyLedger).findByText('0 / 5')).toBeInTheDocument()
+    expect(within(dutyLedger).queryByText('0 / 4')).not.toBeInTheDocument()
+    expect(
+      await screen.findByText(
+        '先检测微博、抖音、快手、小红书、今日头条登录状态。',
+      ),
+    ).toBeInTheDocument()
+  })
+
+  it('excludes a future unavailable catalog row from readiness', async () => {
+    mockedFetchPlatformConnections.mockResolvedValue(
+      catalog(
+        {},
+        {},
+        {},
+        {},
+        { availability: 'coming_soon', status: 'coming_soon' },
+      ),
+    )
+
     renderRoute('/')
 
     const dutyLedger = screen.getByLabelText('值守准备台账')
     expect(await within(dutyLedger).findByText('0 / 4')).toBeInTheDocument()
     expect(within(dutyLedger).queryByText('0 / 5')).not.toBeInTheDocument()
+  })
+
+  it('derives five-platform readiness after Xiaohongshu rollout', async () => {
+    mockedFetchPlatformConnections.mockResolvedValue(
+      catalog(
+        { status: 'connected' },
+        { status: 'connected' },
+        { status: 'connected' },
+        { status: 'connected' },
+        { status: 'connected' },
+      ),
+    )
+
+    renderRoute('/')
+
+    const dutyLedger = screen.getByLabelText('值守准备台账')
+    expect(await within(dutyLedger).findByText('5 / 5')).toBeInTheDocument()
     expect(
       await screen.findByText(
-        '先检测微博、抖音、快手、今日头条登录状态；其余 1 个平台仍待接入。',
+        '微博、抖音、快手、小红书、今日头条在线检测均已通过。',
       ),
     ).toBeInTheDocument()
   })

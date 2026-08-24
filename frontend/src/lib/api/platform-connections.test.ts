@@ -37,8 +37,8 @@ const platforms: PlatformConnection[] = [
   {
     platform: 'xhs',
     display_name: '小红书',
-    availability: 'coming_soon',
-    status: 'coming_soon',
+    availability: 'enabled',
+    status: 'not_checked',
     guidance: 'none',
     last_checked_at: null,
     active_attempt_id: null,
@@ -82,6 +82,28 @@ describe('platform connections API boundary', () => {
       headers: { Accept: 'application/json' },
       signal: controller.signal,
     })
+  })
+
+  it('accepts a future unavailable row in the coming-soon state', async () => {
+    const futureCatalog = platforms.map((platform) =>
+      platform.platform === 'xhs'
+        ? {
+            ...platform,
+            availability: 'coming_soon' as const,
+            status: 'coming_soon' as const,
+          }
+        : platform,
+    )
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ platforms: futureCatalog }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    )
+
+    await expect(
+      fetchPlatformConnections(new AbortController().signal),
+    ).resolves.toEqual({ platforms: futureCatalog })
   })
 
   it('rejects contract drift without retaining unexpected credential fields', async () => {

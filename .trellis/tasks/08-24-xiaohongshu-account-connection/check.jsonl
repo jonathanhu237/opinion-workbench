@@ -1,0 +1,8 @@
+{"file":".trellis/spec/backend/platform-connection-guidelines.md","reason":"Verify exact XHS command/event matching, fresh official proof, process/page ownership, no-collection behavior, all 20 cross-platform directions, and backend gates."}
+{"file":".trellis/spec/backend/auth-state-guidelines.md","reason":"Audit that Cookie/UI/Profile evidence is never terminal product proof and that the account-center path does not restore, save, expose, or log credential material."}
+{"file":".trellis/spec/frontend/index.md","reason":"Verify five enabled rows, XHS polling and guidance, data-derived 0..5 / 5 readiness, accessibility, responsiveness, shadcn integrity, and frozen gates."}
+{"file":".trellis/spec/infra/submodule-guidelines.md","reason":"Verify both worktrees, derivative remote reachability, delivery order, and final parent gitlink reproducibility."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Trace connected, disconnected, challenge, timeout, cancellation, protocol mismatch, catalog gate, and cleanup paths end to end."}
+{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Check that shared platform unions, command/event parsing, catalog projection, polling, guidance, and readiness remain single-source."}
+{"file":".trellis/tasks/08-24-xiaohongshu-account-connection/research/xhs-connection-evidence.md","reason":"Verify every identified gap is addressed without expanding into XHS collection or changing ordinary crawler behavior."}
+{"file":".trellis/tasks/archive/2026-08/08-24-verify-mediacrawler-xhs-login/research/validation-results.md","reason":"Compare the new borrowed-Chrome proof and no-QR-extraction contract with the previously accepted isolated-profile XHS login evidence."}

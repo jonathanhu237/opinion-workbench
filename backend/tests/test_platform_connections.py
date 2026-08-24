@@ -17,7 +17,7 @@ from longtian_api.services.platform_connections import PlatformConnectionService
 
 PREFIX = b"__MEDIACRAWLER_AUTH_EVENT__"
 FIXED_NOW = datetime(2026, 8, 24, 12, 30, tzinfo=UTC)
-AUTH_PLATFORMS = ("wb", "dy", "ks", "toutiao")
+AUTH_PLATFORMS = ("wb", "dy", "ks", "xhs", "toutiao")
 CROSS_AUTH_PLATFORM_PAIRS = tuple(
     (expected, received)
     for expected in AUTH_PLATFORMS
@@ -209,8 +209,8 @@ def test_list_returns_exact_ordered_catalog() -> None:
             {
                 "platform": "xhs",
                 "display_name": "小红书",
-                "availability": "coming_soon",
-                "status": "coming_soon",
+                "availability": "enabled",
+                "status": "not_checked",
                 "guidance": "none",
                 "last_checked_at": None,
                 "active_attempt_id": None,
@@ -239,10 +239,9 @@ def test_list_returns_exact_ordered_catalog() -> None:
             "未找到该平台。",
         ),
         ("ks --type search", 404, "platform_not_found", "未找到该平台。"),
-        ("xhs", 409, "platform_not_available", "该平台暂未接入。"),
     ],
 )
-def test_start_rejects_unknown_and_unavailable_platforms(
+def test_start_rejects_unknown_platforms(
     platform: str, status_code: int, code: str, message: str
 ) -> None:
     service, launcher, _ = build_service(FakeProcess())
@@ -257,6 +256,20 @@ def test_start_rejects_unknown_and_unavailable_platforms(
     assert launcher.calls == []
 
 
+def test_known_unavailable_catalog_entry_starts_no_worker() -> None:
+    service, launcher, _ = build_service(FakeProcess())
+    xhs = service._connections["xhs"]
+    service._connections["xhs"] = xhs.model_copy(
+        update={"availability": "coming_soon", "status": "coming_soon"}
+    )
+
+    with pytest.raises(service_module.PlatformConnectionError) as raised:
+        asyncio.run(service.start_attempt("xhs"))
+
+    assert raised.value.code == "platform_not_available"
+    assert launcher.calls == []
+
+
 def test_start_returns_202_and_rejects_concurrent_attempt() -> None:
     process = FakeProcess(hang=True)
     service, launcher, terminator = build_service(process)
@@ -267,9 +280,7 @@ def test_start_returns_202_and_rejects_concurrent_attempt() -> None:
         accepted = client.post("/api/v1/platform-connections/wb/attempts")
         assert launcher.started.wait(timeout=1)
         conflict = client.post("/api/v1/platform-connections/ks/attempts")
-        unavailable_during_attempt = client.post(
-            "/api/v1/platform-connections/dy/attempts"
-        )
+        second_conflict = client.post("/api/v1/platform-connections/dy/attempts")
         current_catalog = client.get("/api/v1/platform-connections").json()
 
     body = accepted.json()
@@ -283,10 +294,8 @@ def test_start_returns_202_and_rejects_concurrent_attempt() -> None:
             "message": "已有平台连接任务正在进行，请稍后重试。",
         }
     }
-    assert unavailable_during_attempt.status_code == 409
-    assert unavailable_during_attempt.json()["detail"]["code"] == (
-        "connection_attempt_active"
-    )
+    assert second_conflict.status_code == 409
+    assert second_conflict.json()["detail"]["code"] == ("connection_attempt_active")
     assert current_catalog["platforms"][0]["status"] == "checking"
     assert current_catalog["platforms"][2]["status"] == "not_checked"
     assert len(launcher.calls) == 1
@@ -380,6 +389,65 @@ def test_toutiao_start_returns_exact_202_projection() -> None:
     }
     assert launcher.calls[0][0] == expected_auth_command("toutiao")
     assert terminator.calls == [(process, 0.01)]
+
+
+def test_xhs_start_returns_exact_202_projection() -> None:
+    process = FakeProcess(hang=True)
+    service, launcher, terminator = build_service(process)
+
+    assert service._worker_command("xhs") == expected_auth_command("xhs")
+    with TestClient(
+        create_app(platform_connection_service_factory=lambda: service)
+    ) as client:
+        response = client.post("/api/v1/platform-connections/xhs/attempts")
+        assert launcher.started.wait(timeout=1)
+
+    body = response.json()
+    assert response.status_code == 202
+    assert str(UUID(body["attempt_id"])) == body["attempt_id"]
+    assert body == {
+        "attempt_id": body["attempt_id"],
+        "platform": {
+            "platform": "xhs",
+            "display_name": "小红书",
+            "availability": "enabled",
+            "status": "checking",
+            "guidance": "none",
+            "last_checked_at": None,
+            "active_attempt_id": body["attempt_id"],
+        },
+    }
+    assert launcher.calls[0][0] == expected_auth_command("xhs")
+    assert terminator.calls == [(process, 0.01)]
+
+
+def test_enabled_xhs_uses_the_shared_worker_lifecycle() -> None:
+    async def scenario() -> None:
+        process = FakeProcess(
+            stdout=[
+                auth_event("waiting_for_approval", platform="xhs"),
+                auth_event("checking", platform="xhs"),
+                auth_event("waiting_for_login", platform="xhs"),
+                auth_event("checking", platform="xhs"),
+                auth_event("connected", platform="xhs"),
+            ],
+            exit_code=0,
+        )
+        service, launcher, terminator = build_service(process)
+
+        accepted = await service.start_attempt("xhs")
+        result = await wait_for_terminal(service, "xhs")
+
+        assert accepted.platform.platform == "xhs"
+        assert result["status"] == "connected"
+        assert result["guidance"] == "none"
+        assert result["last_checked_at"] == "2026-08-24T12:30:00Z"
+        assert launcher.calls == [
+            (expected_auth_command("xhs"), Path("/repo/third_party/MediaCrawler"))
+        ]
+        assert terminator.calls == []
+
+    asyncio.run(scenario())
 
 
 def test_toutiao_success_uses_its_trusted_platform_command() -> None:
@@ -556,7 +624,7 @@ def test_cross_platform_auth_event_fails_the_active_attempt(
             if connection.platform in AUTH_PLATFORMS
             and connection.platform != attempt_platform
         ]
-        assert len(other_auth_platforms) == 3
+        assert len(other_auth_platforms) == 4
         for other in other_auth_platforms:
             assert other.status == "not_checked"
             assert other.active_attempt_id is None
@@ -634,7 +702,7 @@ def test_terminal_attempt_releases_the_single_worker_slot() -> None:
         (["checking", "waiting_for_login"], "action_required", "complete_login"),
     ],
 )
-@pytest.mark.parametrize("platform", ["wb", "ks"])
+@pytest.mark.parametrize("platform", AUTH_PLATFORMS)
 def test_protocol_phases_update_the_visible_projection(
     phases: list[str],
     expected_status: str,
