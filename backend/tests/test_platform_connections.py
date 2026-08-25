@@ -1,21 +1,27 @@
 import asyncio
+import json
 import os
 import signal
 import threading
 from collections import deque
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from datetime import UTC, datetime
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
 
 from longtian_api.main import create_app
+from longtian_api.services import media_crawler_auth_worker as worker_module
 from longtian_api.services import platform_connections as service_module
+from longtian_api.services.media_crawler_auth_worker import (
+    AUTH_COMMAND_PREFIX,
+    AUTH_EVENT_PREFIX,
+    AuthWorkerError,
+)
 from longtian_api.services.platform_connections import PlatformConnectionService
 
-PREFIX = b"__MEDIACRAWLER_AUTH_EVENT__"
 FIXED_NOW = datetime(2026, 8, 24, 12, 30, tzinfo=UTC)
 AUTH_PLATFORMS = ("wb", "dy", "ks", "xhs", "toutiao")
 CROSS_AUTH_PLATFORM_PAIRS = tuple(
@@ -26,14 +32,35 @@ CROSS_AUTH_PLATFORM_PAIRS = tuple(
 )
 
 
-def auth_event(phase: str, *, platform: str = "wb", **extra: object) -> bytes:
-    fields = {"version": 1, "platform": platform, "phase": phase, **extra}
-    import json
+def worker_event(event: str, **fields: object) -> bytes:
+    payload = {"version": 2, "type": "event", "event": event, **fields}
+    return (
+        AUTH_EVENT_PREFIX + json.dumps(payload, separators=(",", ":")).encode() + b"\n"
+    )
 
-    return PREFIX + json.dumps(fields).encode() + b"\n"
+
+def progress_event(request_id: str, platform: str, phase: str) -> bytes:
+    return worker_event(
+        "progress", request_id=request_id, platform=platform, phase=phase
+    )
 
 
-def expected_auth_command(platform: str) -> tuple[str, ...]:
+def result_event(
+    request_id: str,
+    platform: str,
+    outcome: str = "connected",
+    reason: str = "none",
+) -> bytes:
+    return worker_event(
+        "result",
+        request_id=request_id,
+        platform=platform,
+        outcome=outcome,
+        reason=reason,
+    )
+
+
+def expected_worker_command() -> tuple[str, ...]:
     return (
         "uv",
         "run",
@@ -41,39 +68,63 @@ def expected_auth_command(platform: str) -> tuple[str, ...]:
         "--project",
         "/repo/third_party/MediaCrawler",
         "python",
-        "main.py",
-        "--platform",
-        platform,
-        "--type",
-        "auth",
-        "--lt",
-        "qrcode",
-        "--headless",
-        "no",
-        "--get_comment",
-        "no",
-        "--get_sub_comment",
-        "no",
-        "--save_data_option",
-        "jsonl",
+        "-m",
+        "tools.auth_worker",
     )
 
 
 class FakeLineReader:
-    def __init__(self, lines: Iterable[bytes] = (), *, block_at_end: bool = False):
+    def __init__(self, lines: Iterable[bytes] = ()) -> None:
         self._lines = deque(lines)
-        self._block_at_end = block_at_end
-        self._released = asyncio.Event()
+        self._closed = False
+        self._available = asyncio.Event()
+        if self._lines:
+            self._available.set()
 
     async def readline(self) -> bytes:
+        while not self._lines and not self._closed:
+            self._available.clear()
+            await self._available.wait()
         if self._lines:
-            return self._lines.popleft()
-        if self._block_at_end:
-            await self._released.wait()
+            line = self._lines.popleft()
+            if self._lines:
+                self._available.set()
+            return line
         return b""
 
-    def release(self) -> None:
-        self._released.set()
+    async def read(self, size: int = -1) -> bytes:
+        chunk = await self.readline()
+        if size < 0 or len(chunk) <= size:
+            return chunk
+        self._lines.appendleft(chunk[size:])
+        self._available.set()
+        return chunk[:size]
+
+    def feed(self, line: bytes) -> None:
+        if self._closed:
+            return
+        self._lines.append(line)
+        self._available.set()
+
+    def close(self) -> None:
+        self._closed = True
+        self._available.set()
+
+
+class FakeWriter:
+    def __init__(self, process: "FakeProcess") -> None:
+        self._process = process
+        self.fail_drain = False
+
+    def write(self, data: bytes) -> None:
+        self._process.receive_command(data)
+
+    async def drain(self) -> None:
+        if self.fail_drain:
+            raise BrokenPipeError
+
+
+Plan = Callable[["FakeProcess", dict[str, object]], None]
 
 
 class FakeProcess:
@@ -81,32 +132,71 @@ class FakeProcess:
 
     def __init__(
         self,
-        *,
-        stdout: Iterable[bytes] = (),
+        *plans: Plan,
+        emit_ready: bool = True,
         stderr: Iterable[bytes] = (),
-        exit_code: int = 0,
-        hang: bool = False,
+        cancel_ack: bool = True,
+        shutdown_ack: bool = True,
     ) -> None:
         FakeProcess._next_pid += 1
         self.pid = FakeProcess._next_pid
         self.returncode: int | None = None
-        self.stdout = FakeLineReader(stdout, block_at_end=hang)
-        self.stderr = FakeLineReader(stderr, block_at_end=hang)
-        self._exit_code = exit_code
-        self._hang = hang
+        self.stdin = FakeWriter(self)
+        self.stdout = FakeLineReader()
+        self.stderr = FakeLineReader(stderr)
+        self._plans = deque(plans)
+        self._emit_ready = emit_ready
+        self._cancel_ack = cancel_ack
+        self._shutdown_ack = shutdown_ack
         self._finished = asyncio.Event()
+        self.commands: list[dict[str, object]] = []
+        self.raw_commands: list[bytes] = []
+        self.current_request: tuple[str, str] | None = None
+
+    def start(self) -> None:
+        if self._emit_ready:
+            self.stdout.feed(worker_event("ready"))
+
+    def receive_command(self, data: bytes) -> None:
+        self.raw_commands.append(data)
+        assert data.startswith(AUTH_COMMAND_PREFIX)
+        command = json.loads(data[len(AUTH_COMMAND_PREFIX) :])
+        self.commands.append(command)
+        action = command["command"]
+        if action == "check":
+            self.current_request = (command["request_id"], command["platform"])
+            if self._plans:
+                self._plans.popleft()(self, command)
+        elif action == "cancel" and self._cancel_ack:
+            assert self.current_request is not None
+            request_id, platform = self.current_request
+            self.stdout.feed(
+                result_event(
+                    request_id,
+                    platform,
+                    outcome="cancelled",
+                    reason="cancelled",
+                )
+            )
+            self.current_request = None
+        elif action == "shutdown" and self._shutdown_ack:
+            self.stdout.feed(worker_event("stopped"))
+            self.finish(0)
+
+    def feed(self, line: bytes) -> None:
+        self.stdout.feed(line)
 
     async def wait(self) -> int:
-        if self._hang:
-            await self._finished.wait()
-        if self.returncode is None:
-            self.returncode = self._exit_code
+        await self._finished.wait()
+        assert self.returncode is not None
         return self.returncode
 
     def finish(self, returncode: int) -> None:
+        if self.returncode is not None:
+            return
         self.returncode = returncode
-        self.stdout.release()
-        self.stderr.release()
+        self.stdout.close()
+        self.stderr.close()
         self._finished.set()
 
     def terminate(self) -> None:
@@ -124,8 +214,10 @@ class FakeLauncher:
 
     async def __call__(self, command: tuple[str, ...], cwd: Path) -> FakeProcess:
         self.calls.append((command, cwd))
+        process = self._processes.popleft()
+        process.start()
         self.started.set()
-        return self._processes.popleft()
+        return process
 
 
 class FakeTerminator:
@@ -137,10 +229,52 @@ class FakeTerminator:
         process.finish(-15)
 
 
+def connected_plan(
+    process: FakeProcess, command: dict[str, object], *, approval: bool = False
+) -> None:
+    request_id = str(command["request_id"])
+    platform = str(command["platform"])
+    if approval:
+        process.feed(progress_event(request_id, platform, "waiting_for_approval"))
+    process.feed(progress_event(request_id, platform, "checking"))
+    process.feed(result_event(request_id, platform))
+    process.current_request = None
+
+
+def disconnected_plan(process: FakeProcess, command: dict[str, object]) -> None:
+    request_id = str(command["request_id"])
+    platform = str(command["platform"])
+    process.feed(progress_event(request_id, platform, "checking"))
+    process.feed(progress_event(request_id, platform, "waiting_for_login"))
+    process.feed(progress_event(request_id, platform, "checking"))
+    process.feed(
+        result_event(
+            request_id,
+            platform,
+            outcome="disconnected",
+            reason="login_required",
+        )
+    )
+    process.current_request = None
+
+
+def hanging_plan(process: FakeProcess, command: dict[str, object]) -> None:
+    process.feed(
+        progress_event(str(command["request_id"]), str(command["platform"]), "checking")
+    )
+
+
+def login_hanging_plan(process: FakeProcess, command: dict[str, object]) -> None:
+    request_id = str(command["request_id"])
+    platform = str(command["platform"])
+    process.feed(progress_event(request_id, platform, "checking"))
+    process.feed(progress_event(request_id, platform, "waiting_for_login"))
+
+
 async def wait_for_terminal(
     service: PlatformConnectionService, platform: str = "wb"
 ) -> dict[str, object]:
-    for _ in range(200):
+    for _ in range(500):
         connections = (await service.list_connections()).platforms
         connection = next(item for item in connections if item.platform == platform)
         if connection.status in {"connected", "disconnected", "failed"}:
@@ -150,26 +284,34 @@ async def wait_for_terminal(
 
 
 def build_service(
-    process: FakeProcess,
-    *,
+    *processes: FakeProcess,
     timeout: float = 1.0,
+    ready_timeout: float = 1.0,
+    cancel_timeout: float = 0.01,
+    shutdown_timeout: float = 0.05,
 ) -> tuple[PlatformConnectionService, FakeLauncher, FakeTerminator]:
-    launcher = FakeLauncher(process)
+    launcher = FakeLauncher(*processes)
     terminator = FakeTerminator()
     service = PlatformConnectionService(
         media_crawler_dir=Path("/repo/third_party/MediaCrawler"),
         process_launcher=launcher,
         process_group_terminator=terminator,
         attempt_timeout_seconds=timeout,
+        worker_ready_timeout_seconds=ready_timeout,
+        cancel_timeout_seconds=cancel_timeout,
+        worker_shutdown_timeout_seconds=shutdown_timeout,
         termination_grace_seconds=0.01,
         clock=lambda: FIXED_NOW,
     )
     return service, launcher, terminator
 
 
-def test_list_returns_exact_ordered_catalog() -> None:
-    process = FakeProcess()
-    service, _, _ = build_service(process)
+def command_actions(process: FakeProcess) -> list[str]:
+    return [str(command["command"]) for command in process.commands]
+
+
+def test_startup_and_get_launch_no_worker_and_catalog_is_unchanged() -> None:
+    service, launcher, _ = build_service(FakeProcess())
 
     with TestClient(
         create_app(platform_connection_service_factory=lambda: service)
@@ -180,69 +322,33 @@ def test_list_returns_exact_ordered_catalog() -> None:
     assert response.json() == {
         "platforms": [
             {
-                "platform": "wb",
-                "display_name": "微博",
+                "platform": platform,
+                "display_name": display_name,
                 "availability": "enabled",
                 "status": "not_checked",
                 "guidance": "none",
                 "last_checked_at": None,
                 "active_attempt_id": None,
-            },
-            {
-                "platform": "dy",
-                "display_name": "抖音",
-                "availability": "enabled",
-                "status": "not_checked",
-                "guidance": "none",
-                "last_checked_at": None,
-                "active_attempt_id": None,
-            },
-            {
-                "platform": "ks",
-                "display_name": "快手",
-                "availability": "enabled",
-                "status": "not_checked",
-                "guidance": "none",
-                "last_checked_at": None,
-                "active_attempt_id": None,
-            },
-            {
-                "platform": "xhs",
-                "display_name": "小红书",
-                "availability": "enabled",
-                "status": "not_checked",
-                "guidance": "none",
-                "last_checked_at": None,
-                "active_attempt_id": None,
-            },
-            {
-                "platform": "toutiao",
-                "display_name": "今日头条",
-                "availability": "enabled",
-                "status": "not_checked",
-                "guidance": "none",
-                "last_checked_at": None,
-                "active_attempt_id": None,
-            },
+            }
+            for platform, display_name in zip(
+                AUTH_PLATFORMS,
+                ("微博", "抖音", "快手", "小红书", "今日头条"),
+                strict=True,
+            )
         ]
     }
+    assert launcher.calls == []
 
 
 @pytest.mark.parametrize(
-    ("platform", "status_code", "code", "message"),
+    ("platform", "status_code", "code"),
     [
-        ("unknown", 404, "platform_not_found", "未找到该平台。"),
-        (
-            "unknown-platform-identifier-that-is-not-in-the-catalog",
-            404,
-            "platform_not_found",
-            "未找到该平台。",
-        ),
-        ("ks --type search", 404, "platform_not_found", "未找到该平台。"),
+        ("unknown", 404, "platform_not_found"),
+        ("ks --type search", 404, "platform_not_found"),
     ],
 )
-def test_start_rejects_unknown_platforms(
-    platform: str, status_code: int, code: str, message: str
+def test_unknown_platform_starts_no_worker(
+    platform: str, status_code: int, code: str
 ) -> None:
     service, launcher, _ = build_service(FakeProcess())
 
@@ -252,14 +358,14 @@ def test_start_rejects_unknown_platforms(
         response = client.post(f"/api/v1/platform-connections/{platform}/attempts")
 
     assert response.status_code == status_code
-    assert response.json() == {"detail": {"code": code, "message": message}}
+    assert response.json()["detail"]["code"] == code
     assert launcher.calls == []
 
 
-def test_known_unavailable_catalog_entry_starts_no_worker() -> None:
+def test_known_unavailable_platform_starts_no_worker() -> None:
     service, launcher, _ = build_service(FakeProcess())
-    xhs = service._connections["xhs"]
-    service._connections["xhs"] = xhs.model_copy(
+    current = service._connections["xhs"]
+    service._connections["xhs"] = current.model_copy(
         update={"availability": "coming_soon", "status": "coming_soon"}
     )
 
@@ -270,9 +376,48 @@ def test_known_unavailable_catalog_entry_starts_no_worker() -> None:
     assert launcher.calls == []
 
 
-def test_start_returns_202_and_rejects_concurrent_attempt() -> None:
-    process = FakeProcess(hang=True)
+@pytest.mark.parametrize("platform", AUTH_PLATFORMS)
+def test_start_returns_exact_202_and_fixed_worker_command(platform: str) -> None:
+    process = FakeProcess(hanging_plan)
     service, launcher, terminator = build_service(process)
+
+    with TestClient(
+        create_app(platform_connection_service_factory=lambda: service)
+    ) as client:
+        response = client.post(f"/api/v1/platform-connections/{platform}/attempts")
+        assert launcher.started.wait(timeout=1)
+
+    body = response.json()
+    assert response.status_code == 202
+    assert str(UUID(body["attempt_id"])) == body["attempt_id"]
+    assert body == {
+        "attempt_id": body["attempt_id"],
+        "platform": {
+            "platform": platform,
+            "display_name": dict(
+                zip(
+                    AUTH_PLATFORMS,
+                    ("微博", "抖音", "快手", "小红书", "今日头条"),
+                    strict=True,
+                )
+            )[platform],
+            "availability": "enabled",
+            "status": "checking",
+            "guidance": "none",
+            "last_checked_at": None,
+            "active_attempt_id": body["attempt_id"],
+        },
+    }
+    assert launcher.calls == [
+        (expected_worker_command(), Path("/repo/third_party/MediaCrawler"))
+    ]
+    assert command_actions(process) == ["check", "cancel", "shutdown"]
+    assert terminator.calls == []
+
+
+def test_concurrent_attempt_preserves_exact_409_and_one_check() -> None:
+    process = FakeProcess(hanging_plan)
+    service, launcher, _ = build_service(process)
 
     with TestClient(
         create_app(platform_connection_service_factory=lambda: service)
@@ -280,13 +425,8 @@ def test_start_returns_202_and_rejects_concurrent_attempt() -> None:
         accepted = client.post("/api/v1/platform-connections/wb/attempts")
         assert launcher.started.wait(timeout=1)
         conflict = client.post("/api/v1/platform-connections/ks/attempts")
-        second_conflict = client.post("/api/v1/platform-connections/dy/attempts")
-        current_catalog = client.get("/api/v1/platform-connections").json()
 
-    body = accepted.json()
     assert accepted.status_code == 202
-    assert body["attempt_id"] == body["platform"]["active_attempt_id"]
-    assert body["platform"]["status"] == "checking"
     assert conflict.status_code == 409
     assert conflict.json() == {
         "detail": {
@@ -294,401 +434,56 @@ def test_start_returns_202_and_rejects_concurrent_attempt() -> None:
             "message": "已有平台连接任务正在进行，请稍后重试。",
         }
     }
-    assert second_conflict.status_code == 409
-    assert second_conflict.json()["detail"]["code"] == ("connection_attempt_active")
-    assert current_catalog["platforms"][0]["status"] == "checking"
-    assert current_catalog["platforms"][2]["status"] == "not_checked"
+    assert command_actions(process).count("check") == 1
     assert len(launcher.calls) == 1
-    assert terminator.calls == [(process, 0.01)]
 
 
-def test_kuaishou_start_returns_exact_202_projection() -> None:
-    process = FakeProcess(hang=True)
-    service, launcher, terminator = build_service(process)
-
-    with TestClient(
-        create_app(platform_connection_service_factory=lambda: service)
-    ) as client:
-        response = client.post("/api/v1/platform-connections/ks/attempts")
-        assert launcher.started.wait(timeout=1)
-
-    body = response.json()
-    assert response.status_code == 202
-    assert str(UUID(body["attempt_id"])) == body["attempt_id"]
-    assert body == {
-        "attempt_id": body["attempt_id"],
-        "platform": {
-            "platform": "ks",
-            "display_name": "快手",
-            "availability": "enabled",
-            "status": "checking",
-            "guidance": "none",
-            "last_checked_at": None,
-            "active_attempt_id": body["attempt_id"],
-        },
-    }
-    assert launcher.calls[0][0] == expected_auth_command("ks")
-    assert terminator.calls == [(process, 0.01)]
-
-
-def test_douyin_start_returns_exact_202_projection() -> None:
-    process = FakeProcess(hang=True)
-    service, launcher, terminator = build_service(process)
-
-    assert service._worker_command("dy") == expected_auth_command("dy")
-    with TestClient(
-        create_app(platform_connection_service_factory=lambda: service)
-    ) as client:
-        response = client.post("/api/v1/platform-connections/dy/attempts")
-        assert launcher.started.wait(timeout=1)
-
-    body = response.json()
-    assert response.status_code == 202
-    assert str(UUID(body["attempt_id"])) == body["attempt_id"]
-    assert body == {
-        "attempt_id": body["attempt_id"],
-        "platform": {
-            "platform": "dy",
-            "display_name": "抖音",
-            "availability": "enabled",
-            "status": "checking",
-            "guidance": "none",
-            "last_checked_at": None,
-            "active_attempt_id": body["attempt_id"],
-        },
-    }
-    assert launcher.calls[0][0] == expected_auth_command("dy")
-    assert terminator.calls == [(process, 0.01)]
-
-
-def test_toutiao_start_returns_exact_202_projection() -> None:
-    process = FakeProcess(hang=True)
-    service, launcher, terminator = build_service(process)
-
-    assert service._worker_command("toutiao") == expected_auth_command("toutiao")
-    with TestClient(
-        create_app(platform_connection_service_factory=lambda: service)
-    ) as client:
-        response = client.post("/api/v1/platform-connections/toutiao/attempts")
-        assert launcher.started.wait(timeout=1)
-
-    body = response.json()
-    assert response.status_code == 202
-    assert str(UUID(body["attempt_id"])) == body["attempt_id"]
-    assert body == {
-        "attempt_id": body["attempt_id"],
-        "platform": {
-            "platform": "toutiao",
-            "display_name": "今日头条",
-            "availability": "enabled",
-            "status": "checking",
-            "guidance": "none",
-            "last_checked_at": None,
-            "active_attempt_id": body["attempt_id"],
-        },
-    }
-    assert launcher.calls[0][0] == expected_auth_command("toutiao")
-    assert terminator.calls == [(process, 0.01)]
-
-
-def test_xhs_start_returns_exact_202_projection() -> None:
-    process = FakeProcess(hang=True)
-    service, launcher, terminator = build_service(process)
-
-    assert service._worker_command("xhs") == expected_auth_command("xhs")
-    with TestClient(
-        create_app(platform_connection_service_factory=lambda: service)
-    ) as client:
-        response = client.post("/api/v1/platform-connections/xhs/attempts")
-        assert launcher.started.wait(timeout=1)
-
-    body = response.json()
-    assert response.status_code == 202
-    assert str(UUID(body["attempt_id"])) == body["attempt_id"]
-    assert body == {
-        "attempt_id": body["attempt_id"],
-        "platform": {
-            "platform": "xhs",
-            "display_name": "小红书",
-            "availability": "enabled",
-            "status": "checking",
-            "guidance": "none",
-            "last_checked_at": None,
-            "active_attempt_id": body["attempt_id"],
-        },
-    }
-    assert launcher.calls[0][0] == expected_auth_command("xhs")
-    assert terminator.calls == [(process, 0.01)]
-
-
-def test_enabled_xhs_uses_the_shared_worker_lifecycle() -> None:
+def test_two_platforms_reuse_one_process_and_distinct_request_ids() -> None:
     async def scenario() -> None:
-        process = FakeProcess(
-            stdout=[
-                auth_event("waiting_for_approval", platform="xhs"),
-                auth_event("checking", platform="xhs"),
-                auth_event("waiting_for_login", platform="xhs"),
-                auth_event("checking", platform="xhs"),
-                auth_event("connected", platform="xhs"),
-            ],
-            exit_code=0,
-        )
+        process = FakeProcess(connected_plan, connected_plan)
         service, launcher, terminator = build_service(process)
-
-        accepted = await service.start_attempt("xhs")
-        result = await wait_for_terminal(service, "xhs")
-
-        assert accepted.platform.platform == "xhs"
-        assert result["status"] == "connected"
-        assert result["guidance"] == "none"
-        assert result["last_checked_at"] == "2026-08-24T12:30:00Z"
-        assert launcher.calls == [
-            (expected_auth_command("xhs"), Path("/repo/third_party/MediaCrawler"))
-        ]
-        assert terminator.calls == []
-
-    asyncio.run(scenario())
-
-
-def test_toutiao_success_uses_its_trusted_platform_command() -> None:
-    async def scenario() -> None:
-        process = FakeProcess(
-            stdout=[
-                auth_event("waiting_for_approval", platform="toutiao"),
-                auth_event("checking", platform="toutiao"),
-                auth_event("connected", platform="toutiao"),
-            ],
-            exit_code=0,
-        )
-        service, launcher, terminator = build_service(process)
-
-        accepted = await service.start_attempt("toutiao")
-        result = await wait_for_terminal(service, "toutiao")
-
-        assert result["status"] == "connected"
-        assert result["guidance"] == "none"
-        assert result["last_checked_at"] == "2026-08-24T12:30:00Z"
-        assert accepted.platform.platform == "toutiao"
-        assert launcher.calls == [
-            (expected_auth_command("toutiao"), Path("/repo/third_party/MediaCrawler"))
-        ]
-        assert terminator.calls == []
-
-    asyncio.run(scenario())
-
-
-def test_douyin_success_uses_its_trusted_platform_command() -> None:
-    async def scenario() -> None:
-        process = FakeProcess(
-            stdout=[
-                auth_event("checking", platform="dy"),
-                auth_event("connected", platform="dy"),
-            ],
-            exit_code=0,
-        )
-        service, launcher, terminator = build_service(process)
-
-        accepted = await service.start_attempt("dy")
-        result = await wait_for_terminal(service, "dy")
-
-        assert result["status"] == "connected"
-        assert result["guidance"] == "none"
-        assert result["last_checked_at"] == "2026-08-24T12:30:00Z"
-        assert accepted.platform.platform == "dy"
-        assert launcher.calls == [
-            (expected_auth_command("dy"), Path("/repo/third_party/MediaCrawler"))
-        ]
-        assert terminator.calls == []
-
-    asyncio.run(scenario())
-
-
-def test_success_requires_connected_event_and_zero_exit() -> None:
-    async def scenario() -> None:
-        process = FakeProcess(
-            stdout=[
-                b"ordinary crawler output is discarded\n",
-                auth_event("checking"),
-                auth_event("waiting_for_login"),
-                auth_event("checking"),
-                auth_event("connected"),
-            ],
-            stderr=[b"ordinary stderr is also discarded\n"],
-            exit_code=0,
-        )
-        service, launcher, terminator = build_service(process)
-
-        accepted = await service.start_attempt("wb")
-        result = await wait_for_terminal(service)
-
-        assert result == {
-            "platform": "wb",
-            "display_name": "微博",
-            "availability": "enabled",
-            "status": "connected",
-            "guidance": "none",
-            "last_checked_at": "2026-08-24T12:30:00Z",
-            "active_attempt_id": None,
-        }
-        command, cwd = launcher.calls[0]
-        assert cwd == Path("/repo/third_party/MediaCrawler")
-        assert command == expected_auth_command("wb")
-        assert accepted.attempt_id is not None
-        assert terminator.calls == []
-
-    asyncio.run(scenario())
-
-
-def test_kuaishou_success_uses_its_trusted_platform_command() -> None:
-    async def scenario() -> None:
-        process = FakeProcess(
-            stdout=[
-                auth_event("checking", platform="ks"),
-                auth_event("connected", platform="ks"),
-            ],
-            exit_code=0,
-        )
-        service, launcher, terminator = build_service(process)
-
-        accepted = await service.start_attempt("ks")
-        result = await wait_for_terminal(service, "ks")
-
-        assert result == {
-            "platform": "ks",
-            "display_name": "快手",
-            "availability": "enabled",
-            "status": "connected",
-            "guidance": "none",
-            "last_checked_at": "2026-08-24T12:30:00Z",
-            "active_attempt_id": None,
-        }
-        assert accepted.platform.platform == "ks"
-        assert launcher.calls == [
-            (
-                expected_auth_command("ks"),
-                Path("/repo/third_party/MediaCrawler"),
-            )
-        ]
-        assert terminator.calls == []
-
-    asyncio.run(scenario())
-
-
-def test_kuaishou_explicit_disconnected_event_maps_to_retry() -> None:
-    async def scenario() -> None:
-        process = FakeProcess(
-            stdout=[
-                auth_event("checking", platform="ks"),
-                auth_event("waiting_for_login", platform="ks"),
-                auth_event("checking", platform="ks"),
-                auth_event("disconnected", platform="ks"),
-            ],
-            exit_code=20,
-        )
-        service, _, terminator = build_service(process)
-
-        await service.start_attempt("ks")
-        result = await wait_for_terminal(service, "ks")
-
-        assert result["status"] == "disconnected"
-        assert result["guidance"] == "retry"
-        assert result["last_checked_at"] == "2026-08-24T12:30:00Z"
-        assert terminator.calls == []
-
-    asyncio.run(scenario())
-
-
-@pytest.mark.parametrize(
-    ("attempt_platform", "event_platform"),
-    CROSS_AUTH_PLATFORM_PAIRS,
-)
-def test_cross_platform_auth_event_fails_the_active_attempt(
-    attempt_platform: str, event_platform: str
-) -> None:
-    async def scenario() -> None:
-        process = FakeProcess(
-            stdout=[auth_event("checking", platform=event_platform)],
-            hang=True,
-        )
-        service, launcher, terminator = build_service(process)
-
-        await service.start_attempt(attempt_platform)
-        result = await wait_for_terminal(service, attempt_platform)
-
-        assert result["platform"] == attempt_platform
-        assert result["status"] == "failed"
-        assert result["guidance"] == "retry"
-        other_auth_platforms = [
-            connection
-            for connection in (await service.list_connections()).platforms
-            if connection.platform in AUTH_PLATFORMS
-            and connection.platform != attempt_platform
-        ]
-        assert len(other_auth_platforms) == 4
-        for other in other_auth_platforms:
-            assert other.status == "not_checked"
-            assert other.active_attempt_id is None
-            assert other.last_checked_at is None
-        assert launcher.calls[0][0] == expected_auth_command(attempt_platform)
-        assert terminator.calls == [(process, 0.01)]
-
-    asyncio.run(scenario())
-
-
-@pytest.mark.parametrize(
-    ("expected_platform", "event_platform"),
-    CROSS_AUTH_PLATFORM_PAIRS,
-)
-def test_every_supported_cross_platform_event_is_rejected(
-    expected_platform: str, event_platform: str
-) -> None:
-    with pytest.raises(service_module._ProtocolError):
-        service_module._parse_auth_event(
-            auth_event("checking", platform=event_platform),
-            expected_platform=expected_platform,
-        )
-
-
-@pytest.mark.parametrize("platform", AUTH_PLATFORMS)
-def test_auth_event_is_valid_only_for_matching_attempt(platform: str) -> None:
-    event = service_module._parse_auth_event(
-        auth_event("checking", platform=platform),
-        expected_platform=platform,
-    )
-
-    assert event is not None
-    assert event.platform == platform
-    assert event.phase == "checking"
-
-
-def test_terminal_attempt_releases_the_single_worker_slot() -> None:
-    async def scenario() -> None:
-        first_process = FakeProcess(
-            stdout=[auth_event("checking"), auth_event("connected")]
-        )
-        second_process = FakeProcess(
-            stdout=[
-                auth_event("checking", platform="ks"),
-                auth_event("connected", platform="ks"),
-            ]
-        )
-        launcher = FakeLauncher(first_process, second_process)
-        terminator = FakeTerminator()
-        service = PlatformConnectionService(
-            media_crawler_dir=Path("/repo/third_party/MediaCrawler"),
-            process_launcher=launcher,
-            process_group_terminator=terminator,
-            clock=lambda: FIXED_NOW,
-        )
 
         first = await service.start_attempt("wb")
-        assert (await wait_for_terminal(service))["status"] == "connected"
+        assert (await wait_for_terminal(service, "wb"))["status"] == "connected"
         second = await service.start_attempt("ks")
         assert (await wait_for_terminal(service, "ks"))["status"] == "connected"
 
+        checks = [item for item in process.commands if item["command"] == "check"]
         assert first.attempt_id != second.attempt_id
-        assert len(launcher.calls) == 2
+        assert [item["platform"] for item in checks] == ["wb", "ks"]
+        assert [item["request_id"] for item in checks] == [
+            str(first.attempt_id),
+            str(second.attempt_id),
+        ]
+        assert all(
+            set(item) == {"version", "type", "command", "request_id", "platform"}
+            and item["version"] == 2
+            and item["type"] == "command"
+            for item in checks
+        )
+        assert len(launcher.calls) == 1
         assert terminator.calls == []
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_full_five_platform_sequence_uses_one_worker() -> None:
+    async def scenario() -> None:
+        process = FakeProcess(*(connected_plan for _ in AUTH_PLATFORMS))
+        service, launcher, _ = build_service(process)
+
+        for platform in AUTH_PLATFORMS:
+            await service.start_attempt(platform)
+            assert (await wait_for_terminal(service, platform))["status"] == "connected"
+
+        assert len(launcher.calls) == 1
+        assert [
+            command["platform"]
+            for command in process.commands
+            if command["command"] == "check"
+        ] == list(AUTH_PLATFORMS)
+        await service.shutdown()
 
     asyncio.run(scenario())
 
@@ -702,100 +497,145 @@ def test_terminal_attempt_releases_the_single_worker_slot() -> None:
         (["checking", "waiting_for_login"], "action_required", "complete_login"),
     ],
 )
-@pytest.mark.parametrize("platform", AUTH_PLATFORMS)
-def test_protocol_phases_update_the_visible_projection(
-    phases: list[str],
-    expected_status: str,
-    expected_guidance: str,
-    platform: str,
+def test_progress_updates_visible_projection(
+    phases: list[str], expected_status: str, expected_guidance: str
 ) -> None:
-    async def scenario() -> None:
-        process = FakeProcess(
-            stdout=[auth_event(phase, platform=platform) for phase in phases],
-            hang=True,
-        )
-        service, _, _ = build_service(process)
-        await service.start_attempt(platform)
+    def plan(process: FakeProcess, command: dict[str, object]) -> None:
+        for phase in phases:
+            process.feed(
+                progress_event(
+                    str(command["request_id"]), str(command["platform"]), phase
+                )
+            )
 
-        for _ in range(100):
-            connections = (await service.list_connections()).platforms
-            connection = next(item for item in connections if item.platform == platform)
-            if (
-                connection.status == expected_status
-                and connection.guidance == expected_guidance
-            ):
+    async def scenario() -> None:
+        process = FakeProcess(plan)
+        service, _, _ = build_service(process)
+        await service.start_attempt("wb")
+
+        for _ in range(200):
+            row = (await service.list_connections()).platforms[0]
+            if row.status == expected_status and row.guidance == expected_guidance:
                 break
             await asyncio.sleep(0.001)
         else:
-            raise AssertionError("phase was not projected")
-
-        assert connection.last_checked_at is None
-        assert connection.active_attempt_id is not None
+            raise AssertionError("progress was not projected")
         await service.shutdown()
 
     asyncio.run(scenario())
 
 
 @pytest.mark.parametrize(
-    ("event_lines", "exit_code", "expected_status", "expected_guidance"),
+    ("outcome", "reason", "expected_status", "expected_guidance"),
     [
-        ([auth_event("checking")], 0, "failed", "retry"),
-        ([auth_event("checking")], 20, "failed", "retry"),
-        ([auth_event("checking"), auth_event("connected")], 20, "failed", "retry"),
-        (
-            [auth_event("checking"), auth_event("disconnected")],
-            20,
-            "disconnected",
-            "retry",
-        ),
-        ([auth_event("waiting_for_browser")], 21, "failed", "enable_remote_debugging"),
-        ([auth_event("checking")], 22, "failed", "retry"),
-        ([auth_event("checking")], 79, "failed", "retry"),
+        ("connected", "none", "connected", "none"),
+        ("disconnected", "login_required", "disconnected", "retry"),
+        ("failed", "browser_unavailable", "failed", "enable_remote_debugging"),
+        ("failed", "browser_disconnected", "failed", "retry"),
+        ("failed", "internal_error", "failed", "retry"),
     ],
 )
-def test_exit_and_terminal_event_matrix(
-    event_lines: list[bytes],
-    exit_code: int,
+def test_result_projection_matrix(
+    outcome: str,
+    reason: str,
     expected_status: str,
     expected_guidance: str,
 ) -> None:
+    def plan(process: FakeProcess, command: dict[str, object]) -> None:
+        request_id = str(command["request_id"])
+        platform = str(command["platform"])
+        process.feed(progress_event(request_id, platform, "checking"))
+        process.feed(result_event(request_id, platform, outcome, reason))
+
     async def scenario() -> None:
-        service, _, _ = build_service(
-            FakeProcess(stdout=event_lines, exit_code=exit_code)
-        )
+        service, _, _ = build_service(FakeProcess(plan))
         await service.start_attempt("wb")
         result = await wait_for_terminal(service)
         assert result["status"] == expected_status
         assert result["guidance"] == expected_guidance
-        assert result["active_attempt_id"] is None
+        assert result["last_checked_at"] == "2026-08-24T12:30:00Z"
+        await service.shutdown()
 
     asyncio.run(scenario())
 
 
 @pytest.mark.parametrize(
-    "invalid_event",
-    [
-        PREFIX + b"not-json\n",
-        auth_event("checking", message="credential-sentinel"),
-        PREFIX + b'{"version":2,"platform":"wb","phase":"checking"}\n',
-        PREFIX + b'{"version":1,"platform":"dy","phase":"checking"}\n',
-        auth_event("connected"),
-        auth_event("checking") + b"x" * 1024,
-    ],
+    ("attempt_platform", "event_platform"), CROSS_AUTH_PLATFORM_PAIRS
 )
-def test_malformed_or_out_of_order_protocol_fails_closed(
-    invalid_event: bytes,
+def test_all_cross_platform_events_fail_closed_without_foreign_mutation(
+    attempt_platform: str, event_platform: str
 ) -> None:
+    def plan(process: FakeProcess, command: dict[str, object]) -> None:
+        process.feed(
+            progress_event(str(command["request_id"]), event_platform, "checking")
+        )
+
     async def scenario() -> None:
-        process = FakeProcess(stdout=[invalid_event], hang=True)
+        process = FakeProcess(plan)
         service, _, terminator = build_service(process)
-        await service.start_attempt("wb")
-        result = await wait_for_terminal(service)
+        await service.start_attempt(attempt_platform)
+        result = await wait_for_terminal(service, attempt_platform)
 
         assert result["status"] == "failed"
-        assert result["guidance"] == "retry"
-        assert "credential-sentinel" not in str(result)
+        rows = (await service.list_connections()).platforms
+        for row in rows:
+            if row.platform != attempt_platform:
+                assert row.status == "not_checked"
+                assert row.active_attempt_id is None
         assert terminator.calls == [(process, 0.01)]
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "invalid_frame_factory",
+    [
+        lambda _request, _platform: b"ordinary output\n",
+        lambda _request, _platform: AUTH_EVENT_PREFIX + b"not-json\n",
+        lambda _request, _platform: worker_event("ready", extra="secret-marker"),
+        lambda request, platform: (
+            AUTH_EVENT_PREFIX
+            + (
+                '{"version":2,"type":"event","event":"progress",'
+                f'"request_id":"{request}","platform":"{platform}",'
+                '"phase":"checking","phase":"checking"}\n'
+            ).encode()
+        ),
+        lambda request, platform: (
+            progress_event(request, platform, "checking") + b"x" * 1024
+        ),
+        lambda _request, platform: progress_event(str(uuid4()), platform, "checking"),
+        lambda request, platform: worker_event(
+            "progress",
+            request_id=request,
+            platform=platform,
+            phase="checking",
+            detail="credential-sentinel",
+        ),
+    ],
+)
+def test_malformed_protocol_recycles_worker_without_leaking_raw_output(
+    invalid_frame_factory: Callable[[str, str], bytes],
+) -> None:
+    def invalid_plan(process: FakeProcess, command: dict[str, object]) -> None:
+        process.feed(
+            invalid_frame_factory(str(command["request_id"]), str(command["platform"]))
+        )
+
+    async def scenario() -> None:
+        first = FakeProcess(invalid_plan)
+        second = FakeProcess(connected_plan)
+        service, launcher, terminator = build_service(first, second)
+        await service.start_attempt("wb")
+        failed = await wait_for_terminal(service)
+        assert failed["status"] == "failed"
+        assert "credential-sentinel" not in str(failed)
+        assert terminator.calls == [(first, 0.01)]
+
+        await service.start_attempt("ks")
+        assert (await wait_for_terminal(service, "ks"))["status"] == "connected"
+        assert len(launcher.calls) == 2
+        await service.shutdown()
 
     asyncio.run(scenario())
 
@@ -803,69 +643,398 @@ def test_malformed_or_out_of_order_protocol_fails_closed(
 @pytest.mark.parametrize(
     "phases",
     [
+        ["checking", "checking"],
         ["checking", "waiting_for_approval"],
         ["waiting_for_browser", "checking"],
-        ["checking", "waiting_for_login", "disconnected"],
+        ["checking", "waiting_for_login", "checking", "waiting_for_login"],
     ],
 )
-def test_duplicate_regressing_or_skipped_phase_fails_closed(
-    phases: list[str],
-) -> None:
+def test_invalid_progress_order_recycles_worker(phases: list[str]) -> None:
+    def plan(process: FakeProcess, command: dict[str, object]) -> None:
+        for phase in phases:
+            process.feed(
+                progress_event(
+                    str(command["request_id"]), str(command["platform"]), phase
+                )
+            )
+
     async def scenario() -> None:
-        process = FakeProcess(
-            stdout=[auth_event(phase) for phase in phases],
-            hang=True,
+        process = FakeProcess(plan)
+        service, _, terminator = build_service(process)
+        await service.start_attempt("wb")
+        assert (await wait_for_terminal(service))["status"] == "failed"
+        assert terminator.calls == [(process, 0.01)]
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("missing_stream", ["stdin", "stdout", "stderr"])
+def test_missing_worker_pipe_fails_closed_and_terminates(missing_stream: str) -> None:
+    async def scenario() -> None:
+        process = FakeProcess(emit_ready=False)
+        setattr(process, missing_stream, None)
+        service, _, terminator = build_service(process)
+        await service.start_attempt("wb")
+        assert (await wait_for_terminal(service))["status"] == "failed"
+        assert terminator.calls == [(process, 0.01)]
+
+    asyncio.run(scenario())
+
+
+def test_worker_launch_failure_is_detail_free() -> None:
+    async def failing_launcher(_command: tuple[str, ...], _cwd: Path) -> FakeProcess:
+        raise RuntimeError("credential-sentinel")
+
+    async def scenario() -> None:
+        service = PlatformConnectionService(
+            media_crawler_dir=Path("/repo/third_party/MediaCrawler"),
+            process_launcher=failing_launcher,
+            attempt_timeout_seconds=1,
+            clock=lambda: FIXED_NOW,
         )
+        await service.start_attempt("wb")
+        row = await wait_for_terminal(service)
+        assert row["status"] == "failed"
+        assert "credential-sentinel" not in str(row)
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_duplicate_result_after_terminal_recycles_and_fails_closed() -> None:
+    def plan(process: FakeProcess, command: dict[str, object]) -> None:
+        request_id = str(command["request_id"])
+        platform = str(command["platform"])
+        process.feed(progress_event(request_id, platform, "checking"))
+        process.feed(result_event(request_id, platform))
+        process.feed(result_event(request_id, platform))
+
+    async def scenario() -> None:
+        process = FakeProcess(plan)
+        service, _, terminator = build_service(process)
+        await service.start_attempt("wb")
+        assert (await wait_for_terminal(service))["status"] == "failed"
+        assert terminator.calls == [(process, 0.01)]
+
+    asyncio.run(scenario())
+
+
+def test_ready_timeout_recycles_and_next_attempt_launches_again() -> None:
+    async def scenario() -> None:
+        first = FakeProcess(emit_ready=False)
+        second = FakeProcess(connected_plan)
+        service, launcher, terminator = build_service(first, second, ready_timeout=0.01)
+        await service.start_attempt("wb")
+        assert (await wait_for_terminal(service))["status"] == "failed"
+        assert terminator.calls == [(first, 0.01)]
+
+        await service.start_attempt("dy")
+        assert (await wait_for_terminal(service, "dy"))["status"] == "connected"
+        assert len(launcher.calls) == 2
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_whole_attempt_timeout_during_worker_start_recycles_generation() -> None:
+    async def scenario() -> None:
+        process = FakeProcess(emit_ready=False)
+        service, _, terminator = build_service(
+            process,
+            timeout=0.01,
+            ready_timeout=1,
+        )
+        await service.start_attempt("wb")
+        assert (await wait_for_terminal(service))["status"] == "failed"
+        assert terminator.calls == [(process, 0.01)]
+
+    asyncio.run(scenario())
+
+
+def test_writer_failure_recycles_without_exposing_exception() -> None:
+    async def scenario() -> None:
+        process = FakeProcess(hanging_plan)
+        process.stdin.fail_drain = True
         service, _, terminator = build_service(process)
         await service.start_attempt("wb")
         result = await wait_for_terminal(service)
-
         assert result["status"] == "failed"
         assert terminator.calls == [(process, 0.01)]
 
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize(
-    ("phases", "expected_status", "expected_guidance"),
-    [
-        (["checking", "waiting_for_login"], "disconnected", "retry"),
-        (["waiting_for_approval"], "failed", "enable_remote_debugging"),
-        ([], "failed", "retry"),
-    ],
-)
-def test_attempt_timeout_maps_to_safe_terminal_state(
-    phases: list[str], expected_status: str, expected_guidance: str
-) -> None:
+@pytest.mark.parametrize("emit_ready", [False, True])
+def test_unexpected_eof_before_or_after_ready_recycles(emit_ready: bool) -> None:
     async def scenario() -> None:
-        process = FakeProcess(stdout=[auth_event(phase) for phase in phases], hang=True)
-        service, _, terminator = build_service(process, timeout=0.01)
+        process = FakeProcess(emit_ready=emit_ready)
+        service, _, terminator = build_service(process)
         await service.start_attempt("wb")
-        result = await wait_for_terminal(service)
+        for _ in range(100):
+            if process.commands or not emit_ready:
+                break
+            await asyncio.sleep(0)
+        process.finish(7)
+        assert (await wait_for_terminal(service))["status"] == "failed"
+        assert process.returncode == 7
+        assert terminator.calls == []
 
-        assert result["status"] == expected_status
-        assert result["guidance"] == expected_guidance
+    asyncio.run(scenario())
+
+
+def test_late_callback_from_recycled_generation_cannot_mutate_current_state() -> None:
+    def invalid_plan(process: FakeProcess, _command: dict[str, object]) -> None:
+        process.feed(b"invalid\n")
+
+    async def scenario() -> None:
+        first = FakeProcess(invalid_plan)
+        second = FakeProcess(connected_plan)
+        service, _, _ = build_service(first, second)
+        old_attempt = await service.start_attempt("wb")
+        assert (await wait_for_terminal(service))["status"] == "failed"
+
+        await service.start_attempt("ks")
+        assert (await wait_for_terminal(service, "ks"))["status"] == "connected"
+        stale = worker_module._parse_event(
+            progress_event(str(old_attempt.attempt_id), "wb", "checking")
+        )
+        await service._worker._handle_event(1, stale)
+        rows = (await service.list_connections()).platforms
+        assert next(row for row in rows if row.platform == "ks").status == "connected"
+        assert next(row for row in rows if row.platform == "wb").status == "failed"
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_idle_worker_crash_invalidates_connected_and_next_post_relaunches() -> None:
+    async def scenario() -> None:
+        first = FakeProcess(connected_plan)
+        second = FakeProcess(connected_plan)
+        service, launcher, _ = build_service(first, second)
+        await service.start_attempt("wb")
+        assert (await wait_for_terminal(service))["status"] == "connected"
+
+        first.finish(9)
+        for _ in range(200):
+            row = (await service.list_connections()).platforms[0]
+            if row.status == "failed":
+                break
+            await asyncio.sleep(0.001)
+        assert row.guidance == "retry"
+        assert row.last_checked_at.isoformat() == "2026-08-24T12:30:00+00:00"
+
+        await service.start_attempt("ks")
+        assert (await wait_for_terminal(service, "ks"))["status"] == "connected"
+        assert len(launcher.calls) == 2
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_post_racing_idle_exit_runs_on_fresh_generation() -> None:
+    async def scenario() -> None:
+        first = FakeProcess(connected_plan)
+        second = FakeProcess(connected_plan)
+        service, launcher, _ = build_service(first, second)
+        await service.start_attempt("wb")
+        assert (await wait_for_terminal(service))["status"] == "connected"
+
+        first.finish(9)
+        await service.start_attempt("ks")
+        assert (await wait_for_terminal(service, "ks"))["status"] == "connected"
+        assert len(launcher.calls) == 2
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_idle_session_disconnect_invalidates_but_reuses_healthy_worker() -> None:
+    async def scenario() -> None:
+        process = FakeProcess(connected_plan, connected_plan)
+        service, launcher, terminator = build_service(process)
+        await service.start_attempt("wb")
+        assert (await wait_for_terminal(service))["status"] == "connected"
+
+        process.feed(
+            worker_event("session", state="disconnected", reason="browser_disconnected")
+        )
+        for _ in range(200):
+            row = (await service.list_connections()).platforms[0]
+            if row.status == "failed":
+                break
+            await asyncio.sleep(0.001)
+        assert row.guidance == "retry"
+
+        await service.start_attempt("dy")
+        assert (await wait_for_terminal(service, "dy"))["status"] == "connected"
+        assert len(launcher.calls) == 1
+        assert terminator.calls == []
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_queued_idle_disconnect_before_check_does_not_recycle_new_request() -> None:
+    async def scenario() -> None:
+        process = FakeProcess(connected_plan, connected_plan)
+        service, launcher, terminator = build_service(process)
+        await service.start_attempt("wb")
+        assert (await wait_for_terminal(service))["status"] == "connected"
+
+        # Queue the idle-session event without waking the reader. Writing the
+        # next check wakes it after the client has installed the new active
+        # request, reproducing the cross-task ordering race deterministically.
+        process.stdout._lines.append(
+            worker_event("session", state="disconnected", reason="browser_disconnected")
+        )
+        await service.start_attempt("dy")
+
+        assert (await wait_for_terminal(service, "dy"))["status"] == "connected"
+        rows = (await service.list_connections()).platforms
+        assert next(row for row in rows if row.platform == "wb").status == "failed"
+        assert len(launcher.calls) == 1
+        assert terminator.calls == []
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_session_disconnect_after_request_progress_recycles_worker() -> None:
+    def invalid_busy_disconnect(
+        process: FakeProcess, command: dict[str, object]
+    ) -> None:
+        process.feed(
+            progress_event(
+                str(command["request_id"]), str(command["platform"]), "checking"
+            )
+        )
+        process.feed(
+            worker_event("session", state="disconnected", reason="browser_disconnected")
+        )
+
+    async def scenario() -> None:
+        process = FakeProcess(invalid_busy_disconnect)
+        service, _, terminator = build_service(process)
+        await service.start_attempt("dy")
+
+        row = await wait_for_terminal(service, "dy")
+        assert row["status"] == "failed"
+        assert row["guidance"] == "retry"
         assert terminator.calls == [(process, 0.01)]
 
     asyncio.run(scenario())
 
 
-def test_shutdown_cancels_task_and_terminates_owned_process() -> None:
+def test_disconnect_after_connected_result_cannot_leave_false_connected_state() -> None:
+    def racing_disconnect_plan(
+        process: FakeProcess, command: dict[str, object]
+    ) -> None:
+        request_id = str(command["request_id"])
+        platform = str(command["platform"])
+        process.feed(progress_event(request_id, platform, "checking"))
+        process.feed(result_event(request_id, platform))
+        process.feed(
+            worker_event("session", state="disconnected", reason="browser_disconnected")
+        )
+
     async def scenario() -> None:
-        process = FakeProcess(stdout=[auth_event("checking")], hang=True)
-        service, launcher, terminator = build_service(process)
+        process = FakeProcess(racing_disconnect_plan)
+        service, _, _ = build_service(process)
+        await service.start_attempt("wb")
+        row = await wait_for_terminal(service)
+        assert row["status"] == "failed"
+        assert row["guidance"] == "retry"
+        assert row["active_attempt_id"] is None
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_attempt_timeout_with_cancel_ack_keeps_worker_for_next_check() -> None:
+    async def scenario() -> None:
+        process = FakeProcess(login_hanging_plan, connected_plan)
+        service, launcher, terminator = build_service(process, timeout=0.01)
+        await service.start_attempt("wb")
+        first = await wait_for_terminal(service)
+        assert first["status"] == "disconnected"
+        assert command_actions(process)[:2] == ["check", "cancel"]
+
+        await service.start_attempt("ks")
+        assert (await wait_for_terminal(service, "ks"))["status"] == "connected"
+        assert len(launcher.calls) == 1
+        assert terminator.calls == []
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_unacknowledged_cancel_recycles_worker() -> None:
+    async def scenario() -> None:
+        first = FakeProcess(hanging_plan, cancel_ack=False)
+        second = FakeProcess(connected_plan)
+        service, launcher, terminator = build_service(first, second, timeout=0.01)
+        await service.start_attempt("wb")
+        assert (await wait_for_terminal(service))["status"] == "failed"
+        assert command_actions(first) == ["check", "cancel"]
+        assert terminator.calls == [(first, 0.01)]
+
+        await service.start_attempt("ks")
+        assert (await wait_for_terminal(service, "ks"))["status"] == "connected"
+        assert len(launcher.calls) == 2
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_shutdown_cancels_active_request_then_stops_worker() -> None:
+    async def scenario() -> None:
+        process = FakeProcess(hanging_plan)
+        service, _, terminator = build_service(process)
         await service.start_attempt("wb")
         for _ in range(100):
-            if launcher.calls:
+            if process.commands:
                 break
             await asyncio.sleep(0)
 
         await service.shutdown()
-        result = (await service.list_connections()).platforms[0]
+        row = (await service.list_connections()).platforms[0]
+        assert command_actions(process) == ["check", "cancel", "shutdown"]
+        assert process.returncode == 0
+        assert terminator.calls == []
+        assert row.status == "failed"
+        assert row.active_attempt_id is None
 
+    asyncio.run(scenario())
+
+
+def test_unacknowledged_shutdown_uses_process_group_fallback() -> None:
+    async def scenario() -> None:
+        process = FakeProcess(connected_plan, shutdown_ack=False)
+        service, _, terminator = build_service(process, shutdown_timeout=0.01)
+        await service.start_attempt("wb")
+        assert (await wait_for_terminal(service))["status"] == "connected"
+        await service.shutdown()
+        assert command_actions(process) == ["check", "shutdown"]
         assert terminator.calls == [(process, 0.01)]
-        assert result.status == "failed"
-        assert result.active_attempt_id is None
+
+    asyncio.run(scenario())
+
+
+def test_stderr_credentials_are_discarded_and_never_projected() -> None:
+    async def scenario() -> None:
+        process = FakeProcess(
+            connected_plan,
+            stderr=[b"cookie=credential-sentinel authorization=secret\n"],
+        )
+        service, _, _ = build_service(process)
+        await service.start_attempt("wb")
+        row = await wait_for_terminal(service)
+        catalog = (await service.list_connections()).model_dump(mode="json")
+        assert "credential-sentinel" not in str(row)
+        assert "credential-sentinel" not in str(catalog)
+        assert "authorization" not in str(catalog).lower()
+        await service.shutdown()
 
     asyncio.run(scenario())
 
@@ -888,10 +1057,36 @@ def test_openapi_documents_exact_success_and_error_models() -> None:
     }
 
 
-def test_default_launcher_uses_exec_without_a_shell(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def scenario() -> None:
+@pytest.mark.parametrize(
+    "line",
+    [
+        worker_event("ready", extra="x"),
+        AUTH_EVENT_PREFIX
+        + b'{"version":2,"type":"event","event":"ready","event":"ready"}\n',
+        worker_event(
+            "progress", request_id=str(uuid4()), platform="wb", phase="unknown"
+        ),
+        worker_event(
+            "result",
+            request_id=str(uuid4()),
+            platform="wb",
+            outcome="connected",
+            reason="login_required",
+        ),
+        worker_event("session", state="connected", reason="browser_disconnected"),
+        b"unprefixed\n",
+        worker_event("ready").rstrip(b"\n"),
+        AUTH_EVENT_PREFIX + b'{"version":2.0,"type":"event","event":"ready"}\n',
+        AUTH_EVENT_PREFIX + b'{"version":NaN,"type":"event","event":"ready"}\n',
+    ],
+)
+def test_v2_event_parser_rejects_invalid_exact_shapes(line: bytes) -> None:
+    with pytest.raises(AuthWorkerError):
+        worker_module._parse_event(line)
+
+
+def test_default_launcher_uses_exec_with_duplex_pipes() -> None:
+    async def scenario(monkeypatch: pytest.MonkeyPatch) -> None:
         process = FakeProcess()
         captured: dict[str, object] = {}
 
@@ -905,28 +1100,32 @@ def test_default_launcher_uses_exec_without_a_shell(
         monkeypatch.setattr(
             asyncio, "create_subprocess_exec", fake_create_subprocess_exec
         )
-        result = await service_module._launch_process(
-            ("uv", "run", "--frozen"), Path("/repo/third_party/MediaCrawler")
+        result = await worker_module.launch_process(
+            expected_worker_command(), Path("/repo/third_party/MediaCrawler")
         )
-
         assert result is process
-        assert captured["command"] == ("uv", "run", "--frozen")
+        assert captured["command"] == expected_worker_command()
         assert captured["options"] == {
             "cwd": Path("/repo/third_party/MediaCrawler"),
+            "stdin": asyncio.subprocess.PIPE,
             "stdout": asyncio.subprocess.PIPE,
             "stderr": asyncio.subprocess.PIPE,
-            "limit": service_module.MAX_CHILD_OUTPUT_LINE_BYTES,
+            "limit": worker_module.MAX_CHILD_OUTPUT_LINE_BYTES,
             "start_new_session": os.name == "posix",
         }
 
-    asyncio.run(scenario())
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        asyncio.run(scenario(monkeypatch))
+    finally:
+        monkeypatch.undo()
 
 
 def test_owned_process_group_is_killed_after_grace_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def scenario() -> None:
-        process = FakeProcess(hang=True)
+        process = FakeProcess()
         sent_signals: list[signal.Signals] = []
 
         def fake_send_group_signal(
@@ -938,10 +1137,9 @@ def test_owned_process_group_is_killed_after_grace_timeout(
                 process.finish(-9)
 
         monkeypatch.setattr(
-            service_module, "_send_process_group_signal", fake_send_group_signal
+            worker_module, "_send_process_group_signal", fake_send_group_signal
         )
-        await service_module._terminate_owned_process_group(process, 0)
-
+        await worker_module.terminate_owned_process_group(process, 0)
         assert sent_signals == [signal.SIGTERM, signal.SIGKILL]
         assert process.returncode == -9
 

@@ -1,0 +1,11 @@
+{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/platform-connection-guidelines.md", "reason": "核对 API 兼容、五平台权威探测、串行化和浏览器所有权"}
+{"file": ".trellis/spec/backend/auth-state-guidelines.md", "reason": "核对无凭证泄露、无状态伪证明与登录后在线复检"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "核对异常路径对外仅返回稳定安全错误"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "核对 stderr、协议和验收证据不泄露认证材料"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "执行后端质量门禁和生命周期回归"}
+{"file": ".trellis/spec/infra/submodule-guidelines.md", "reason": "核对派生仓库提交可达、子模块干净和父 gitlink 顺序"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "核对现有串行批量检测与轮询状态未发生兼容回归"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "核对公共响应结构与前端严格解码保持一致"}
+{"file": ".trellis/tasks/08-25-persistent-chrome-debugging-connection/research/current-auth-architecture.md", "reason": "按五平台注入缝、页面所有权和共享上下文风险矩阵复核"}
+{"file": ".trellis/tasks/08-25-persistent-chrome-debugging-connection/research/persistent-worker-protocol.md", "reason": "按协议、故障、超时、断线、关闭和 live acceptance 矩阵复核"}

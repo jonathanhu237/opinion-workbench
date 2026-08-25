@@ -1,16 +1,11 @@
-"""Coordinate bounded, authentication-only MediaCrawler subprocesses."""
+"""Coordinate platform authentication through one persistent MediaCrawler worker."""
 
 import asyncio
-import json
-import os
-import signal
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, Protocol, cast
+from typing import Literal, cast
 from uuid import UUID, uuid4
-
-from pydantic import BaseModel, ConfigDict, ValidationError
 
 from longtian_api.schemas.platform_connections import (
     PlatformConnection,
@@ -20,31 +15,16 @@ from longtian_api.schemas.platform_connections import (
     PlatformConnectionListResponse,
     PlatformId,
 )
-
-AUTH_EVENT_PREFIX = b"__MEDIACRAWLER_AUTH_EVENT__"
-MAX_AUTH_EVENT_LINE_BYTES = 1024
-MAX_CHILD_OUTPUT_LINE_BYTES = 64 * 1024
-
-CONNECTED_EXIT_CODE = 0
-AUTH_DISCONNECTED_EXIT_CODE = 20
-BROWSER_UNAVAILABLE_EXIT_CODE = 21
-
-_AUTH_COMMAND_SUFFIX = (
-    "--type",
-    "auth",
-    "--lt",
-    "qrcode",
-    "--headless",
-    "no",
-    "--get_comment",
-    "no",
-    "--get_sub_comment",
-    "no",
-    "--save_data_option",
-    "jsonl",
+from longtian_api.services.media_crawler_auth_worker import (
+    AuthPlatformId,
+    AuthProgressPhase,
+    AuthWorkerError,
+    AuthWorkerResult,
+    PersistentAuthWorkerClient,
+    ProcessGroupTerminator,
+    ProcessLauncher,
 )
 
-AuthPlatformId = Literal["wb", "dy", "ks", "xhs", "toutiao"]
 _AUTH_PLATFORM_BY_ID: dict[PlatformId, AuthPlatformId] = {
     "wb": "wb",
     "dy": "dy",
@@ -53,45 +33,6 @@ _AUTH_PLATFORM_BY_ID: dict[PlatformId, AuthPlatformId] = {
     "toutiao": "toutiao",
 }
 
-AuthPhase = Literal[
-    "waiting_for_browser",
-    "waiting_for_approval",
-    "checking",
-    "waiting_for_login",
-    "connected",
-    "disconnected",
-]
-
-
-class _AuthEvent(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
-
-    version: Literal[1]
-    platform: AuthPlatformId
-    phase: AuthPhase
-
-
-class _AsyncLineReader(Protocol):
-    async def readline(self) -> bytes: ...
-
-
-class ManagedProcess(Protocol):
-    """The asyncio subprocess surface required by this service."""
-
-    pid: int
-    returncode: int | None
-    stdout: _AsyncLineReader | None
-    stderr: _AsyncLineReader | None
-
-    async def wait(self) -> int: ...
-
-    def terminate(self) -> None: ...
-
-    def kill(self) -> None: ...
-
-
-ProcessLauncher = Callable[[tuple[str, ...], Path], Awaitable[ManagedProcess]]
-ProcessGroupTerminator = Callable[[ManagedProcess, float], Awaitable[None]]
 Clock = Callable[[], datetime]
 
 
@@ -107,12 +48,8 @@ class PlatformConnectionError(Exception):
         self.message = message
 
 
-class _ProtocolError(Exception):
-    """A deliberately detail-free child protocol failure."""
-
-
 class PlatformConnectionService:
-    """Own in-memory status and one authentication subprocess at a time."""
+    """Own public connection state and one bounded attempt at a time."""
 
     def __init__(
         self,
@@ -121,22 +58,31 @@ class PlatformConnectionService:
         process_launcher: ProcessLauncher | None = None,
         process_group_terminator: ProcessGroupTerminator | None = None,
         attempt_timeout_seconds: float = 300.0,
+        worker_ready_timeout_seconds: float = 30.0,
+        cancel_timeout_seconds: float = 3.0,
+        worker_shutdown_timeout_seconds: float = 5.0,
         termination_grace_seconds: float = 3.0,
         clock: Clock | None = None,
     ) -> None:
         self._media_crawler_dir = media_crawler_dir or _default_media_crawler_dir()
-        self._process_launcher = process_launcher or _launch_process
-        self._process_group_terminator = (
-            process_group_terminator or _terminate_owned_process_group
-        )
         self._attempt_timeout_seconds = attempt_timeout_seconds
-        self._termination_grace_seconds = termination_grace_seconds
         self._clock = clock or (lambda: datetime.now(UTC))
 
         self._lock = asyncio.Lock()
         self._current_task: asyncio.Task[None] | None = None
-        self._current_process: ManagedProcess | None = None
         self._connections = _initial_catalog()
+        self._shutdown_started = False
+        self._worker = PersistentAuthWorkerClient(
+            media_crawler_dir=self._media_crawler_dir,
+            on_progress=self._set_progress,
+            on_session_disconnected=self._invalidate_connected,
+            process_launcher=process_launcher,
+            process_group_terminator=process_group_terminator,
+            ready_timeout_seconds=worker_ready_timeout_seconds,
+            cancel_timeout_seconds=cancel_timeout_seconds,
+            shutdown_timeout_seconds=worker_shutdown_timeout_seconds,
+            termination_grace_seconds=termination_grace_seconds,
+        )
 
     async def list_connections(self) -> PlatformConnectionListResponse:
         """Return isolated snapshots in stable catalog order."""
@@ -157,7 +103,9 @@ class PlatformConnectionService:
                     code="platform_not_found",
                     message="未找到该平台。",
                 )
-            if self._current_task is not None and not self._current_task.done():
+            if self._shutdown_started or (
+                self._current_task is not None and not self._current_task.done()
+            ):
                 raise PlatformConnectionError(
                     status_code=409,
                     code="connection_attempt_active",
@@ -190,18 +138,20 @@ class PlatformConnectionService:
             )
 
     async def shutdown(self) -> None:
-        """Cancel the owned task and stop only its owned process group."""
+        """Cancel the active request and stop the lifespan-owned worker."""
         async with self._lock:
+            self._shutdown_started = True
             task = self._current_task
 
-        if task is None:
-            return
-        if not task.done():
+        if task is not None and not task.done():
             task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+        if task is not None:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        await self._worker.shutdown()
         async with self._lock:
             for platform, connection in self._connections.items():
                 if connection.active_attempt_id is None:
@@ -215,7 +165,6 @@ class PlatformConnectionService:
                     }
                 )
             self._current_task = None
-            self._current_process = None
 
     async def _run_attempt(self, platform: AuthPlatformId, attempt_id: UUID) -> None:
         terminal_status: Literal["connected", "disconnected", "failed"] = "failed"
@@ -223,8 +172,11 @@ class PlatformConnectionService:
         was_cancelled = False
         try:
             async with asyncio.timeout(self._attempt_timeout_seconds):
-                terminal_status, terminal_guidance = await self._execute_worker(
-                    platform, attempt_id
+                result = await self._worker.check(
+                    request_id=attempt_id, platform=platform
+                )
+                terminal_status, terminal_guidance = await self._project_result(
+                    platform, result
                 )
         except TimeoutError:
             current = await self._get_connection(platform)
@@ -237,20 +189,13 @@ class PlatformConnectionService:
                 terminal_guidance = "enable_remote_debugging"
         except asyncio.CancelledError:
             was_cancelled = True
-        except Exception:
-            # Child output and exception details are never logged or exposed.
+        except AuthWorkerError:
             terminal_status = "failed"
             terminal_guidance = "retry"
-        finally:
-            process = await self._get_current_process()
-            if process is not None and process.returncode is None:
-                try:
-                    await self._process_group_terminator(
-                        process, self._termination_grace_seconds
-                    )
-                except Exception:
-                    terminal_status = "failed"
-                    terminal_guidance = "retry"
+        except Exception:
+            # Worker output and exception details are never logged or exposed.
+            terminal_status = "failed"
+            terminal_guidance = "retry"
 
         await self._finish_attempt(
             platform, attempt_id, terminal_status, terminal_guidance
@@ -258,55 +203,31 @@ class PlatformConnectionService:
         if was_cancelled:
             raise asyncio.CancelledError
 
-    async def _execute_worker(
-        self, platform: AuthPlatformId, attempt_id: UUID
+    async def _project_result(
+        self, platform: PlatformId, result: AuthWorkerResult
     ) -> tuple[
         Literal["connected", "disconnected", "failed"],
         PlatformConnectionGuidance,
     ]:
-        command = self._worker_command(platform)
-        process = await self._process_launcher(command, self._media_crawler_dir)
-        async with self._lock:
-            self._current_process = process
-
-        if process.stdout is None or process.stderr is None:
-            raise _ProtocolError
-
-        stderr_task = asyncio.create_task(_drain(process.stderr))
-        final_phase: AuthPhase | None = None
-        previous_phase: AuthPhase | None = None
-        try:
-            while line := await process.stdout.readline():
-                event = _parse_auth_event(line, expected_platform=platform)
-                if event is None:
-                    continue
-                _validate_transition(previous_phase, event.phase)
-                previous_phase = event.phase
-                if event.phase in {"connected", "disconnected"}:
-                    final_phase = event.phase
-                else:
-                    await self._set_progress(platform, attempt_id, event.phase)
-
-            return_code = await process.wait()
-            await stderr_task
-        finally:
-            if not stderr_task.done():
-                stderr_task.cancel()
-                try:
-                    await stderr_task
-                except asyncio.CancelledError:
-                    pass
-
-        if return_code == CONNECTED_EXIT_CODE and final_phase == "connected":
+        if result == AuthWorkerResult("connected", "none"):
             return "connected", "none"
-        if return_code == AUTH_DISCONNECTED_EXIT_CODE and final_phase == "disconnected":
+        if result == AuthWorkerResult("disconnected", "login_required"):
             return "disconnected", "retry"
-        if return_code == BROWSER_UNAVAILABLE_EXIT_CODE and final_phase != "connected":
+        if result == AuthWorkerResult("failed", "browser_unavailable"):
+            current = await self._get_connection(platform)
+            if current.guidance in {
+                "enable_remote_debugging",
+                "approve_connection",
+            }:
+                return "failed", current.guidance
             return "failed", "enable_remote_debugging"
         return "failed", "retry"
 
     async def _set_progress(
-        self, platform: PlatformId, attempt_id: UUID, phase: AuthPhase
+        self,
+        attempt_id: UUID,
+        platform: AuthPlatformId,
+        phase: AuthProgressPhase,
     ) -> None:
         status: Literal["checking", "action_required"]
         guidance: PlatformConnectionGuidance
@@ -327,6 +248,29 @@ class PlatformConnectionService:
                 update={"status": status, "guidance": guidance}
             )
 
+    async def _invalidate_connected(self, affected_request_id: UUID | None) -> None:
+        async with self._lock:
+            for platform, connection in self._connections.items():
+                affected_active = connection.active_attempt_id == affected_request_id
+                if affected_request_id is None:
+                    affected_active = False
+                if connection.status != "connected" and not affected_active:
+                    continue
+                self._connections[platform] = connection.model_copy(
+                    update={
+                        "status": "failed",
+                        "guidance": "retry",
+                        "last_checked_at": (
+                            self._clock()
+                            if affected_active
+                            else connection.last_checked_at
+                        ),
+                        "active_attempt_id": (
+                            None if affected_active else connection.active_attempt_id
+                        ),
+                    }
+                )
+
     async def _finish_attempt(
         self,
         platform: PlatformId,
@@ -336,41 +280,21 @@ class PlatformConnectionService:
     ) -> None:
         async with self._lock:
             connection = self._connections[platform]
-            if connection.active_attempt_id != attempt_id:
-                return
-            self._connections[platform] = connection.model_copy(
-                update={
-                    "status": status,
-                    "guidance": guidance,
-                    "last_checked_at": self._clock(),
-                    "active_attempt_id": None,
-                }
-            )
+            if connection.active_attempt_id == attempt_id:
+                self._connections[platform] = connection.model_copy(
+                    update={
+                        "status": status,
+                        "guidance": guidance,
+                        "last_checked_at": self._clock(),
+                        "active_attempt_id": None,
+                    }
+                )
             if self._current_task is asyncio.current_task():
                 self._current_task = None
-                self._current_process = None
 
     async def _get_connection(self, platform: PlatformId) -> PlatformConnection:
         async with self._lock:
             return self._connections[platform].model_copy()
-
-    async def _get_current_process(self) -> ManagedProcess | None:
-        async with self._lock:
-            return self._current_process
-
-    def _worker_command(self, platform: AuthPlatformId) -> tuple[str, ...]:
-        return (
-            "uv",
-            "run",
-            "--frozen",
-            "--project",
-            str(self._media_crawler_dir),
-            "python",
-            "main.py",
-            "--platform",
-            platform,
-            *_AUTH_COMMAND_SUFFIX,
-        )
 
 
 def _initial_catalog() -> dict[PlatformId, PlatformConnection]:
@@ -421,105 +345,6 @@ def _initial_catalog() -> dict[PlatformId, PlatformConnection]:
             active_attempt_id=None,
         ),
     }
-
-
-def _parse_auth_event(
-    line: bytes, *, expected_platform: AuthPlatformId
-) -> _AuthEvent | None:
-    if not line.startswith(AUTH_EVENT_PREFIX):
-        return None
-    if len(line) > MAX_AUTH_EVENT_LINE_BYTES:
-        raise _ProtocolError
-
-    payload = line[len(AUTH_EVENT_PREFIX) :].strip()
-    try:
-        raw_event = json.loads(payload)
-        event = _AuthEvent.model_validate(raw_event)
-        if event.platform != expected_platform:
-            raise _ProtocolError
-        return event
-    except (
-        UnicodeDecodeError,
-        json.JSONDecodeError,
-        ValidationError,
-        TypeError,
-        ValueError,
-    ):
-        raise _ProtocolError from None
-
-
-def _validate_transition(previous: AuthPhase | None, current: AuthPhase) -> None:
-    allowed: dict[AuthPhase | None, set[AuthPhase]] = {
-        None: {"waiting_for_browser", "waiting_for_approval", "checking"},
-        "waiting_for_browser": {"waiting_for_approval"},
-        "waiting_for_approval": {"checking"},
-        "checking": {"waiting_for_login", "connected", "disconnected"},
-        "waiting_for_login": {"checking"},
-        "connected": set(),
-        "disconnected": set(),
-    }
-    if current not in allowed[previous]:
-        raise _ProtocolError
-
-
-async def _drain(reader: _AsyncLineReader) -> None:
-    while await reader.readline():
-        pass
-
-
-async def _launch_process(command: tuple[str, ...], cwd: Path) -> ManagedProcess:
-    process = await asyncio.create_subprocess_exec(
-        *command,
-        cwd=cwd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        limit=MAX_CHILD_OUTPUT_LINE_BYTES,
-        start_new_session=os.name == "posix",
-    )
-    return cast(ManagedProcess, process)
-
-
-async def _terminate_owned_process_group(
-    process: ManagedProcess, grace_seconds: float
-) -> None:
-    if process.returncode is not None:
-        return
-
-    _send_process_group_signal(process, signal.SIGTERM)
-    try:
-        await asyncio.wait_for(
-            process.wait(),
-            timeout=grace_seconds,
-        )
-        return
-    except TimeoutError:
-        pass
-
-    _send_process_group_signal(process, signal.SIGKILL)
-    try:
-        await asyncio.wait_for(process.wait(), timeout=max(grace_seconds, 0.1))
-    except (ProcessLookupError, TimeoutError):
-        pass
-
-
-def _send_process_group_signal(process: ManagedProcess, sig: signal.Signals) -> None:
-    try:
-        if os.name == "posix":
-            os.killpg(process.pid, sig)
-        elif sig == signal.SIGTERM:
-            process.terminate()
-        else:
-            process.kill()
-    except ProcessLookupError:
-        pass
-    except OSError:
-        try:
-            if sig == signal.SIGTERM:
-                process.terminate()
-            else:
-                process.kill()
-        except ProcessLookupError:
-            pass
 
 
 def _default_media_crawler_dir() -> Path:
