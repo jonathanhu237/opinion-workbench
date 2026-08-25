@@ -197,7 +197,7 @@ function Sidebar({
         >
           <SheetHeader className="sr-only">
             <SheetTitle>主导航</SheetTitle>
-            <SheetDescription>显示龙田舆情值守功能导航。</SheetDescription>
+            <SheetDescription>显示舆情分析平台功能导航。</SheetDescription>
           </SheetHeader>
           <div className="flex h-full w-full flex-col">{children}</div>
         </SheetContent>

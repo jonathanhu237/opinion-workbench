@@ -64,10 +64,7 @@ function ProductIdentity() {
       <FourCommunityMark />
       <div className="min-w-0">
         <p className="font-display text-lg leading-none font-semibold tracking-[-0.03em] text-sidebar-foreground">
-          龙田舆情
-        </p>
-        <p className="mt-1.5 truncate text-[11px] tracking-[0.08em] text-sidebar-foreground/65">
-          四社区 · 本机值守
+          舆情分析平台
         </p>
       </div>
     </div>

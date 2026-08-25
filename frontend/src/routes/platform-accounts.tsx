@@ -9,13 +9,7 @@ import weiboLogo from '@/assets/platforms/weibo.svg'
 import xiaohongshuLogo from '@/assets/platforms/xiaohongshu.svg'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import {
   isPlatformConnectionActive,
   usePlatformConnections,
@@ -95,16 +89,16 @@ function rowRecoveryMessage(connection: PlatformConnection) {
     connection.status === 'action_required' &&
     connection.guidance === 'complete_login'
   ) {
-    return `请在当前打开的 Chrome 浏览器中登录${connection.display_name}，完成后系统会继续检测。`
+    return `请在当前打开的谷歌浏览器中登录${connection.display_name}，完成后系统会继续检测。`
   }
   if (connection.status === 'action_required') {
-    return `请在当前打开的 Chrome 浏览器中完成${connection.display_name}的操作，完成后系统会继续检测。`
+    return `请在当前打开的谷歌浏览器中完成${connection.display_name}的操作，完成后系统会继续检测。`
   }
   if (connection.status === 'disconnected') {
-    return `请在当前打开的 Chrome 浏览器中登录${connection.display_name}，然后重新检查。`
+    return `请在当前打开的谷歌浏览器中登录${connection.display_name}，然后重新检查。`
   }
   if (connection.status === 'failed') {
-    return `本次检查未通过。请在当前打开的 Chrome 浏览器中登录${connection.display_name}，然后重新检查。`
+    return `本次检查未通过。请在当前打开的谷歌浏览器中登录${connection.display_name}，然后重新检查。`
   }
   return null
 }
@@ -388,8 +382,7 @@ export function PlatformAccounts() {
           平台账号
         </h2>
         <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-          在这里查看各平台账号的登录状态。需要登录、扫码或安全验证时，请在打开的
-          Chrome 浏览器中完成。
+          在这里查看各平台账号的登录状态。需要登录、扫码或安全验证时，请在打开的谷歌浏览器中完成。
         </p>
       </section>
 
@@ -400,9 +393,6 @@ export function PlatformAccounts() {
               <CardTitle className="font-display text-xl font-semibold tracking-[-0.03em]">
                 登录状态
               </CardTitle>
-              <CardDescription className="mt-1.5 max-w-xl leading-5">
-                为避免浏览器操作相互影响，每次只能检查一个平台。
-              </CardDescription>
             </div>
             <div className="mt-3 flex min-w-0 items-center justify-between gap-3 sm:mt-0 sm:justify-end">
               {batchProgress && (

@@ -257,12 +257,8 @@ describe('Longtian public opinion application', () => {
     window.innerWidth = 375
     renderRoute()
 
-    await waitFor(() =>
-      expect(screen.queryByText('四社区 · 本机值守')).not.toBeInTheDocument(),
-    )
     await user.click(screen.getByRole('button', { name: '切换主导航' }))
     const dialog = await screen.findByRole('dialog', { name: '主导航' })
-    expect(within(dialog).getByText('四社区 · 本机值守')).toBeInTheDocument()
     const navigation = within(dialog).getByRole('navigation', {
       name: '主导航',
     })
@@ -313,9 +309,6 @@ describe('Longtian public opinion application', () => {
 
     renderRoute()
 
-    await waitFor(() =>
-      expect(screen.queryByText('四社区 · 本机值守')).not.toBeInTheDocument(),
-    )
     await user.click(screen.getByRole('button', { name: '切换主导航' }))
 
     expect(
@@ -331,13 +324,10 @@ describe('Longtian public opinion application', () => {
     ).toBeInTheDocument()
     expect(
       screen.getByText(
-        '在这里查看各平台账号的登录状态。需要登录、扫码或安全验证时，请在打开的 Chrome 浏览器中完成。',
+        '在这里查看各平台账号的登录状态。需要登录、扫码或安全验证时，请在打开的谷歌浏览器中完成。',
       ),
     ).toBeInTheDocument()
     expect(screen.getByText('登录状态', { exact: true })).toBeInTheDocument()
-    expect(
-      screen.getByText('为避免浏览器操作相互影响，每次只能检查一个平台。'),
-    ).toBeInTheDocument()
     expect(screen.queryByText('账号接入')).toBeNull()
     expect(screen.queryByText('本机浏览器通道')).toBeNull()
     expect(await screen.findByText('微博')).toBeInTheDocument()
@@ -384,7 +374,7 @@ describe('Longtian public opinion application', () => {
     ).toBeNull()
     expect(
       screen.queryByText(
-        'Chrome 出现授权、扫码或验证码时，请由你本人完成。系统不会读取密码，也不会自动绕过安全验证。',
+        '谷歌浏览器出现授权、扫码或验证码时，请由你本人完成。系统不会读取密码，也不会自动绕过安全验证。',
       ),
     ).toBeNull()
     expect(screen.queryByRole('alert')).toBeNull()
@@ -457,7 +447,7 @@ describe('Longtian public opinion application', () => {
       'complete_login',
       '需要操作',
       '处理中…',
-      '请在当前打开的 Chrome 浏览器中登录微博，完成后系统会继续检测。',
+      '请在当前打开的谷歌浏览器中登录微博，完成后系统会继续检测。',
     ],
     ['connected', 'none', '已登录', '重新检查', null],
     [
@@ -465,14 +455,14 @@ describe('Longtian public opinion application', () => {
       'retry',
       '未登录',
       '重新检查',
-      '请在当前打开的 Chrome 浏览器中登录微博，然后重新检查。',
+      '请在当前打开的谷歌浏览器中登录微博，然后重新检查。',
     ],
     [
       'failed',
       'retry',
       '检查失败',
       '重新检查',
-      '本次检查未通过。请在当前打开的 Chrome 浏览器中登录微博，然后重新检查。',
+      '本次检查未通过。请在当前打开的谷歌浏览器中登录微博，然后重新检查。',
     ],
   ] as const)(
     'renders the %s row status with contextual recovery guidance',
@@ -488,7 +478,7 @@ describe('Longtian public opinion application', () => {
         screen.getByRole('button', { name: actionLabel }),
       ).toBeInTheDocument()
       if (recoveryMessage === null) {
-        expect(screen.queryByText(/当前打开的 Chrome 浏览器/)).toBeNull()
+        expect(screen.queryByText(/当前打开的谷歌浏览器/)).toBeNull()
       } else {
         expect(screen.getByText(recoveryMessage)).toBeInTheDocument()
       }
@@ -570,13 +560,11 @@ describe('Longtian public opinion application', () => {
     )
     expect(
       screen.getByText(
-        '本次检查未通过。请在当前打开的 Chrome 浏览器中登录微博，然后重新检查。',
+        '本次检查未通过。请在当前打开的谷歌浏览器中登录微博，然后重新检查。',
       ),
     ).toBeInTheDocument()
     expect(
-      screen.getByText(
-        '请在当前打开的 Chrome 浏览器中登录抖音，然后重新检查。',
-      ),
+      screen.getByText('请在当前打开的谷歌浏览器中登录抖音，然后重新检查。'),
     ).toBeInTheDocument()
   })
 
@@ -709,7 +697,7 @@ describe('Longtian public opinion application', () => {
       await within(getConnectionPanel()).findByRole('alert'),
     ).toHaveTextContent('无法连接本机后端服务，请确认服务已经启动。')
     expect(screen.getByRole('button', { name: '一键检测' })).toBeEnabled()
-    expect(screen.queryByText(/Chrome 浏览器中登录/)).toBeNull()
+    expect(screen.queryByText(/谷歌浏览器中登录/)).toBeNull()
     expect(mockedStartAttempt).toHaveBeenCalledTimes(1)
   })
 
