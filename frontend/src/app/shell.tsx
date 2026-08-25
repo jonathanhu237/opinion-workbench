@@ -1,27 +1,16 @@
-import {
-  CircleUserRound,
-  FileClock,
-  FileSearch,
-  ListChecks,
-  MessageSquareText,
-  Settings2,
-  SlidersHorizontal,
-} from 'lucide-react'
-import { useEffect, useReducer, useRef, type ComponentType } from 'react'
+import { CircleUserRound, SlidersHorizontal } from 'lucide-react'
+import { useEffect, useReducer, useRef } from 'react'
 import { NavLink, Outlet, useLocation, useOutletContext } from 'react-router'
 
-import { Button } from '@/components/ui/button'
 import {
   Sidebar,
   SidebarContent,
-  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
   SidebarGroupLabel,
   SidebarHeader,
   SidebarInset,
   SidebarMenu,
-  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,
@@ -30,7 +19,6 @@ import {
   useSidebar,
 } from '@/components/ui/sidebar'
 import { fetchHealth, type HealthResponse } from '@/lib/api/health'
-import { cn } from '@/lib/utils'
 
 export type HealthState =
   | { status: 'loading' }
@@ -44,23 +32,8 @@ type HealthAction =
 
 type ShellContext = {
   healthState: HealthState
+  retryHealth: () => void
 }
-
-type NavigationItem = {
-  label: string
-  icon: ComponentType<{ className?: string; 'aria-hidden'?: boolean }>
-  to?: string
-}
-
-const navigationItems: NavigationItem[] = [
-  { label: '工作台', icon: SlidersHorizontal, to: '/' },
-  { label: '平台账号', icon: CircleUserRound, to: '/platform-accounts' },
-  { label: '采集任务', icon: ListChecks },
-  { label: '舆情信息', icon: MessageSquareText },
-  { label: '监控关键词', icon: FileSearch },
-  { label: '舆情日报', icon: FileClock },
-  { label: '系统设置', icon: Settings2 },
-]
 
 function healthReducer(_state: HealthState, action: HealthAction): HealthState {
   switch (action.type) {
@@ -105,103 +78,48 @@ function PrimaryNavigation() {
   const location = useLocation()
   const { setOpenMobile } = useSidebar()
 
+  const navigationItems = [
+    {
+      label: '工作台',
+      to: '/',
+      icon: SlidersHorizontal,
+      isActive: location.pathname === '/',
+    },
+    {
+      label: '平台账号',
+      to: '/platform-accounts',
+      icon: CircleUserRound,
+      isActive: location.pathname === '/platform-accounts',
+    },
+  ] as const
+
   return (
     <nav aria-label="主导航">
       <SidebarMenu>
         {navigationItems.map((item) => {
           const Icon = item.icon
 
-          if (item.to !== undefined) {
-            const isActive =
-              item.to === '/'
-                ? location.pathname === '/'
-                : location.pathname === item.to
-
-            return (
-              <SidebarMenuItem key={item.label}>
-                <SidebarMenuButton
-                  render={
-                    <NavLink
-                      to={item.to}
-                      end={item.to === '/'}
-                      onClick={() => setOpenMobile(false)}
-                    />
-                  }
-                  isActive={isActive}
-                  className="min-h-11 gap-3 rounded-lg px-3 text-sidebar-foreground/78 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground md:min-h-10 data-active:bg-sidebar-primary data-active:text-sidebar-primary-foreground data-active:shadow-[inset_3px_0_0_var(--sidebar-ring)]"
-                >
-                  <Icon className="size-4" aria-hidden />
-                  <span>{item.label}</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            )
-          }
-
           return (
-            <SidebarMenuItem key={item.label}>
+            <SidebarMenuItem key={item.to}>
               <SidebarMenuButton
-                type="button"
-                disabled
-                className="min-h-11 gap-3 rounded-lg px-3 text-sidebar-foreground/60 disabled:opacity-100 md:min-h-10"
+                render={
+                  <NavLink
+                    to={item.to}
+                    end={item.to === '/'}
+                    onClick={() => setOpenMobile(false)}
+                  />
+                }
+                isActive={item.isActive}
+                className="min-h-11 gap-3 rounded-lg px-3 text-sidebar-foreground/78 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground md:min-h-10 data-active:bg-sidebar-primary data-active:text-sidebar-primary-foreground data-active:shadow-[inset_3px_0_0_var(--sidebar-ring)]"
               >
                 <Icon className="size-4" aria-hidden />
                 <span>{item.label}</span>
               </SidebarMenuButton>
-              <SidebarMenuBadge className="right-2 rounded-full border border-sidebar-border px-1.5 text-[10px] font-normal text-sidebar-foreground/65">
-                规划中
-              </SidebarMenuBadge>
             </SidebarMenuItem>
           )
         })}
       </SidebarMenu>
     </nav>
-  )
-}
-
-function LocalServiceStatus({
-  state,
-  onRetry,
-}: {
-  state: HealthState
-  onRetry: () => void
-}) {
-  const label =
-    state.status === 'loading'
-      ? '服务检测中'
-      : state.status === 'connected'
-        ? '服务正常'
-        : '服务异常'
-
-  return (
-    <div
-      className="flex min-h-11 items-center gap-2 rounded-full border border-border bg-card py-1 pr-1 pl-3 shadow-[0_8px_24px_-20px_rgba(13,59,58,0.7)] md:min-h-8"
-      role={state.status === 'unavailable' ? 'alert' : 'status'}
-      aria-live="polite"
-      title={state.status === 'unavailable' ? state.message : undefined}
-    >
-      <span
-        className={cn(
-          'size-2 rounded-full bg-muted-foreground',
-          state.status === 'connected' && 'bg-live',
-          state.status === 'unavailable' && 'bg-warning',
-        )}
-        aria-hidden="true"
-      />
-      <span className="text-xs whitespace-nowrap text-muted-foreground">
-        {label}
-      </span>
-      {state.status === 'unavailable' && (
-        <Button
-          type="button"
-          size="xs"
-          variant="ghost"
-          className="min-h-9 px-2 md:min-h-6"
-          onClick={onRetry}
-        >
-          重试
-        </Button>
-      )}
-    </div>
   )
 }
 
@@ -215,8 +133,8 @@ export function AppShell() {
   const [healthState, dispatch] = useReducer(healthReducer, {
     status: 'loading',
   })
-  const [checkSequence, requestCheck] = useReducer(
-    (value: number) => value + 1,
+  const [healthCheckSequence, retryHealth] = useReducer(
+    (sequence: number) => sequence + 1,
     0,
   )
 
@@ -241,7 +159,7 @@ export function AppShell() {
       })
 
     return () => controller.abort()
-  }, [checkSequence])
+  }, [healthCheckSequence])
 
   useEffect(() => {
     if (previousPath.current === location.pathname) {
@@ -283,14 +201,6 @@ export function AppShell() {
             </SidebarGroupContent>
           </SidebarGroup>
         </SidebarContent>
-        <SidebarSeparator />
-        <SidebarFooter className="px-5 py-5">
-          <p className="text-xs leading-5 text-sidebar-foreground/56">
-            单机值守模式
-            <br />
-            数据与浏览器操作仅留在本机
-          </p>
-        </SidebarFooter>
       </Sidebar>
 
       <SidebarInset
@@ -316,14 +226,12 @@ export function AppShell() {
               {pageTitle}
             </h1>
           </div>
-
-          <div className="ml-auto">
-            <LocalServiceStatus state={healthState} onRetry={requestCheck} />
-          </div>
         </header>
 
         <div className="mx-auto w-full max-w-[92rem] p-4 sm:p-6 lg:p-8">
-          <Outlet context={{ healthState } satisfies ShellContext} />
+          <Outlet
+            context={{ healthState, retryHealth } satisfies ShellContext}
+          />
         </div>
       </SidebarInset>
     </SidebarProvider>

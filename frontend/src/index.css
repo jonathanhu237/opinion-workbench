@@ -159,11 +159,6 @@ a {
     0 0 0 0.32rem color-mix(in srgb, var(--live) 10%, transparent);
 }
 
-.duty-ledger {
-  border-top: 3px solid var(--primary);
-  box-shadow: 0 22px 56px -48px rgba(13, 59, 58, 0.72);
-}
-
 .connection-panel {
   overflow: hidden;
   width: 100%;
@@ -261,11 +256,6 @@ a {
   border: 1px solid color-mix(in srgb, var(--primary) 22%, var(--border));
   border-radius: 0.7rem;
   background: color-mix(in srgb, var(--secondary) 70%, var(--card));
-  color: var(--primary);
-  font-family: var(--font-utility);
-  font-size: 0.64rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
 }
 
 .signal-loader {

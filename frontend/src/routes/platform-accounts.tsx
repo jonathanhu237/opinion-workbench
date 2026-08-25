@@ -1,7 +1,12 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { useAppShell } from '@/app/shell'
+import douyinLogo from '@/assets/platforms/douyin.svg'
+import kuaishouLogo from '@/assets/platforms/kuaishou.svg'
+import toutiaoLogo from '@/assets/platforms/toutiao.svg'
+import weiboLogo from '@/assets/platforms/weibo.svg'
+import xiaohongshuLogo from '@/assets/platforms/xiaohongshu.svg'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -11,7 +16,6 @@ import {
   CardHeader,
   CardTitle,
 } from '@/components/ui/card'
-import { Separator } from '@/components/ui/separator'
 import {
   isPlatformConnectionActive,
   usePlatformConnections,
@@ -26,21 +30,21 @@ import {
 } from '@/lib/api/platform-connections'
 import { cn } from '@/lib/utils'
 
-const platformMarks: Record<PlatformId, string> = {
-  wb: 'WB',
-  dy: 'DY',
-  ks: 'KS',
-  xhs: 'RED',
-  toutiao: 'TT',
+const platformLogos: Record<PlatformId, string> = {
+  wb: weiboLogo,
+  dy: douyinLogo,
+  ks: kuaishouLogo,
+  xhs: xiaohongshuLogo,
+  toutiao: toutiaoLogo,
 }
 
 const statusLabels: Record<PlatformConnectionStatus, string> = {
-  not_checked: '待检测',
-  checking: '检测中',
-  action_required: '需要人工操作',
-  connected: '已连接',
-  disconnected: '未连接',
-  failed: '检测失败',
+  not_checked: '待检查',
+  checking: '检查中',
+  action_required: '需要操作',
+  connected: '已登录',
+  disconnected: '未登录',
+  failed: '检查失败',
   coming_soon: '待接入',
 }
 
@@ -64,10 +68,10 @@ function statusBadgeClass(status: PlatformConnectionStatus) {
 
 function formatLastChecked(timestamp: string | null) {
   if (timestamp === null) {
-    return '尚未检测'
+    return '尚未检查'
   }
 
-  return `上次检测 ${new Intl.DateTimeFormat('zh-CN', {
+  return `上次检查 ${new Intl.DateTimeFormat('zh-CN', {
     month: '2-digit',
     day: '2-digit',
     hour: '2-digit',
@@ -76,68 +80,42 @@ function formatLastChecked(timestamp: string | null) {
   }).format(new Date(timestamp))}`
 }
 
-function guidanceFor(connection: PlatformConnection | undefined) {
-  if (connection === undefined) {
-    return '正在读取平台连接状态…'
-  }
-
-  switch (connection.guidance) {
-    case 'enable_remote_debugging':
-      return 'Chrome 已打开远程调试设置，请在其中启用本机调试连接。'
-    case 'approve_connection':
-      return '请在 Chrome 中批准本机连接，然后保留浏览器窗口。'
-    case 'complete_login':
-      return `请在 Chrome 的${connection.display_name}官方页面完成扫码、短信或安全验证。`
-    case 'retry':
-      return '本次检测未完成。确认 Chrome 可用后，可以重新检测。'
-    case 'none':
-      break
-  }
-
-  switch (connection.status) {
-    case 'not_checked':
-      return `先检测${connection.display_name}是否仍然登录。需要登录时，系统会把操作交给可见的 Chrome。`
-    case 'checking':
-      return `正在检查${connection.display_name}登录状态，请暂时保留 Chrome 窗口。`
-    case 'connected':
-      return `${connection.display_name}账号已通过在线检测，可以继续准备后续采集功能。`
-    case 'disconnected':
-      return `${connection.display_name}尚未连接。重新检测后，请在可见的 Chrome 中完成登录。`
-    case 'failed':
-      return '连接检测遇到技术问题。确认本机 Chrome 可用后重新检测。'
-    case 'action_required':
-      return `请按 Chrome 中${connection.display_name}官方页面的提示完成当前操作。`
-    case 'coming_soon':
-      return '该平台将在后续版本中接入。'
-  }
-}
-
-function relevantConnection(platforms: PlatformConnection[]) {
-  const enabled = platforms.filter(
-    (connection) => connection.availability === 'enabled',
-  )
-  const active = enabled.find(isPlatformConnectionActive)
-  if (active !== undefined) {
-    return active
-  }
-
-  const lastChecked = enabled
-    .filter((connection) => connection.last_checked_at !== null)
-    .sort((left, right) =>
-      (right.last_checked_at ?? '').localeCompare(left.last_checked_at ?? ''),
-    )[0]
-
-  return lastChecked ?? enabled[0]
-}
-
 function attemptButtonLabel(status: PlatformConnectionStatus) {
   if (status === 'checking' || status === 'action_required') {
     return '处理中…'
   }
   if (status === 'not_checked') {
-    return '检测连接'
+    return '检查状态'
   }
-  return '重新检测'
+  return '重新检查'
+}
+
+function rowRecoveryMessage(connection: PlatformConnection) {
+  if (
+    connection.status === 'action_required' &&
+    connection.guidance === 'complete_login'
+  ) {
+    return `请在当前打开的 Chrome 浏览器中登录${connection.display_name}，完成后系统会继续检测。`
+  }
+  if (connection.status === 'action_required') {
+    return `请在当前打开的 Chrome 浏览器中完成${connection.display_name}的操作，完成后系统会继续检测。`
+  }
+  if (connection.status === 'disconnected') {
+    return `请在当前打开的 Chrome 浏览器中登录${connection.display_name}，然后重新检查。`
+  }
+  if (connection.status === 'failed') {
+    return `本次检查未通过。请在当前打开的 Chrome 浏览器中登录${connection.display_name}，然后重新检查。`
+  }
+  return null
+}
+
+type BatchPlatform = Pick<PlatformConnection, 'platform' | 'display_name'>
+
+type BatchDetection = {
+  runId: number
+  platforms: BatchPlatform[]
+  currentIndex: number
+  phase: 'starting' | 'waiting'
 }
 
 type PlatformRowProps = {
@@ -156,6 +134,7 @@ function PlatformRow({
   const active = isPlatformConnectionActive(connection)
   const actionable = connection.availability === 'enabled'
   const disabled = operationActive || !serviceAvailable
+  const recoveryMessage = rowRecoveryMessage(connection)
 
   return (
     <li
@@ -163,18 +142,30 @@ function PlatformRow({
       data-status={connection.status}
     >
       <span className="platform-node" aria-hidden="true" />
-      <div className="platform-identity">
-        <span className="platform-mark" aria-hidden="true">
-          {platformMarks[connection.platform]}
-        </span>
-        <div className="min-w-0">
-          <p className="font-semibold text-foreground">
-            {connection.display_name}
-          </p>
-          <p className="mt-1 font-utility text-[10px] tracking-[0.08em] text-muted-foreground uppercase">
-            {formatLastChecked(connection.last_checked_at)}
-          </p>
+      <div className="min-w-0">
+        <div className="platform-identity">
+          <span className="platform-mark" aria-hidden="true">
+            <img
+              src={platformLogos[connection.platform]}
+              alt=""
+              aria-hidden="true"
+              className="size-6 object-contain"
+            />
+          </span>
+          <div className="min-w-0">
+            <p className="font-semibold text-foreground">
+              {connection.display_name}
+            </p>
+            <p className="mt-1 font-utility text-[10px] tracking-[0.08em] text-muted-foreground uppercase">
+              {formatLastChecked(connection.last_checked_at)}
+            </p>
+          </div>
         </div>
+        {recoveryMessage && (
+          <p className="mt-2 pl-[3.55rem] text-xs leading-5 text-muted-foreground">
+            {recoveryMessage}
+          </p>
+        )}
       </div>
 
       <div className="flex items-center justify-between gap-3 sm:justify-end">
@@ -206,9 +197,14 @@ function PlatformRow({
 }
 
 export function PlatformAccounts() {
-  const { healthState } = useAppShell()
+  const { healthState, retryHealth } = useAppShell()
   const queryClient = useQueryClient()
   const attemptController = useRef<AbortController | null>(null)
+  const batchRunSequence = useRef(0)
+  const launchedBatchStep = useRef<string | null>(null)
+  const [batchDetection, setBatchDetection] = useState<BatchDetection | null>(
+    null,
+  )
   const connectionsQuery = usePlatformConnections()
   const attemptMutation = useMutation({
     mutationFn: (platform: PlatformId) => {
@@ -250,25 +246,44 @@ export function PlatformAccounts() {
   )
 
   const platforms = connectionsQuery.data?.platforms ?? []
-  const operationActive =
+  const enabledPlatforms = platforms.filter(
+    (connection) => connection.availability === 'enabled',
+  )
+  const platformOperationActive =
     attemptMutation.isPending || platforms.some(isPlatformConnectionActive)
+  const operationActive = batchDetection !== null || platformOperationActive
   const mutationMessage =
     attemptMutation.error instanceof PlatformConnectionApiError
       ? attemptMutation.error.message
       : attemptMutation.error instanceof Error
-        ? '连接任务未能启动，请重新尝试。'
+        ? '检查未能启动，请重新尝试。'
         : null
   const queryMessage = connectionsQuery.error
     ? connectionsQuery.error instanceof PlatformConnectionApiError
       ? connectionsQuery.error.message
-      : '平台状态暂时无法读取。'
+      : '登录状态暂时无法读取。'
     : null
-  const currentGuidance =
-    mutationMessage ??
-    queryMessage ??
-    (healthState.status === 'unavailable'
+  const healthMessage =
+    healthState.status === 'unavailable'
       ? '本机服务不可用。请确认 FastAPI 已在 127.0.0.1:8000 启动。'
-      : guidanceFor(relevantConnection(platforms)))
+      : null
+  const panelAlertMessage =
+    platforms.length > 0
+      ? (mutationMessage ?? queryMessage ?? healthMessage)
+      : null
+
+  const currentBatchPlatform =
+    batchDetection?.platforms[batchDetection.currentIndex]
+  const batchProgress =
+    batchDetection !== null && currentBatchPlatform !== undefined
+      ? `正在检测${currentBatchPlatform.display_name} · ${batchDetection.currentIndex + 1}/${batchDetection.platforms.length}`
+      : ''
+  const batchUnavailable =
+    healthState.status !== 'connected' ||
+    connectionsQuery.isPending ||
+    connectionsQuery.error !== null ||
+    enabledPlatforms.length === 0 ||
+    operationActive
 
   const startAttempt = (platform: PlatformId) => {
     if (operationActive || healthState.status !== 'connected') {
@@ -278,35 +293,138 @@ export function PlatformAccounts() {
     attemptMutation.mutate(platform)
   }
 
+  const startBatchDetection = () => {
+    if (batchUnavailable) {
+      return
+    }
+
+    attemptMutation.reset()
+    batchRunSequence.current += 1
+    setBatchDetection({
+      runId: batchRunSequence.current,
+      platforms: enabledPlatforms.map(({ platform, display_name }) => ({
+        platform,
+        display_name,
+      })),
+      currentIndex: 0,
+      phase: 'starting',
+    })
+  }
+
+  const mutateAttempt = attemptMutation.mutate
+  const resetAttempt = attemptMutation.reset
+
+  useEffect(() => {
+    if (batchDetection === null) {
+      return
+    }
+
+    const current = batchDetection.platforms[batchDetection.currentIndex]
+    if (current === undefined) {
+      setBatchDetection(null)
+      return
+    }
+
+    if (batchDetection.phase === 'starting') {
+      const stepKey = `${batchDetection.runId}:${batchDetection.currentIndex}`
+      if (launchedBatchStep.current === stepKey) {
+        return
+      }
+
+      launchedBatchStep.current = stepKey
+      resetAttempt()
+      mutateAttempt(current.platform, {
+        onSuccess: () => {
+          setBatchDetection((activeBatch) =>
+            activeBatch?.runId === batchDetection.runId &&
+            activeBatch.currentIndex === batchDetection.currentIndex
+              ? { ...activeBatch, phase: 'waiting' }
+              : activeBatch,
+          )
+        },
+        onError: () => {
+          setBatchDetection((activeBatch) =>
+            activeBatch?.runId === batchDetection.runId ? null : activeBatch,
+          )
+        },
+      })
+      return
+    }
+
+    const currentConnection = platforms.find(
+      (connection) => connection.platform === current.platform,
+    )
+    if (
+      currentConnection === undefined ||
+      isPlatformConnectionActive(currentConnection)
+    ) {
+      return
+    }
+
+    setBatchDetection((activeBatch) => {
+      if (
+        activeBatch?.runId !== batchDetection.runId ||
+        activeBatch.currentIndex !== batchDetection.currentIndex
+      ) {
+        return activeBatch
+      }
+
+      const nextIndex = activeBatch.currentIndex + 1
+      return nextIndex < activeBatch.platforms.length
+        ? { ...activeBatch, currentIndex: nextIndex, phase: 'starting' }
+        : null
+    })
+  }, [batchDetection, mutateAttempt, platforms, resetAttempt])
+
+  const retryPlatformState = () => {
+    retryHealth()
+    void connectionsQuery.refetch()
+  }
+
   return (
     <div className="space-y-5">
       <section>
-        <p className="text-xs font-medium tracking-[0.12em] text-primary">
-          账号接入
-        </p>
-        <h2 className="mt-1.5 font-display text-2xl font-semibold tracking-[-0.035em] text-foreground sm:text-[1.75rem]">
-          平台账号连接
+        <h2 className="font-display text-2xl font-semibold tracking-[-0.035em] text-foreground sm:text-[1.75rem]">
+          平台账号
         </h2>
         <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-          检测平台账号能否在本机 Chrome
-          中继续使用。登录、扫码、短信和安全验证都由你在可见浏览器中完成。
+          在这里查看各平台账号的登录状态。需要登录、扫码或安全验证时，请在打开的
+          Chrome 浏览器中完成。
         </p>
       </section>
 
-      <section className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_20rem]">
-        <Card className="connection-panel self-start bg-card/94">
-          <CardHeader className="border-b border-border/75 sm:grid-cols-[1fr_auto]">
+      <section>
+        <Card className="connection-panel bg-card/94">
+          <CardHeader className="border-b border-border/75 sm:grid-cols-[minmax(0,1fr)_auto]">
             <div>
-              <p className="text-[10px] tracking-[0.14em] text-muted-foreground">
-                本机浏览器通道
-              </p>
-              <CardTitle className="mt-1.5 font-display text-xl font-semibold tracking-[-0.03em]">
-                平台连接信号
+              <CardTitle className="font-display text-xl font-semibold tracking-[-0.03em]">
+                登录状态
               </CardTitle>
+              <CardDescription className="mt-1.5 max-w-xl leading-5">
+                为避免浏览器操作相互影响，每次只能检查一个平台。
+              </CardDescription>
             </div>
-            <CardDescription className="max-w-64 leading-5 sm:text-right">
-              共用一个本机浏览器通道，同一时间只运行一个连接任务。
-            </CardDescription>
+            <div className="mt-3 flex min-w-0 items-center justify-between gap-3 sm:mt-0 sm:justify-end">
+              {batchProgress && (
+                <div
+                  role="status"
+                  aria-live="polite"
+                  aria-atomic="true"
+                  className="text-xs text-muted-foreground"
+                >
+                  {batchProgress}
+                </div>
+              )}
+              <Button
+                type="button"
+                size="sm"
+                className="ml-auto min-h-11 min-w-24 sm:min-h-7"
+                disabled={batchUnavailable}
+                onClick={startBatchDetection}
+              >
+                {batchDetection === null ? '一键检测' : '检测中…'}
+              </Button>
+            </div>
           </CardHeader>
 
           {connectionsQuery.isPending && (
@@ -317,7 +435,7 @@ export function PlatformAccounts() {
                   aria-hidden="true"
                 />
                 <p className="mt-4 text-sm text-muted-foreground">
-                  正在读取平台状态…
+                  正在读取登录状态…
                 </p>
               </div>
             </CardContent>
@@ -330,7 +448,7 @@ export function PlatformAccounts() {
                   variant="outline"
                   className="border-warning/30 text-warning-foreground"
                 >
-                  状态读取失败
+                  读取失败
                 </Badge>
                 <p className="mt-4 text-sm leading-6 text-foreground">
                   {queryMessage}
@@ -342,7 +460,7 @@ export function PlatformAccounts() {
                   type="button"
                   size="sm"
                   className="mt-5 min-h-11 sm:min-h-7"
-                  onClick={() => void connectionsQuery.refetch()}
+                  onClick={retryPlatformState}
                 >
                   重新读取
                 </Button>
@@ -350,8 +468,18 @@ export function PlatformAccounts() {
             </CardContent>
           )}
 
+          {panelAlertMessage && (
+            <div
+              className="border-b border-warning/20 bg-warning/8 px-4 py-3 text-sm leading-6 text-foreground sm:px-6"
+              role="alert"
+              aria-live="assertive"
+            >
+              {panelAlertMessage}
+            </div>
+          )}
+
           {platforms.length > 0 && (
-            <ol className="platform-bus" aria-label="平台账号连接状态">
+            <ol className="platform-bus" aria-label="平台账号登录状态">
               {platforms.map((connection) => (
                 <PlatformRow
                   key={connection.platform}
@@ -363,30 +491,6 @@ export function PlatformAccounts() {
               ))}
             </ol>
           )}
-        </Card>
-
-        <Card className="self-start bg-card/90 xl:sticky xl:top-20">
-          <CardHeader>
-            <CardTitle>当前操作指引</CardTitle>
-            <CardDescription>
-              系统只会打开官方页面并检测登录状态。
-            </CardDescription>
-          </CardHeader>
-          <Separator />
-          <CardContent>
-            <div
-              className="min-h-20 text-sm leading-6 text-foreground"
-              role={mutationMessage ? 'alert' : 'status'}
-              aria-live="polite"
-              aria-atomic="true"
-            >
-              {currentGuidance}
-            </div>
-            <div className="mt-5 rounded-lg bg-secondary/65 p-3 text-xs leading-5 text-muted-foreground">
-              Chrome
-              出现授权、扫码或验证码时，请由你本人完成。系统不会读取密码，也不会自动绕过安全验证。
-            </div>
-          </CardContent>
         </Card>
       </section>
     </div>

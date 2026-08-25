@@ -80,6 +80,9 @@ frontend/
 
 > **Warning**: shadcn resolves aliases through the root TypeScript configuration. If `@/*` exists only in `tsconfig.app.json`, the CLI can create a literal `frontend/@/` directory. Run `pnpm dlx shadcn info` after alias changes and require the resolved UI path to be `frontend/src/components/ui` before adding components.
 
-> **Warning**: A future module named in the navigation is not a route. Until it has real behavior,
-> render it as disabled with an explicit `规划中` label; do not add an empty link or placeholder
-> route that implies the module works.
+> **Warning**: A future feature named in product plans is not a navigation destination. Do not add
+> disabled `规划中` controls, empty feature links, or placeholder routes before real behavior exists.
+> The root `Workbench` is the deliberate exception: it is the stable application home and may
+> return `null` while the shell continues to provide the visible `工作台` title and accessible main
+> label. Tests must assert that `/` does not redirect and that the route renders no speculative
+> metrics, cards, copy, or data requests.

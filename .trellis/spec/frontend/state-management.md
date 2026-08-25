@@ -42,6 +42,22 @@ Valid future candidates might include a cross-route upload queue or an unsaved m
 - URL-addressable filters remain in React Router even when they also participate in a query key.
 - Network policy, API base URL, and response validation belong in `lib/api/`, not in generic providers.
 
+### Sequencing exclusive browser operations
+
+Platform authentication uses one browser operation at a time. A page-level batch action must keep
+only its queue and progress as ephemeral React state, invoke the existing per-platform TanStack
+Query mutation in catalog order, and let the shared platform query remain authoritative for each
+attempt's progress and result.
+
+- Do not start the next platform when the POST is merely pending or by inspecting a terminal value
+  left over from an earlier check. First accept the new attempt, then wait until the polled platform
+  projection leaves `checking` / `action_required` and reaches a terminal state.
+- Keep competing row actions disabled while the batch exists; never overlap browser attempts.
+- If an attempt request cannot start, end the local batch and preserve the technical API error. Do
+  not reinterpret service, protocol, or conflict errors as an account-login failure.
+- Test catalog order, non-overlap, the `checking -> action_required -> terminal` path, request-start
+  failure recovery, unavailable catalog entries, and unchanged single-platform behavior.
+
 ---
 
 ## Common Mistakes
