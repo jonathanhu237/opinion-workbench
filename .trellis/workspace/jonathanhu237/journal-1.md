@@ -238,3 +238,24 @@ Added the Xiaohongshu borrowed-Chrome account connection across the MediaCrawler
 ### Status
 
 [OK] **Completed**
+
+
+## Session 12: Platform account workspace
+
+**Date**: 2026-08-25
+**Task**: Platform account workspace
+**Branch**: `main`
+
+### Summary
+
+Simplified navigation to an empty workbench and platform accounts, added local platform logos, natural Chinese copy, batch login detection, contextual recovery guidance, and frontend state-management contracts.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `7be853e` | (see git log) |
+
+### Status
+
+[OK] **Completed**
