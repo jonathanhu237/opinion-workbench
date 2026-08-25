@@ -1,6 +1,7 @@
 # Local runtime data (user-owned)
 /db_data/
 /logs/
+/runtime/
 
 # Frontend dependencies, output, caches, and local environment
 /frontend/node_modules/

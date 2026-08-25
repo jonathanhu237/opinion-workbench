@@ -1,10 +1,19 @@
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 from longtian_api.main import create_app
+from longtian_api.services.monitoring_rules import MonitoringRuleService
 
 
-def test_health_returns_stable_contract() -> None:
-    with TestClient(create_app()) as client:
+def test_health_returns_stable_contract(tmp_path: Path) -> None:
+    with TestClient(
+        create_app(
+            monitoring_rule_service_factory=lambda: MonitoringRuleService(
+                database_path=tmp_path / "health.sqlite3"
+            )
+        )
+    ) as client:
         response = client.get("/api/v1/health")
 
     assert response.status_code == 200

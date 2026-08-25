@@ -1,4 +1,4 @@
-import { CircleUserRound, SlidersHorizontal } from 'lucide-react'
+import { CircleUserRound, ListChecks, SlidersHorizontal } from 'lucide-react'
 import { useEffect, useReducer, useRef } from 'react'
 import { NavLink, Outlet, useLocation, useOutletContext } from 'react-router'
 
@@ -33,6 +33,12 @@ type HealthAction =
 type ShellContext = {
   healthState: HealthState
   retryHealth: () => void
+}
+
+const pageTitles: Record<string, string> = {
+  '/': '工作台',
+  '/platform-accounts': '平台账号',
+  '/monitoring-rules': '监控规则',
 }
 
 function healthReducer(_state: HealthState, action: HealthAction): HealthState {
@@ -87,6 +93,12 @@ function PrimaryNavigation() {
       to: '/platform-accounts',
       icon: CircleUserRound,
       isActive: location.pathname === '/platform-accounts',
+    },
+    {
+      label: '监控规则',
+      to: '/monitoring-rules',
+      icon: ListChecks,
+      isActive: location.pathname === '/monitoring-rules',
     },
   ] as const
 
@@ -167,8 +179,7 @@ export function AppShell() {
     document.getElementById('main-content')?.focus()
   }, [location.pathname])
 
-  const pageTitle =
-    location.pathname === '/platform-accounts' ? '平台账号' : '工作台'
+  const pageTitle = pageTitles[location.pathname] ?? '当前页面'
 
   return (
     <SidebarProvider>

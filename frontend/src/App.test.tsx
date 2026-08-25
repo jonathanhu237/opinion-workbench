@@ -18,6 +18,10 @@ import {
   type HealthResponse,
 } from './lib/api/health'
 import {
+  fetchMonitoringRules,
+  type MonitoringRulesResponse,
+} from './lib/api/monitoring-rules'
+import {
   fetchPlatformConnections,
   PlatformConnectionApiError,
   startPlatformConnectionAttempt,
@@ -45,9 +49,29 @@ vi.mock('./lib/api/platform-connections', async (importOriginal) => {
   }
 })
 
+vi.mock('./lib/api/monitoring-rules', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('./lib/api/monitoring-rules')>()
+
+  return {
+    ...actual,
+    fetchMonitoringRules: vi.fn(),
+  }
+})
+
 const connectedResponse: HealthResponse = {
   status: 'ok',
   service: HEALTH_SERVICE,
+}
+const monitoringRulesResponse: MonitoringRulesResponse = {
+  rules: [
+    {
+      id: 1,
+      name: '龙田街道及四个社区',
+      terms: ['龙田街道', '龙田社区', '老坑社区', '竹坑社区', '南布社区'],
+      enabled: true,
+    },
+  ],
 }
 const attemptId = '2efb05b0-b1f7-4bbb-8b9f-9effa11cd355'
 
@@ -102,6 +126,7 @@ function catalog(
 const mockedFetchHealth = vi.mocked(fetchHealth)
 const mockedFetchPlatformConnections = vi.mocked(fetchPlatformConnections)
 const mockedStartAttempt = vi.mocked(startPlatformConnectionAttempt)
+const mockedFetchMonitoringRules = vi.mocked(fetchMonitoringRules)
 const defaultMatchMedia = window.matchMedia
 
 function renderRoute(initialEntry = '/') {
@@ -145,8 +170,10 @@ describe('Longtian public opinion application', () => {
     mockedFetchHealth.mockReset()
     mockedFetchPlatformConnections.mockReset()
     mockedStartAttempt.mockReset()
+    mockedFetchMonitoringRules.mockReset()
     mockedFetchHealth.mockResolvedValue(connectedResponse)
     mockedFetchPlatformConnections.mockResolvedValue(catalog())
+    mockedFetchMonitoringRules.mockResolvedValue(monitoringRulesResponse)
   })
 
   it('renders the empty workbench home through the application providers', () => {
@@ -162,9 +189,10 @@ describe('Longtian public opinion application', () => {
     expect(screen.queryByText('值守启用顺序')).toBeNull()
     expect(screen.queryByText('今日采集')).toBeNull()
     expect(mockedFetchPlatformConnections).not.toHaveBeenCalled()
+    expect(mockedFetchMonitoringRules).not.toHaveBeenCalled()
   })
 
-  it('keeps only the two real navigation destinations and marks them exactly', async () => {
+  it('keeps only the three real navigation destinations and marks them exactly', async () => {
     const user = userEvent.setup()
     const { router } = renderRoute()
 
@@ -174,10 +202,11 @@ describe('Longtian public opinion application', () => {
     ).toBeInTheDocument()
     const navigation = screen.getByRole('navigation', { name: '主导航' })
     const links = within(navigation).getAllByRole('link')
-    expect(links).toHaveLength(2)
+    expect(links).toHaveLength(3)
     expect(links.map((link) => link.textContent)).toEqual([
       '工作台',
       '平台账号',
+      '监控规则',
     ])
     const workbenchLink = within(navigation).getByRole('link', {
       name: '工作台',
@@ -185,8 +214,12 @@ describe('Longtian public opinion application', () => {
     const platformAccountsLink = within(navigation).getByRole('link', {
       name: '平台账号',
     })
+    const monitoringRulesLink = within(navigation).getByRole('link', {
+      name: '监控规则',
+    })
     expect(workbenchLink).toHaveAttribute('aria-current', 'page')
     expect(platformAccountsLink).not.toHaveAttribute('aria-current')
+    expect(monitoringRulesLink).not.toHaveAttribute('aria-current')
     for (const label of [
       '采集任务',
       '舆情信息',
@@ -214,6 +247,23 @@ describe('Longtian public opinion application', () => {
     expect(platformAccountsLink).toHaveAttribute('aria-current', 'page')
     expect(workbenchLink).not.toHaveAttribute('aria-current')
     expect(screen.getByRole('main')).toHaveAccessibleName('平台账号')
+    expect(screen.getByRole('main')).toHaveFocus()
+
+    await user.click(within(navigation).getByRole('link', { name: '监控规则' }))
+
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe('/monitoring-rules'),
+    )
+    expect(
+      await screen.findByRole('heading', { name: '监控规则', level: 1 }),
+    ).toBeInTheDocument()
+    expect(
+      within(navigation).getByRole('link', { name: '监控规则' }),
+    ).toHaveAttribute('aria-current', 'page')
+    expect(
+      within(navigation).getByRole('link', { name: '平台账号' }),
+    ).not.toHaveAttribute('aria-current')
+    expect(screen.getByRole('main')).toHaveAccessibleName('监控规则')
     expect(screen.getByRole('main')).toHaveFocus()
   })
 
@@ -252,7 +302,7 @@ describe('Longtian public opinion application', () => {
     expect(await screen.findByText('微博')).toBeInTheDocument()
   })
 
-  it('closes the shadcn mobile sidebar after either real navigation action', async () => {
+  it('closes the shadcn mobile sidebar after real navigation actions', async () => {
     const user = userEvent.setup()
     window.innerWidth = 375
     renderRoute()
@@ -263,19 +313,20 @@ describe('Longtian public opinion application', () => {
       name: '主导航',
     })
     const links = within(navigation).getAllByRole('link')
-    expect(links).toHaveLength(2)
+    expect(links).toHaveLength(3)
     expect(links.map((link) => link.textContent)).toEqual([
       '工作台',
       '平台账号',
+      '监控规则',
     ])
     expect(within(dialog).getAllByRole('separator')).toHaveLength(1)
     expect(within(dialog).queryByText('单机值守模式')).toBeNull()
     expect(within(dialog).queryByText('数据与浏览器操作仅留在本机')).toBeNull()
 
-    await user.click(within(dialog).getByRole('link', { name: '平台账号' }))
+    await user.click(within(dialog).getByRole('link', { name: '监控规则' }))
 
     expect(
-      await screen.findByRole('heading', { name: '平台账号', level: 1 }),
+      await screen.findByRole('heading', { name: '监控规则', level: 1 }),
     ).toBeInTheDocument()
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
 

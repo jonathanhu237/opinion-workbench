@@ -15,8 +15,9 @@ This directory contains guidelines for backend development. Fill in each file wi
 | Guide | Description | Status |
 |-------|-------------|--------|
 | [Directory Structure](./directory-structure.md) | Module organization and file layout | To fill |
-| [Database Guidelines](./database-guidelines.md) | ORM patterns, queries, migrations | To fill |
-| [Error Handling](./error-handling.md) | Error types, handling strategies | To fill |
+| [Database Guidelines](./database-guidelines.md) | Local SQLite ownership, queries, transactions, migrations, and tests | Active |
+| [Error Handling](./error-handling.md) | Stable product errors, validation, storage sanitization, and tests | Active |
+| [Monitoring Rules](./monitoring-rules-guidelines.md) | SQLite schema, service/API contracts, validation, and future collector boundary | Active |
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | To fill |
 | [Browser Authentication State](./auth-state-guidelines.md) | Local credential persistence, safe fallback, and secret-safe logging | Active |

@@ -19,6 +19,18 @@ export const appRoutes: RouteObject[] = [
         path: 'platform-accounts',
         element: <PlatformAccounts />,
       },
+      {
+        path: 'monitoring-rules',
+        hydrateFallbackElement: (
+          <p role="status" className="text-sm text-muted-foreground">
+            正在加载监控规则…
+          </p>
+        ),
+        lazy: async () => {
+          const { MonitoringRules } = await import('@/routes/monitoring-rules')
+          return { Component: MonitoringRules }
+        },
+      },
     ],
   },
 ]

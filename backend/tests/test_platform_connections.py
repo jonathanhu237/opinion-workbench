@@ -20,6 +20,7 @@ from longtian_api.services.media_crawler_auth_worker import (
     AUTH_EVENT_PREFIX,
     AuthWorkerError,
 )
+from longtian_api.services.monitoring_rules import MonitoringRuleService
 from longtian_api.services.platform_connections import PlatformConnectionService
 
 FIXED_NOW = datetime(2026, 8, 24, 12, 30, tzinfo=UTC)
@@ -30,6 +31,15 @@ CROSS_AUTH_PLATFORM_PAIRS = tuple(
     for received in AUTH_PLATFORMS
     if expected != received
 )
+
+MonitoringRuleServiceFactory = Callable[[], MonitoringRuleService]
+
+
+@pytest.fixture
+def monitoring_rule_service_factory(tmp_path: Path) -> MonitoringRuleServiceFactory:
+    return lambda: MonitoringRuleService(
+        database_path=tmp_path / "platform-connections.sqlite3"
+    )
 
 
 def worker_event(event: str, **fields: object) -> bytes:
@@ -310,11 +320,16 @@ def command_actions(process: FakeProcess) -> list[str]:
     return [str(command["command"]) for command in process.commands]
 
 
-def test_startup_and_get_launch_no_worker_and_catalog_is_unchanged() -> None:
+def test_startup_and_get_launch_no_worker_and_catalog_is_unchanged(
+    monitoring_rule_service_factory: MonitoringRuleServiceFactory,
+) -> None:
     service, launcher, _ = build_service(FakeProcess())
 
     with TestClient(
-        create_app(platform_connection_service_factory=lambda: service)
+        create_app(
+            platform_connection_service_factory=lambda: service,
+            monitoring_rule_service_factory=monitoring_rule_service_factory,
+        )
     ) as client:
         response = client.get("/api/v1/platform-connections")
 
@@ -348,12 +363,18 @@ def test_startup_and_get_launch_no_worker_and_catalog_is_unchanged() -> None:
     ],
 )
 def test_unknown_platform_starts_no_worker(
-    platform: str, status_code: int, code: str
+    platform: str,
+    status_code: int,
+    code: str,
+    monitoring_rule_service_factory: MonitoringRuleServiceFactory,
 ) -> None:
     service, launcher, _ = build_service(FakeProcess())
 
     with TestClient(
-        create_app(platform_connection_service_factory=lambda: service)
+        create_app(
+            platform_connection_service_factory=lambda: service,
+            monitoring_rule_service_factory=monitoring_rule_service_factory,
+        )
     ) as client:
         response = client.post(f"/api/v1/platform-connections/{platform}/attempts")
 
@@ -377,12 +398,18 @@ def test_known_unavailable_platform_starts_no_worker() -> None:
 
 
 @pytest.mark.parametrize("platform", AUTH_PLATFORMS)
-def test_start_returns_exact_202_and_fixed_worker_command(platform: str) -> None:
+def test_start_returns_exact_202_and_fixed_worker_command(
+    platform: str,
+    monitoring_rule_service_factory: MonitoringRuleServiceFactory,
+) -> None:
     process = FakeProcess(hanging_plan)
     service, launcher, terminator = build_service(process)
 
     with TestClient(
-        create_app(platform_connection_service_factory=lambda: service)
+        create_app(
+            platform_connection_service_factory=lambda: service,
+            monitoring_rule_service_factory=monitoring_rule_service_factory,
+        )
     ) as client:
         response = client.post(f"/api/v1/platform-connections/{platform}/attempts")
         assert launcher.started.wait(timeout=1)
@@ -415,12 +442,17 @@ def test_start_returns_exact_202_and_fixed_worker_command(platform: str) -> None
     assert terminator.calls == []
 
 
-def test_concurrent_attempt_preserves_exact_409_and_one_check() -> None:
+def test_concurrent_attempt_preserves_exact_409_and_one_check(
+    monitoring_rule_service_factory: MonitoringRuleServiceFactory,
+) -> None:
     process = FakeProcess(hanging_plan)
     service, launcher, _ = build_service(process)
 
     with TestClient(
-        create_app(platform_connection_service_factory=lambda: service)
+        create_app(
+            platform_connection_service_factory=lambda: service,
+            monitoring_rule_service_factory=monitoring_rule_service_factory,
+        )
     ) as client:
         accepted = client.post("/api/v1/platform-connections/wb/attempts")
         assert launcher.started.wait(timeout=1)
@@ -1039,8 +1071,14 @@ def test_stderr_credentials_are_discarded_and_never_projected() -> None:
     asyncio.run(scenario())
 
 
-def test_openapi_documents_exact_success_and_error_models() -> None:
-    with TestClient(create_app()) as client:
+def test_openapi_documents_exact_success_and_error_models(
+    monitoring_rule_service_factory: MonitoringRuleServiceFactory,
+) -> None:
+    with TestClient(
+        create_app(
+            monitoring_rule_service_factory=monitoring_rule_service_factory,
+        )
+    ) as client:
         document = client.get("/openapi.json").json()
 
     operation = document["paths"]["/api/v1/platform-connections/{platform}/attempts"][

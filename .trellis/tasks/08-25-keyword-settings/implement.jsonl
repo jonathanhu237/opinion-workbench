@@ -1,0 +1,11 @@
+{"file": ".trellis/tasks/08-25-keyword-settings/research/backend-database.md", "reason": "SQLite, migration, API, error, and test design evidence"}
+{"file": ".trellis/tasks/08-25-keyword-settings/research/frontend-ux.md", "reason": "Monitoring-rule page UX, shadcn, state, and accessibility evidence"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend spec routing and first database-convention boundary"}
+{"file": ".trellis/spec/frontend/directory-structure.md", "reason": "Frontend route, API, hook, and component ownership"}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "TanStack Query and React Hook Form ownership"}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "shadcn Base UI and accessibility conventions"}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "Unknown JSON decoding and typed API contracts"}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Frozen frontend gates and browser smoke requirements"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "SQLite to API to React round-trip ownership"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "SQLite connection, migration, transaction, path, and test contracts"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Stable validation, domain, and storage error contracts"}

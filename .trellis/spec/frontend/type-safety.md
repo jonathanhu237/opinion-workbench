@@ -26,6 +26,10 @@ The frontend uses TypeScript project references with unused-symbol and fallthrou
 - Do not duplicate every FastAPI response as a Zod schema. Add runtime response validation where the browser crosses an untrusted or version-drift boundary.
 - The current `fetchHealth()` implementation is the reference: parse JSON as `unknown`, check HTTP status, validate the exact consumed shape, and throw `HealthCheckError` for protocol or payload failures. Network and cancellation errors may still originate from `fetch`.
 - Generated TypeScript types, when introduced later, will not replace runtime validation by themselves.
+- When an API publishes stable product error codes, validate the complete `(HTTP status, code)` pair
+  before mapping the failure to a field or product message. A known code on the wrong status is
+  protocol drift, not an actionable field error, and must become the boundary's `invalid_response`
+  equivalent.
 
 ---
 
