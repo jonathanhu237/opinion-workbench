@@ -46,9 +46,14 @@ async def list_search_runs(
     service: SearchRunServiceDep,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
     before_id: Annotated[int | None, Query(gt=0, le=9_223_372_036_854_775_807)] = None,
+    scope: Annotated[Literal["all", "standalone"], Query()] = "all",
 ) -> SearchRunListResponse:
     try:
-        return await service.list_runs(limit=limit, before_id=before_id)
+        return await service.list_runs(
+            limit=limit,
+            before_id=before_id,
+            standalone_only=scope == "standalone",
+        )
     except SearchRunError as error:
         _raise_http_error(error)
 

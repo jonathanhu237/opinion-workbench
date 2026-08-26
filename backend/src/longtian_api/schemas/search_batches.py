@@ -1,0 +1,120 @@
+"""Public FastAPI contracts for durable multi-platform search batches."""
+
+from datetime import datetime
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from longtian_api.schemas.search_runs import SearchRunSummary
+from longtian_api.search_platforms import SearchPlatform
+
+SearchBatchStatus = Literal[
+    "queued",
+    "running",
+    "paused_for_manual_action",
+    "completed",
+    "completed_with_failures",
+    "cancelled",
+    "internal_error",
+]
+SearchBatchItemStatus = Literal[
+    "queued",
+    "running",
+    "paused_for_manual_action",
+    "completed",
+    "failed",
+    "cancelled",
+]
+SearchBatchErrorCode = Literal[
+    "invalid_request",
+    "monitoring_rule_not_found",
+    "monitoring_rule_disabled",
+    "too_many_search_terms",
+    "browser_operation_active",
+    "search_batch_not_found",
+    "search_batch_not_active",
+    "search_batch_not_paused",
+    "search_storage_unavailable",
+]
+
+
+class SearchBatchCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    monitoring_rule_id: int = Field(ge=1, le=9_223_372_036_854_775_807)
+    platforms: list[SearchPlatform] = Field(min_length=1, max_length=5)
+    max_results_per_term: int = Field(default=10, ge=1, le=50)
+
+    @model_validator(mode="after")
+    def validate_unique_platforms(self) -> "SearchBatchCreate":
+        if len(set(self.platforms)) != len(self.platforms):
+            raise ValueError("platforms must be unique")
+        return self
+
+
+class SearchBatchAttempt(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    attempt_number: int = Field(ge=1)
+    run: SearchRunSummary
+
+
+class SearchBatchItem(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    position: int = Field(ge=0)
+    platform: SearchPlatform
+    status: SearchBatchItemStatus
+    attempt_count: int = Field(ge=0)
+    latest_attempt: SearchBatchAttempt | None
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+
+
+class SearchBatchSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    id: int
+    monitoring_rule_id: int | None
+    rule_name: str
+    term_count: int
+    platform_count: int
+    terminal_item_count: int
+    max_results_per_term: int
+    status: SearchBatchStatus
+    current_item_position: int | None
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+
+
+class SearchBatchDetail(SearchBatchSummary):
+    terms: tuple[str, ...]
+    items: tuple[SearchBatchItem, ...]
+
+
+class SearchBatchListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    batches: list[SearchBatchSummary]
+    next_before_id: int | None
+
+
+class SearchBatchAttemptListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    attempts: list[SearchBatchAttempt]
+
+
+class SearchBatchErrorDetail(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    code: SearchBatchErrorCode
+    message: str
+
+
+class SearchBatchErrorResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    detail: SearchBatchErrorDetail

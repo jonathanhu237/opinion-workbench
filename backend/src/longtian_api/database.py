@@ -4,7 +4,7 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
-CURRENT_DATABASE_VERSION = 6
+CURRENT_DATABASE_VERSION = 7
 DEFAULT_RULE_NAME = "龙田街道及四个社区"
 DEFAULT_RULE_TERMS = (
     "龙田街道",
@@ -70,6 +70,9 @@ class Database:
                 version = 5
             if version < 6:
                 _migrate_to_version_6(connection)
+                version = 6
+            if version < 7:
+                _migrate_to_version_7(connection)
         finally:
             connection.close()
 
@@ -1001,6 +1004,123 @@ def _migrate_to_version_6(connection: sqlite3.Connection) -> None:
         if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
             raise sqlite3.DatabaseError("Foreign key check failed after migration")
         connection.execute("PRAGMA user_version = 6")
+        connection.execute("COMMIT")
+    except BaseException:
+        if connection.in_transaction:
+            connection.execute("ROLLBACK")
+        raise
+
+
+def _migrate_to_version_7(connection: sqlite3.Connection) -> None:
+    """Add durable multi-platform batch orchestration without rewriting runs."""
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        version = _read_user_version(connection)
+        if version >= 7:
+            connection.execute("COMMIT")
+            return
+        if version != 6:
+            raise DatabaseVersionError("Unsupported database migration source version.")
+
+        connection.execute(
+            """
+            CREATE TABLE search_batches (
+              id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+              monitoring_rule_id       INTEGER
+                                       REFERENCES monitoring_rules(id)
+                                       ON DELETE SET NULL,
+              rule_name                TEXT NOT NULL,
+              max_results_per_term     INTEGER NOT NULL
+                                       CHECK (max_results_per_term BETWEEN 1 AND 50),
+              status                   TEXT NOT NULL CHECK (status IN (
+                                         'queued', 'running',
+                                         'paused_for_manual_action',
+                                         'completed', 'completed_with_failures',
+                                         'cancelled', 'internal_error'
+                                       )),
+              current_item_position    INTEGER CHECK (current_item_position >= 0),
+              created_at               TEXT NOT NULL,
+              started_at               TEXT,
+              finished_at              TEXT
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE search_batch_terms (
+              batch_id    INTEGER NOT NULL
+                          REFERENCES search_batches(id) ON DELETE CASCADE,
+              position    INTEGER NOT NULL CHECK (position >= 0),
+              value       TEXT NOT NULL,
+              PRIMARY KEY (batch_id, position)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE search_batch_items (
+              batch_id    INTEGER NOT NULL
+                          REFERENCES search_batches(id) ON DELETE CASCADE,
+              position    INTEGER NOT NULL CHECK (position >= 0),
+              platform    TEXT NOT NULL CHECK (platform IN (
+                            'toutiao', 'wb', 'ks', 'dy', 'xhs'
+                          )),
+              status      TEXT NOT NULL CHECK (status IN (
+                            'queued', 'running', 'paused_for_manual_action',
+                            'completed', 'failed', 'cancelled'
+                          )),
+              created_at  TEXT NOT NULL,
+              started_at  TEXT,
+              finished_at TEXT,
+              PRIMARY KEY (batch_id, position),
+              UNIQUE (batch_id, platform)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE search_batch_attempts (
+              batch_id       INTEGER NOT NULL,
+              item_position  INTEGER NOT NULL,
+              attempt_number INTEGER NOT NULL CHECK (attempt_number >= 1),
+              search_run_id   INTEGER NOT NULL UNIQUE
+                              REFERENCES search_runs(id) ON DELETE RESTRICT,
+              created_at      TEXT NOT NULL,
+              PRIMARY KEY (batch_id, item_position, attempt_number),
+              FOREIGN KEY (batch_id, item_position)
+                REFERENCES search_batch_items(batch_id, position)
+                ON DELETE CASCADE
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX ix_search_batches_status_id
+            ON search_batches(status, id)
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX ix_search_batches_rule_id
+            ON search_batches(monitoring_rule_id)
+            """
+        )
+        connection.execute(
+            """
+            CREATE INDEX ix_search_batch_attempts_item
+            ON search_batch_attempts(batch_id, item_position, attempt_number DESC)
+            """
+        )
+        connection.execute(
+            """
+            CREATE UNIQUE INDEX ux_search_batches_one_active
+            ON search_batches((1))
+            WHERE status IN ('queued', 'running', 'paused_for_manual_action')
+            """
+        )
+        if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
+            raise sqlite3.DatabaseError("Foreign key check failed after migration")
+        connection.execute("PRAGMA user_version = 7")
         connection.execute("COMMIT")
     except BaseException:
         if connection.in_transaction:

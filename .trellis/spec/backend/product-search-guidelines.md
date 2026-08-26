@@ -1,7 +1,11 @@
 # Product Search Guidelines
 
-> Executable contract for product-owned collection runs, borrowed-Chrome search, durable results,
-> and cross-run deduplication.
+> Executable contract for product-owned single-platform runs and multi-platform batches,
+> borrowed-Chrome search, durable results, and cross-run deduplication.
+
+Durable multi-platform orchestration is specified in
+[`batch-search-guidelines.md`](./batch-search-guidelines.md); this document remains authoritative for
+each child run, adapter, borrowed-browser boundary, normalized result, and cross-run deduplication.
 
 ## Scenario: Manual multi-platform product search through the persistent worker
 
@@ -261,11 +265,13 @@ Search cancellation uses the search-command prefix with exact `command="cancel"`
 
 #### UI contract
 
-- Add the real sidebar label `采集任务` and routes `/collection-runs` and
-  `/collection-runs/:runId`; the sidebar item is active for both.
-- The start view uses enabled monitoring rules, a Shadcn platform Select containing exactly the
-  executable `今日头条`、`微博`、`快手`、`抖音` and `小红书` targets, and a labeled 1–50 number field with default 10. It does
-  not show unavailable platforms as executable controls or add a sort selector.
+- Keep the real sidebar label `采集任务` and routes `/collection-runs`,
+  `/collection-batches/:batchId`, and `/collection-runs/:runId`; the sidebar item is active for all
+  three routes.
+- The start view uses enabled monitoring rules, a visible Shadcn Checkbox card for each executable
+  `今日头条`、`微博`、`快手`、`抖音` and `小红书` target, and a labeled 1–50 number field with default 10.
+  All five platforms are selected initially; validation requires 1–5 unique selections. It does not
+  show unavailable platforms as executable controls or add a sort selector.
 - Poll once per second only while the selected/latest run is active. Terminal/history queries use
   ordinary TanStack Query caching and explicit invalidation.
 - The run detail displays real counts and labels every item `新增` or `历史内容再次命中`. Non-XHS

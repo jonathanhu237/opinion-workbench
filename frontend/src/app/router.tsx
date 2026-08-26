@@ -44,6 +44,19 @@ export const appRoutes: RouteObject[] = [
         },
       },
       {
+        path: 'collection-batches/:batchId',
+        hydrateFallbackElement: (
+          <p role="status" className="text-sm text-muted-foreground">
+            正在加载批次进度…
+          </p>
+        ),
+        lazy: async () => {
+          const { CollectionBatchDetail } =
+            await import('@/routes/collection-batch-detail')
+          return { Component: CollectionBatchDetail }
+        },
+      },
+      {
         path: 'collection-runs/:runId',
         hydrateFallbackElement: (
           <p role="status" className="text-sm text-muted-foreground">

@@ -110,7 +110,9 @@ function PrimaryNavigation() {
       label: '采集任务',
       to: '/collection-runs',
       icon: ClipboardList,
-      isActive: location.pathname.startsWith('/collection-runs'),
+      isActive:
+        location.pathname.startsWith('/collection-runs') ||
+        location.pathname.startsWith('/collection-batches'),
     },
   ] as const
 
@@ -191,9 +193,11 @@ export function AppShell() {
     document.getElementById('main-content')?.focus()
   }, [location.pathname])
 
-  const pageTitle = location.pathname.startsWith('/collection-runs/')
-    ? '采集任务详情'
-    : (pageTitles[location.pathname] ?? '当前页面')
+  const pageTitle = location.pathname.startsWith('/collection-batches/')
+    ? '批次进度'
+    : location.pathname.startsWith('/collection-runs/')
+      ? '采集任务详情'
+      : (pageTitles[location.pathname] ?? '当前页面')
 
   return (
     <SidebarProvider>

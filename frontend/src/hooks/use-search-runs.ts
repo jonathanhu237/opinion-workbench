@@ -11,11 +11,13 @@ import {
 
 export function useSearchRuns() {
   const query = useInfiniteQuery({
-    queryKey: SEARCH_RUNS_QUERY_KEY,
+    queryKey: [...SEARCH_RUNS_QUERY_KEY, 'standalone'],
     queryFn: ({ signal, pageParam }) =>
       fetchSearchRuns(
         signal,
-        pageParam === null ? {} : { beforeId: pageParam },
+        pageParam === null
+          ? { scope: 'standalone' }
+          : { beforeId: pageParam, scope: 'standalone' },
       ),
     initialPageParam: null as number | null,
     getNextPageParam: (lastPage) => lastPage.next_before_id ?? undefined,

@@ -9,6 +9,7 @@ from starlette.concurrency import run_in_threadpool
 from longtian_api.api.router import api_router
 from longtian_api.services.monitoring_rules import MonitoringRuleService
 from longtian_api.services.platform_connections import PlatformConnectionService
+from longtian_api.services.search_batches import SearchBatchService
 from longtian_api.services.search_runs import SearchRunService
 
 SearchRunServiceFactory = Callable[
@@ -53,11 +54,27 @@ def create_app(
                     database=shared_database,
                 )
             await run_in_threadpool(search_run_service.initialize)
+            batch_database = search_run_service.database
+            if batch_database is None:
+                raise RuntimeError(
+                    "A custom search-run repository requires an explicit "
+                    "search-batch service integration."
+                )
+            search_batch_service = SearchBatchService(
+                search_runs=search_run_service,
+                browser_operations=platform_service.browser_operations,
+                database=batch_database,
+            )
+            await run_in_threadpool(search_batch_service.initialize)
             application.state.platform_connection_service = platform_service
             application.state.monitoring_rule_service = monitoring_rule_service
             application.state.search_run_service = search_run_service
+            application.state.search_batch_service = search_batch_service
+            await search_batch_service.resume_after_startup()
             yield
         finally:
+            if "search_batch_service" in locals():
+                await search_batch_service.shutdown()
             if "search_run_service" in locals():
                 await search_run_service.shutdown()
             await platform_service.shutdown()

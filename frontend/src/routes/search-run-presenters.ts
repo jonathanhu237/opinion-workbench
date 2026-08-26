@@ -3,15 +3,17 @@ import kuaishouLogo from '@/assets/platforms/kuaishou.svg'
 import toutiaoLogo from '@/assets/platforms/toutiao.svg'
 import weiboLogo from '@/assets/platforms/weibo.svg'
 import xiaohongshuLogo from '@/assets/platforms/xiaohongshu.svg'
-import type { SearchPlatform, SearchRunStatus } from '@/lib/api/search-runs'
+import {
+  SEARCH_PLATFORM_ORDER,
+  type SearchPlatform,
+  type SearchRunStatus,
+} from '@/lib/api/search-runs'
+import type {
+  SearchBatchItemStatus,
+  SearchBatchStatus,
+} from '@/lib/api/search-batches'
 
-export const searchPlatformOrder = [
-  'toutiao',
-  'wb',
-  'ks',
-  'dy',
-  'xhs',
-] as const satisfies readonly SearchPlatform[]
+export const searchPlatformOrder = SEARCH_PLATFORM_ORDER
 
 export const searchPlatformPresenters = {
   toutiao: { label: '今日头条', logoSrc: toutiaoLogo },
@@ -81,4 +83,31 @@ export function formatLocalDate(value: string | null) {
     minute: '2-digit',
     hour12: false,
   }).format(date)
+}
+
+const batchStatusLabels: Record<SearchBatchStatus, string> = {
+  queued: '等待开始',
+  running: '采集中',
+  paused_for_manual_action: '等待安全验证',
+  completed: '全部完成',
+  completed_with_failures: '部分平台未完成',
+  cancelled: '已取消',
+  internal_error: '批次异常',
+}
+
+const batchItemStatusLabels: Record<SearchBatchItemStatus, string> = {
+  queued: '等待中',
+  running: '采集中',
+  paused_for_manual_action: '等待安全验证',
+  completed: '已完成',
+  failed: '未完成',
+  cancelled: '已取消',
+}
+
+export function searchBatchStatusLabel(status: SearchBatchStatus) {
+  return batchStatusLabels[status]
+}
+
+export function searchBatchItemStatusLabel(status: SearchBatchItemStatus) {
+  return batchItemStatusLabels[status]
 }

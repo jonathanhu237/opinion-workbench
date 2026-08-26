@@ -1,31 +1,32 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { ReactNode } from 'react'
 import { createMemoryRouter } from 'react-router'
 import { RouterProvider } from 'react-router/dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import douyinLogo from '@/assets/platforms/douyin.svg'
-import kuaishouLogo from '@/assets/platforms/kuaishou.svg'
-import weiboLogo from '@/assets/platforms/weibo.svg'
-import xiaohongshuLogo from '@/assets/platforms/xiaohongshu.svg'
+import {
+  cancelSearchBatch,
+  continueSearchBatch,
+  fetchSearchBatch,
+  fetchSearchBatchAttempts,
+  fetchSearchBatches,
+  startSearchBatch,
+  SearchBatchApiError,
+  type SearchBatchDetail,
+} from '@/lib/api/search-batches'
 import {
   fetchMonitoringRules,
   type MonitoringRule,
 } from '@/lib/api/monitoring-rules'
 import {
-  cancelSearchRun,
   fetchSearchRun,
   fetchSearchRunResults,
   fetchSearchRuns,
-  openSearchRunResult,
-  SEARCH_RUNS_QUERY_KEY,
-  SearchRunApiError,
-  startSearchRun,
-  type SearchResult,
-  type SearchRunDetail,
+  type SearchRunSummary,
 } from '@/lib/api/search-runs'
+import { CollectionBatchDetail } from '@/routes/collection-batch-detail'
 import { CollectionRunDetail } from '@/routes/collection-run-detail'
 import { CollectionRuns } from '@/routes/collection-runs'
 
@@ -35,6 +36,20 @@ vi.mock('@/lib/api/monitoring-rules', async (importOriginal) => {
   return { ...actual, fetchMonitoringRules: vi.fn() }
 })
 
+vi.mock('@/lib/api/search-batches', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('@/lib/api/search-batches')>()
+  return {
+    ...actual,
+    fetchSearchBatches: vi.fn(),
+    fetchSearchBatch: vi.fn(),
+    fetchSearchBatchAttempts: vi.fn(),
+    startSearchBatch: vi.fn(),
+    continueSearchBatch: vi.fn(),
+    cancelSearchBatch: vi.fn(),
+  }
+})
+
 vi.mock('@/lib/api/search-runs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api/search-runs')>()
   return {
@@ -42,9 +57,6 @@ vi.mock('@/lib/api/search-runs', async (importOriginal) => {
     fetchSearchRuns: vi.fn(),
     fetchSearchRun: vi.fn(),
     fetchSearchRunResults: vi.fn(),
-    startSearchRun: vi.fn(),
-    cancelSearchRun: vi.fn(),
-    openSearchRunResult: vi.fn(),
   }
 })
 
@@ -55,20 +67,21 @@ const rule: MonitoringRule = {
   enabled: true,
 }
 
-function run(values: Partial<SearchRunDetail> = {}): SearchRunDetail {
+function standaloneRun(
+  values: Partial<SearchRunSummary> = {},
+): SearchRunSummary {
   return {
-    id: 7,
+    id: 70,
     monitoring_rule_id: 1,
     platform: 'toutiao',
     rule_name: rule.name,
     term_count: 2,
-    terms: rule.terms,
     max_results_per_term: 10,
-    status: 'completed_with_results',
+    status: 'completed_empty',
     current_term_position: 1,
-    new_count: 1,
-    repeated_count: 1,
-    total_count: 2,
+    new_count: 0,
+    repeated_count: 0,
+    total_count: 0,
     created_at: '2026-08-26T08:00:00+00:00',
     started_at: '2026-08-26T08:00:01+00:00',
     finished_at: '2026-08-26T08:00:05+00:00',
@@ -76,35 +89,74 @@ function run(values: Partial<SearchRunDetail> = {}): SearchRunDetail {
   }
 }
 
-function result(values: Partial<SearchResult> = {}): SearchResult {
+function batch(values: Partial<SearchBatchDetail> = {}): SearchBatchDetail {
+  const run = standaloneRun({ id: 71, platform: 'toutiao' })
   return {
-    id: 11,
-    platform: 'toutiao',
-    platform_content_id: '100',
-    content_type: 'article',
-    title: '龙田街道公开信息',
-    snippet: '来自公开搜索页面',
-    creator_hash: '0123456789abcdef',
-    publisher_name: '本***察',
-    published_at_text: '刚刚',
-    content_url: 'https://www.toutiao.com/article/100/',
-    kind: 'new',
-    matched_terms: ['龙田街道'],
-    first_seen_at: '2026-08-26T08:00:02+00:00',
-    last_seen_at: '2026-08-26T08:00:02+00:00',
-    first_observed_at: '2026-08-26T08:00:02+00:00',
-    last_observed_at: '2026-08-26T08:00:02+00:00',
+    id: 9,
+    monitoring_rule_id: 1,
+    rule_name: rule.name,
+    term_count: 2,
+    platform_count: 3,
+    terminal_item_count: 3,
+    max_results_per_term: 10,
+    status: 'completed',
+    current_item_position: null,
+    terms: rule.terms,
+    items: [
+      {
+        position: 0,
+        platform: 'toutiao',
+        status: 'completed',
+        attempt_count: 1,
+        latest_attempt: { attempt_number: 1, run },
+        created_at: run.created_at,
+        started_at: run.started_at,
+        finished_at: run.finished_at,
+      },
+      {
+        position: 1,
+        platform: 'wb',
+        status: 'completed',
+        attempt_count: 1,
+        latest_attempt: {
+          attempt_number: 1,
+          run: standaloneRun({ id: 72, platform: 'wb' }),
+        },
+        created_at: run.created_at,
+        started_at: run.started_at,
+        finished_at: run.finished_at,
+      },
+      {
+        position: 2,
+        platform: 'ks',
+        status: 'completed',
+        attempt_count: 1,
+        latest_attempt: {
+          attempt_number: 1,
+          run: standaloneRun({ id: 73, platform: 'ks' }),
+        },
+        created_at: run.created_at,
+        started_at: run.started_at,
+        finished_at: run.finished_at,
+      },
+    ],
+    created_at: run.created_at,
+    started_at: run.started_at,
+    finished_at: run.finished_at,
     ...values,
   }
 }
 
 const mockedFetchRules = vi.mocked(fetchMonitoringRules)
+const mockedFetchBatches = vi.mocked(fetchSearchBatches)
+const mockedFetchBatch = vi.mocked(fetchSearchBatch)
+const mockedFetchAttempts = vi.mocked(fetchSearchBatchAttempts)
+const mockedStartBatch = vi.mocked(startSearchBatch)
+const mockedContinueBatch = vi.mocked(continueSearchBatch)
+const mockedCancelBatch = vi.mocked(cancelSearchBatch)
 const mockedFetchRuns = vi.mocked(fetchSearchRuns)
 const mockedFetchRun = vi.mocked(fetchSearchRun)
-const mockedFetchResults = vi.mocked(fetchSearchRunResults)
-const mockedStartRun = vi.mocked(startSearchRun)
-const mockedCancelRun = vi.mocked(cancelSearchRun)
-const mockedOpenResult = vi.mocked(openSearchRunResult)
+const mockedFetchRunResults = vi.mocked(fetchSearchRunResults)
 
 function renderRoute(initialEntry = '/collection-runs') {
   const queryClient = new QueryClient({
@@ -113,8 +165,11 @@ function renderRoute(initialEntry = '/collection-runs') {
   const router = createMemoryRouter(
     [
       { path: '/collection-runs', element: <CollectionRuns /> },
+      {
+        path: '/collection-batches/:batchId',
+        element: <CollectionBatchDetail />,
+      },
       { path: '/collection-runs/:runId', element: <CollectionRunDetail /> },
-      { path: '/platform-accounts', element: <p>平台账号占位</p> },
     ],
     { initialEntries: [initialEntry] },
   )
@@ -132,215 +187,109 @@ function renderRoute(initialEntry = '/collection-runs') {
   }
 }
 
-describe('collection runs routes', () => {
+describe('multi-platform collection routes', () => {
   beforeEach(() => {
-    mockedFetchRules.mockReset()
-    mockedFetchRuns.mockReset()
-    mockedFetchRun.mockReset()
-    mockedFetchResults.mockReset()
-    mockedStartRun.mockReset()
-    mockedCancelRun.mockReset()
-    mockedOpenResult.mockReset()
+    vi.clearAllMocks()
     mockedFetchRules.mockResolvedValue({ rules: [rule] })
-    mockedFetchRuns.mockResolvedValue({
-      runs: [run()],
-      next_before_id: null,
+    mockedFetchBatches.mockResolvedValue({ batches: [], next_before_id: null })
+    mockedFetchRuns.mockResolvedValue({ runs: [], next_before_id: null })
+    mockedFetchBatch.mockResolvedValue(batch())
+    mockedFetchAttempts.mockResolvedValue({ attempts: [] })
+    mockedFetchRun.mockResolvedValue({
+      ...standaloneRun(),
+      terms: rule.terms,
     })
-    mockedFetchRun.mockResolvedValue(run())
-    mockedFetchResults.mockResolvedValue({
-      results: [result(), result({ id: 12, kind: 'repeated' })],
-      total: 2,
+    mockedFetchRunResults.mockResolvedValue({
+      results: [],
+      total: 0,
       limit: 50,
       offset: 0,
     })
-    mockedStartRun.mockResolvedValue(
-      run({
-        id: 8,
-        status: 'queued',
-        current_term_position: null,
-        new_count: 0,
-        repeated_count: 0,
-        total_count: 0,
-        started_at: null,
-        finished_at: null,
-      }),
-    )
-    mockedCancelRun.mockResolvedValue(run({ status: 'cancelled' }))
-    mockedOpenResult.mockResolvedValue({ outcome: 'opened' })
+    mockedStartBatch.mockResolvedValue(batch({ id: 10, status: 'queued' }))
+    mockedContinueBatch.mockResolvedValue(batch({ status: 'running' }))
+    mockedCancelBatch.mockResolvedValue(batch({ status: 'cancelled' }))
   })
 
-  it('starts a Toutiao run from an enabled rule and deep-links to it', async () => {
+  it('defaults all five Shadcn checkboxes and starts one batch in catalog order', async () => {
     const user = userEvent.setup()
     const { router } = renderRoute()
-    await screen.findByText(rule.name)
 
-    const ruleSelect = screen.getByRole('combobox', { name: '监控规则' })
-    await user.click(ruleSelect)
+    await user.click(await screen.findByRole('combobox', { name: '监控规则' }))
     await user.click(await screen.findByRole('option', { name: /龙田街道/u }))
-    expect(ruleSelect).toHaveTextContent('龙田街道及四个社区（2 个词）')
-    expect(ruleSelect).not.toHaveTextContent(/^1$/u)
+    const checkboxes = screen.getAllByRole('checkbox')
+    expect(checkboxes).toHaveLength(5)
+    for (const checkbox of checkboxes) expect(checkbox).toBeChecked()
     await user.clear(screen.getByLabelText('每词最多采集'))
     await user.type(screen.getByLabelText('每词最多采集'), '7')
     await user.click(screen.getByRole('button', { name: '开始采集' }))
 
     await waitFor(() =>
-      expect(mockedStartRun).toHaveBeenCalledWith({
+      expect(mockedStartBatch).toHaveBeenCalledWith({
         monitoring_rule_id: 1,
-        platform: 'toutiao',
+        platforms: ['toutiao', 'wb', 'ks', 'dy', 'xhs'],
         max_results_per_term: 7,
       }),
     )
     await waitFor(() =>
-      expect(router.state.location.pathname).toBe('/collection-runs/8'),
+      expect(router.state.location.pathname).toBe('/collection-batches/10'),
     )
   })
 
-  it('switches to Weibo with the Shadcn platform selector', async () => {
+  it('allows any platform subset and keeps the submitted order canonical', async () => {
     const user = userEvent.setup()
-    mockedStartRun.mockResolvedValue(
-      run({ id: 9, platform: 'wb', status: 'queued' }),
-    )
     renderRoute()
-    await screen.findByText(rule.name)
-
-    const ruleSelect = screen.getByRole('combobox', { name: '监控规则' })
-    await user.click(ruleSelect)
-    await user.click(await screen.findByRole('option', { name: /龙田街道/u }))
-    const platformSelect = screen.getByRole('combobox', { name: '采集平台' })
-    expect(platformSelect).toHaveTextContent('今日头条')
-    platformSelect.focus()
-    await user.keyboard('{Enter}')
-    const platformOptions = await screen.findAllByRole('option')
-    expect(platformOptions.map((option) => option.textContent)).toEqual([
-      '今日头条',
-      '微博',
-      '快手',
-      '抖音',
-      '小红书',
-    ])
-    await user.keyboard('{ArrowDown}{Enter}')
-    expect(platformSelect).toHaveTextContent('微博')
-    await user.click(screen.getByRole('button', { name: '开始采集' }))
-
-    await waitFor(() =>
-      expect(mockedStartRun).toHaveBeenCalledWith({
-        monitoring_rule_id: 1,
-        platform: 'wb',
-        max_results_per_term: 10,
-      }),
-    )
-  })
-
-  it('switches to Kuaishou with the existing Shadcn platform selector', async () => {
-    const user = userEvent.setup()
-    mockedStartRun.mockResolvedValue(
-      run({ id: 10, platform: 'ks', status: 'queued' }),
-    )
-    renderRoute()
-    await screen.findByText(rule.name)
-
-    await user.click(screen.getByRole('combobox', { name: '监控规则' }))
-    await user.click(await screen.findByRole('option', { name: /龙田街道/u }))
-    await user.click(screen.getByRole('combobox', { name: '采集平台' }))
-    await user.click(await screen.findByRole('option', { name: '快手' }))
-    expect(
-      screen.getByRole('combobox', { name: '采集平台' }),
-    ).toHaveTextContent('快手')
-    await user.click(screen.getByRole('button', { name: '开始采集' }))
-
-    await waitFor(() =>
-      expect(mockedStartRun).toHaveBeenCalledWith({
-        monitoring_rule_id: 1,
-        platform: 'ks',
-        max_results_per_term: 10,
-      }),
-    )
-  })
-
-  it('switches to Douyin with the existing Shadcn platform selector', async () => {
-    const user = userEvent.setup()
-    mockedStartRun.mockResolvedValue(
-      run({ id: 11, platform: 'dy', status: 'queued' }),
-    )
-    renderRoute()
-    await screen.findByText(rule.name)
-
-    await user.click(screen.getByRole('combobox', { name: '监控规则' }))
-    await user.click(await screen.findByRole('option', { name: /龙田街道/u }))
-    await user.click(screen.getByRole('combobox', { name: '采集平台' }))
-    await user.click(await screen.findByRole('option', { name: '抖音' }))
-    expect(
-      screen.getByRole('combobox', { name: '采集平台' }),
-    ).toHaveTextContent('抖音')
-    await user.click(screen.getByRole('button', { name: '开始采集' }))
-
-    await waitFor(() =>
-      expect(mockedStartRun).toHaveBeenCalledWith({
-        monitoring_rule_id: 1,
-        platform: 'dy',
-        max_results_per_term: 10,
-      }),
-    )
-  })
-
-  it('switches to Xiaohongshu with the existing Shadcn platform selector', async () => {
-    const user = userEvent.setup()
-    mockedStartRun.mockResolvedValue(
-      run({ id: 12, platform: 'xhs', status: 'queued' }),
-    )
-    renderRoute()
-    await screen.findByText(rule.name)
-
-    await user.click(screen.getByRole('combobox', { name: '监控规则' }))
-    await user.click(await screen.findByRole('option', { name: /龙田街道/u }))
-    await user.click(screen.getByRole('combobox', { name: '采集平台' }))
-    await user.click(await screen.findByRole('option', { name: '小红书' }))
-    expect(
-      screen.getByRole('combobox', { name: '采集平台' }),
-    ).toHaveTextContent('小红书')
-    await user.click(screen.getByRole('button', { name: '开始采集' }))
-
-    await waitFor(() =>
-      expect(mockedStartRun).toHaveBeenCalledWith({
-        monitoring_rule_id: 1,
-        platform: 'xhs',
-        max_results_per_term: 10,
-      }),
-    )
-  })
-
-  it('rejects more than twenty terms before creating a task', async () => {
-    const user = userEvent.setup()
-    const oversized = {
-      ...rule,
-      id: 2,
-      name: '过大的规则',
-      terms: Array.from({ length: 21 }, (_, index) => `搜索词${index + 1}`),
-    }
-    mockedFetchRules.mockResolvedValue({ rules: [oversized] })
-    renderRoute()
-
     await user.click(await screen.findByRole('combobox', { name: '监控规则' }))
-    await user.click(await screen.findByRole('option', { name: /过大的规则/u }))
+    await user.click(await screen.findByRole('option', { name: /龙田街道/u }))
+    await user.click(screen.getByRole('checkbox', { name: '微博' }))
+    await user.click(screen.getByRole('checkbox', { name: '抖音' }))
+    await user.click(screen.getByRole('checkbox', { name: '小红书' }))
     await user.click(screen.getByRole('button', { name: '开始采集' }))
 
-    expect(
-      await screen.findByText('这条规则超过 20 个搜索词，请拆分后再采集。'),
-    ).toBeVisible()
-    expect(screen.getByRole('combobox', { name: '监控规则' })).toHaveFocus()
-    expect(mockedStartRun).not.toHaveBeenCalled()
+    await waitFor(() =>
+      expect(mockedStartBatch).toHaveBeenCalledWith({
+        monitoring_rule_id: 1,
+        platforms: ['toutiao', 'ks'],
+        max_results_per_term: 10,
+      }),
+    )
   })
 
-  it('shows active progress, prevents another start, and cancels explicitly', async () => {
+  it('shows a nearby validation error when no platform is selected', async () => {
     const user = userEvent.setup()
-    mockedFetchRuns.mockResolvedValue({
-      runs: [
-        run({
-          status: 'running',
-          current_term_position: 0,
-          new_count: 0,
-          repeated_count: 0,
-          total_count: 0,
+    renderRoute()
+    await user.click(await screen.findByRole('combobox', { name: '监控规则' }))
+    await user.click(await screen.findByRole('option', { name: /龙田街道/u }))
+    for (const checkbox of screen.getAllByRole('checkbox')) {
+      await user.click(checkbox)
+    }
+    await user.click(screen.getByRole('button', { name: '开始采集' }))
+
+    expect(await screen.findByText('请至少选择一个采集平台。')).toBeVisible()
+    expect(mockedStartBatch).not.toHaveBeenCalled()
+  })
+
+  it('shows batch history without duplicating its child runs', async () => {
+    mockedFetchBatches.mockResolvedValue({
+      batches: [batch()],
+      next_before_id: null,
+    })
+    renderRoute()
+
+    expect(await screen.findByText('3 / 3')).toBeVisible()
+    expect(screen.getByRole('link', { name: /查看/u })).toHaveAttribute(
+      'href',
+      '/collection-batches/9',
+    )
+    expect(screen.queryByText('之前的单平台任务')).toBeNull()
+  })
+
+  it('keeps new collection controls locked while a batch awaits verification', async () => {
+    mockedFetchBatches.mockResolvedValue({
+      batches: [
+        batch({
+          status: 'paused_for_manual_action',
+          terminal_item_count: 1,
+          current_item_position: 1,
           finished_at: null,
         }),
       ],
@@ -348,448 +297,196 @@ describe('collection runs routes', () => {
     })
     renderRoute()
 
-    expect(await screen.findByText(`正在采集“${rule.name}”`)).toBeVisible()
-    expect(screen.getByText('第 1 / 2 个搜索词')).toBeVisible()
+    expect(await screen.findByText('采集正在等待安全验证')).toBeVisible()
     expect(screen.getByRole('button', { name: '开始采集' })).toBeDisabled()
-    await user.click(screen.getByRole('button', { name: '取消任务' }))
-    await waitFor(() => expect(mockedCancelRun).toHaveBeenCalledWith(7))
+    for (const checkbox of screen.getAllByRole('checkbox')) {
+      expect(checkbox).toHaveAttribute('aria-disabled', 'true')
+      expect(checkbox).toHaveAttribute('tabindex', '-1')
+    }
   })
 
-  it('loads older task history through the opaque cursor', async () => {
-    const user = userEvent.setup()
-    mockedFetchRuns.mockImplementation(async (_signal, options = {}) => {
-      if (options.beforeId === 6) {
-        return {
-          runs: [run({ id: 6, rule_name: '更早的采集任务' })],
-          next_before_id: null,
-        }
-      }
-      return { runs: [run()], next_before_id: 6 }
+  it('keeps standalone history readable through the old run detail link', async () => {
+    mockedFetchRuns.mockResolvedValue({
+      runs: [standaloneRun()],
+      next_before_id: null,
     })
+    renderRoute()
+
+    expect(await screen.findByText('之前的单平台任务')).toBeVisible()
+    expect(screen.getByRole('link', { name: /查看/u })).toHaveAttribute(
+      'href',
+      '/collection-runs/70',
+    )
+  })
+
+  it('keeps an existing standalone run deep link readable', async () => {
+    renderRoute('/collection-runs/70')
+
+    expect(await screen.findByText('今日头条 · 规则快照')).toBeVisible()
+    expect(screen.getByText(rule.name)).toBeVisible()
+    expect(screen.getByRole('heading', { name: '采集结果' })).toBeVisible()
+    expect(mockedFetchRun).toHaveBeenCalledWith(70, expect.any(AbortSignal))
+  })
+
+  it('keeps older standalone history reachable through its cursor', async () => {
+    const user = userEvent.setup()
+    mockedFetchRuns
+      .mockResolvedValueOnce({
+        runs: [standaloneRun()],
+        next_before_id: 70,
+      })
+      .mockResolvedValueOnce({
+        runs: [standaloneRun({ id: 69, rule_name: '更早的单平台任务' })],
+        next_before_id: null,
+      })
     renderRoute()
 
     await user.click(
-      await screen.findByRole('button', { name: '加载更多任务' }),
+      await screen.findByRole('button', { name: '加载更多单平台任务' }),
     )
 
-    expect(await screen.findByText('更早的采集任务')).toBeVisible()
-    expect(mockedFetchRuns).toHaveBeenCalledWith(expect.any(AbortSignal), {
-      beforeId: 6,
+    expect(await screen.findByText('更早的单平台任务')).toBeVisible()
+    expect(mockedFetchRuns).toHaveBeenLastCalledWith(expect.any(AbortSignal), {
+      beforeId: 70,
+      scope: 'standalone',
     })
-    expect(screen.queryByRole('button', { name: '加载更多任务' })).toBeNull()
   })
 
-  it('shows bounded guidance when cancellation fails', async () => {
-    const user = userEvent.setup()
-    mockedFetchRuns.mockResolvedValue({
-      runs: [run({ status: 'running', finished_at: null })],
-      next_before_id: null,
-    })
-    mockedCancelRun.mockRejectedValue(
-      new SearchRunApiError(
-        '该采集任务已经结束，无法取消。',
-        'search_run_not_active',
-        409,
-      ),
-    )
-    renderRoute()
+  it('renders the ordered platform rail with truthful counts and detail links', async () => {
+    renderRoute('/collection-batches/9')
 
-    await user.click(await screen.findByRole('button', { name: '取消任务' }))
-
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      '该采集任务已经结束，无法取消。',
-    )
+    expect(
+      await screen.findByRole('heading', { name: rule.name }),
+    ).toBeVisible()
+    const platformHeading = screen.getByRole('heading', { name: '平台进度' })
+    const rail = platformHeading.parentElement
+    expect(rail).toHaveTextContent('今日头条')
+    expect(rail).toHaveTextContent('微博')
+    expect(rail).toHaveTextContent('快手')
+    expect(screen.getAllByRole('link', { name: /查看结果/u })).toHaveLength(3)
   })
 
-  it('keeps bounded API conflict guidance beside the start form', async () => {
+  it('continues a paused platform and exposes immutable attempt history', async () => {
     const user = userEvent.setup()
-    mockedStartRun.mockRejectedValue(
-      new SearchRunApiError(
+    const firstAttempt = standaloneRun({
+      id: 80,
+      platform: 'wb',
+      status: 'manual_challenge_required',
+    })
+    const paused = batch({
+      status: 'paused_for_manual_action',
+      terminal_item_count: 1,
+      current_item_position: 1,
+      items: [
+        batch().items[0],
+        {
+          position: 1,
+          platform: 'wb',
+          status: 'paused_for_manual_action',
+          attempt_count: 2,
+          latest_attempt: { attempt_number: 2, run: firstAttempt },
+          created_at: firstAttempt.created_at,
+          started_at: firstAttempt.started_at,
+          finished_at: firstAttempt.finished_at,
+        },
+        {
+          ...batch().items[2],
+          status: 'queued',
+          attempt_count: 0,
+          latest_attempt: null,
+          started_at: null,
+          finished_at: null,
+        },
+      ],
+      finished_at: null,
+    })
+    mockedFetchBatch.mockResolvedValue(paused)
+    mockedFetchAttempts.mockResolvedValue({
+      attempts: [
+        { attempt_number: 2, run: firstAttempt },
+        { attempt_number: 1, run: { ...firstAttempt, id: 79 } },
+      ],
+    })
+    renderRoute('/collection-batches/9')
+
+    expect(
+      await screen.findByRole('heading', { name: '请完成微博安全验证' }),
+    ).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '查看 2 次尝试' }))
+    expect(
+      await screen.findByText((content) => content.includes('第 2 次 ·')),
+    ).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '继续采集' }))
+    await waitFor(() => expect(mockedContinueBatch).toHaveBeenCalledWith(9))
+    expect(await screen.findByText(/已继续采集/u)).toBeVisible()
+  })
+
+  it('clears an earlier continue error when cancellation later succeeds', async () => {
+    const user = userEvent.setup()
+    const challengeRun = standaloneRun({
+      id: 80,
+      platform: 'wb',
+      status: 'manual_challenge_required',
+    })
+    mockedFetchBatch.mockResolvedValue(
+      batch({
+        status: 'paused_for_manual_action',
+        terminal_item_count: 1,
+        current_item_position: 1,
+        items: [
+          batch().items[0],
+          {
+            position: 1,
+            platform: 'wb',
+            status: 'paused_for_manual_action',
+            attempt_count: 1,
+            latest_attempt: { attempt_number: 1, run: challengeRun },
+            created_at: challengeRun.created_at,
+            started_at: challengeRun.started_at,
+            finished_at: challengeRun.finished_at,
+          },
+          {
+            ...batch().items[2],
+            status: 'queued',
+            attempt_count: 0,
+            latest_attempt: null,
+            started_at: null,
+            finished_at: null,
+          },
+        ],
+        finished_at: null,
+      }),
+    )
+    mockedContinueBatch.mockRejectedValue(
+      new SearchBatchApiError(
         '谷歌浏览器正在执行其他操作，请稍后重试。',
         'browser_operation_active',
         409,
       ),
     )
-    renderRoute()
+    renderRoute('/collection-batches/9')
 
-    await user.click(await screen.findByRole('combobox', { name: '监控规则' }))
-    await user.click(await screen.findByRole('option', { name: /龙田街道/u }))
-    await user.click(screen.getByRole('button', { name: '开始采集' }))
+    await user.click(await screen.findByRole('button', { name: '继续采集' }))
+    expect(
+      await screen.findByText('谷歌浏览器正在执行其他操作，请稍后重试。'),
+    ).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '取消批次' }))
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      '谷歌浏览器正在执行其他操作，请稍后重试。',
-    )
+    expect(await screen.findByText('已取消剩余平台。')).toBeVisible()
+    expect(
+      screen.queryByText('谷歌浏览器正在执行其他操作，请稍后重试。'),
+    ).toBeNull()
   })
 
-  it('renders deep-linked new/repeated evidence with safe original links', async () => {
-    mockedFetchResults.mockResolvedValue({
-      results: [
-        result({
-          id: 12,
-          kind: 'repeated',
-          title: '历史内容再次出现',
-          matched_terms: ['龙田街道', '竹坑社区'],
-        }),
-      ],
-      total: 51,
-      limit: 50,
-      offset: 50,
-    })
-    const { router } = renderRoute('/collection-runs/7?kind=repeated&offset=50')
-
-    expect(await screen.findByText('历史内容再次出现')).toBeVisible()
-    expect(screen.getByText('历史内容再次命中')).toBeVisible()
-    expect(screen.getAllByText('龙田街道')).toHaveLength(2)
-    expect(screen.getAllByText('竹坑社区')).toHaveLength(2)
-    const original = screen.getByRole('link', { name: '打开原文' })
-    expect(original).toHaveAttribute(
-      'href',
-      'https://www.toutiao.com/article/100/',
-    )
-    expect(original).toHaveAttribute('target', '_blank')
-    expect(original).toHaveAttribute('rel', 'noreferrer')
-    expect(mockedFetchResults).toHaveBeenCalledWith(
-      7,
-      'repeated',
-      expect.any(AbortSignal),
-      { offset: 50 },
-    )
-
-    await userEvent.click(screen.getByRole('button', { name: '上一页' }))
-    await waitFor(() =>
-      expect(router.state.location.search).toBe('?kind=repeated'),
-    )
-  })
-
-  it('renders the Weibo identity in history and detail views', async () => {
-    mockedFetchRuns.mockResolvedValue({
-      runs: [run({ platform: 'wb' })],
-      next_before_id: null,
-    })
-    const list = renderRoute()
-
-    const historyPlatform = await screen.findByText(/微博 · 2 个搜索词/u)
-    expect(historyPlatform.parentElement?.querySelector('img')).toHaveAttribute(
-      'src',
-      weiboLogo,
-    )
-    list.unmount()
-
-    mockedFetchRun.mockResolvedValue(run({ platform: 'wb' }))
-    mockedFetchResults.mockResolvedValue({
-      results: [
-        result({
-          platform: 'wb',
-          platform_content_id: '5012345678901234',
-          content_url: 'https://m.weibo.cn/detail/5012345678901234',
-        }),
-      ],
-      total: 1,
-      limit: 50,
-      offset: 0,
-    })
-    renderRoute('/collection-runs/7')
-
-    const detailPlatform = await screen.findByText('微博 · 规则快照')
-    expect(detailPlatform.querySelector('img')).toHaveAttribute(
-      'src',
-      weiboLogo,
-    )
-    expect(screen.getByRole('link', { name: '打开原文' })).toHaveAttribute(
-      'href',
-      'https://m.weibo.cn/detail/5012345678901234',
-    )
-  })
-
-  it('renders the Kuaishou identity in history and detail views', async () => {
-    mockedFetchRuns.mockResolvedValue({
-      runs: [run({ platform: 'ks' })],
-      next_before_id: null,
-    })
-    const list = renderRoute()
-
-    const historyPlatform = await screen.findByText(/快手 · 2 个搜索词/u)
-    expect(historyPlatform.parentElement?.querySelector('img')).toHaveAttribute(
-      'src',
-      kuaishouLogo,
-    )
-    list.unmount()
-
-    mockedFetchRun.mockResolvedValue(run({ platform: 'ks' }))
-    mockedFetchResults.mockResolvedValue({
-      results: [
-        result({
-          platform: 'ks',
-          platform_content_id: '3xabc123',
-          content_type: 'video',
-          content_url: 'https://www.kuaishou.com/short-video/3xabc123',
-        }),
-      ],
-      total: 1,
-      limit: 50,
-      offset: 0,
-    })
-    renderRoute('/collection-runs/7')
-
-    const detailPlatform = await screen.findByText('快手 · 规则快照')
-    expect(detailPlatform.querySelector('img')).toHaveAttribute(
-      'src',
-      kuaishouLogo,
-    )
-    expect(screen.getByRole('link', { name: '打开原文' })).toHaveAttribute(
-      'href',
-      'https://www.kuaishou.com/short-video/3xabc123',
-    )
-  })
-
-  it('renders the Douyin identity in history and detail views', async () => {
-    mockedFetchRuns.mockResolvedValue({
-      runs: [run({ platform: 'dy' })],
-      next_before_id: null,
-    })
-    const list = renderRoute()
-
-    const historyPlatform = await screen.findByText(/抖音 · 2 个搜索词/u)
-    expect(historyPlatform.parentElement?.querySelector('img')).toHaveAttribute(
-      'src',
-      douyinLogo,
-    )
-    list.unmount()
-
-    mockedFetchRun.mockResolvedValue(run({ platform: 'dy' }))
-    mockedFetchResults.mockResolvedValue({
-      results: [
-        result({
-          platform: 'dy',
-          platform_content_id: '7512345678901234567',
-          content_type: 'video',
-          content_url: 'https://www.douyin.com/video/7512345678901234567',
-        }),
-      ],
-      total: 1,
-      limit: 50,
-      offset: 0,
-    })
-    renderRoute('/collection-runs/7')
-
-    const detailPlatform = await screen.findByText('抖音 · 规则快照')
-    expect(detailPlatform.querySelector('img')).toHaveAttribute(
-      'src',
-      douyinLogo,
-    )
-    expect(screen.getByRole('link', { name: '打开原文' })).toHaveAttribute(
-      'href',
-      'https://www.douyin.com/video/7512345678901234567',
-    )
-  })
-
-  it('renders the Xiaohongshu identity and opens through the product action', async () => {
-    mockedFetchRuns.mockResolvedValue({
-      runs: [run({ platform: 'xhs' })],
-      next_before_id: null,
-    })
-    const list = renderRoute()
-
-    const historyPlatform = await screen.findByText(/小红书 · 2 个搜索词/u)
-    expect(historyPlatform.parentElement?.querySelector('img')).toHaveAttribute(
-      'src',
-      xiaohongshuLogo,
-    )
-    list.unmount()
-
-    mockedFetchRun.mockResolvedValue(run({ platform: 'xhs' }))
-    mockedFetchResults.mockResolvedValue({
-      results: [
-        result({
-          platform: 'xhs',
-          platform_content_id: '0123456789abcdef01234567',
-          content_type: 'image',
-          snippet: '小红书公开信息',
-          published_at_text: '',
-          content_url:
-            'https://www.xiaohongshu.com/explore/0123456789abcdef01234567',
-        }),
-      ],
-      total: 1,
-      limit: 50,
-      offset: 0,
-    })
-    renderRoute('/collection-runs/7')
-
-    const detailPlatform = await screen.findByText('小红书 · 规则快照')
-    expect(detailPlatform.querySelector('img')).toHaveAttribute(
-      'src',
-      xiaohongshuLogo,
-    )
-    expect(screen.queryByRole('link', { name: '打开原文' })).toBeNull()
-    await userEvent.click(screen.getByRole('button', { name: '打开原文' }))
-    await waitFor(() => expect(mockedOpenResult).toHaveBeenCalledWith(7, 11))
-    expect(await screen.findByText('已在谷歌浏览器打开')).toBeVisible()
-  })
-
-  it('owns one XHS open mutation and disables every XHS button while pending', async () => {
-    mockedFetchRun.mockResolvedValue(run({ platform: 'xhs' }))
-    mockedFetchResults.mockResolvedValue({
-      results: [
-        result({
-          id: 11,
-          platform: 'xhs',
-          platform_content_id: '0123456789abcdef01234567',
-          content_url:
-            'https://www.xiaohongshu.com/explore/0123456789abcdef01234567',
-        }),
-        result({
-          id: 12,
-          platform: 'xhs',
-          platform_content_id: 'abcdef0123456789abcdef01',
-          content_url:
-            'https://www.xiaohongshu.com/explore/abcdef0123456789abcdef01',
-        }),
-      ],
-      total: 2,
-      limit: 50,
-      offset: 0,
-    })
-    let resolveOpen: ((value: { outcome: 'opened' }) => void) | undefined
-    mockedOpenResult.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          resolveOpen = resolve
-        }),
-    )
-    renderRoute('/collection-runs/7')
+  it('cancels the remaining batch from the overview', async () => {
     const user = userEvent.setup()
-    const buttons = await screen.findAllByRole('button', {
-      name: '打开原文',
-    })
-
-    await user.click(buttons[0])
-
-    const activeButton = screen.getByRole('button', { name: '正在打开…' })
-    expect(activeButton).toBeDisabled()
-    expect(activeButton).toHaveAttribute('aria-busy', 'true')
-    expect(screen.getByRole('button', { name: '打开原文' })).toBeDisabled()
-    expect(mockedOpenResult).toHaveBeenCalledTimes(1)
-    resolveOpen?.({ outcome: 'opened' })
-    expect(await screen.findByText('已在谷歌浏览器打开')).toBeVisible()
-  })
-
-  it('shows actionable XHS outcomes and preserves technical API errors', async () => {
-    mockedFetchRun.mockResolvedValue(run({ platform: 'xhs' }))
-    mockedFetchResults.mockResolvedValue({
-      results: [
-        result({
-          platform: 'xhs',
-          platform_content_id: '0123456789abcdef01234567',
-          content_url:
-            'https://www.xiaohongshu.com/explore/0123456789abcdef01234567',
-        }),
-      ],
-      total: 1,
-      limit: 50,
-      offset: 0,
-    })
-    mockedOpenResult
-      .mockResolvedValueOnce({ outcome: 'login_required' })
-      .mockRejectedValueOnce(
-        new SearchRunApiError(
-          '无法连接本机后端服务，请确认服务已经启动。',
-          'service_unavailable',
-        ),
-      )
-    renderRoute('/collection-runs/7')
-    const user = userEvent.setup()
-
-    await user.click(await screen.findByRole('button', { name: '打开原文' }))
-    expect(
-      await screen.findByText('请先在当前谷歌浏览器中登录小红书，然后重试。'),
-    ).toBeVisible()
-    await user.click(screen.getByRole('button', { name: '打开原文' }))
-    expect(
-      await screen.findByText('无法连接本机后端服务，请确认服务已经启动。'),
-    ).toBeVisible()
-  })
-
-  it('performs one final result refresh when an active task finishes', async () => {
-    mockedFetchRun.mockResolvedValue(
-      run({
-        status: 'running',
-        current_term_position: 0,
-        new_count: 0,
-        repeated_count: 0,
-        total_count: 0,
-        finished_at: null,
-      }),
+    mockedFetchBatch.mockResolvedValue(
+      batch({ status: 'running', terminal_item_count: 1, finished_at: null }),
     )
-    const { queryClient } = renderRoute('/collection-runs/7')
-    await screen.findByText('第 1 / 2 个搜索词')
-    await waitFor(() => expect(mockedFetchResults).toHaveBeenCalled())
-    mockedFetchResults.mockClear()
+    renderRoute('/collection-batches/9')
 
-    act(() => {
-      queryClient.setQueryData([...SEARCH_RUNS_QUERY_KEY, 7], run())
-    })
-
-    await waitFor(() => expect(mockedFetchResults).toHaveBeenCalledTimes(1))
-  })
-
-  it('turns login-required into an honest platform-account action', async () => {
-    mockedFetchRun.mockResolvedValue(
-      run({
-        status: 'login_required',
-        new_count: 0,
-        repeated_count: 0,
-        total_count: 0,
-      }),
-    )
-    mockedFetchResults.mockResolvedValue({
-      results: [],
-      total: 0,
-      limit: 50,
-      offset: 0,
-    })
-    renderRoute('/collection-runs/7')
-
-    expect(
-      await screen.findByText(
-        '请先到“平台账号”检查今日头条登录状态，再重新采集。',
-      ),
-    ).toBeVisible()
-    expect(screen.getByRole('link', { name: '前往平台账号' })).toHaveAttribute(
-      'href',
-      '/platform-accounts',
-    )
-    expect(screen.queryByText(/自动登录|绕过/u)).toBeNull()
-  })
-
-  it('uses the selected platform name in active and login guidance', async () => {
-    mockedFetchRun.mockResolvedValue(
-      run({
-        platform: 'wb',
-        status: 'login_required',
-        new_count: 0,
-        repeated_count: 0,
-        total_count: 0,
-      }),
-    )
-    mockedFetchResults.mockResolvedValue({
-      results: [],
-      total: 0,
-      limit: 50,
-      offset: 0,
-    })
-    renderRoute('/collection-runs/7')
-
-    expect(
-      await screen.findByText('请先到“平台账号”检查微博登录状态，再重新采集。'),
-    ).toBeVisible()
-  })
-
-  it('rejects invalid deep links without issuing any API request', () => {
-    renderRoute('/collection-runs/not-a-number')
-
-    expect(screen.getByRole('alert')).toHaveTextContent('采集任务地址不正确')
-    expect(mockedFetchRun).not.toHaveBeenCalled()
-    expect(mockedFetchResults).not.toHaveBeenCalled()
+    await user.click(await screen.findByRole('button', { name: '取消批次' }))
+    await waitFor(() => expect(mockedCancelBatch).toHaveBeenCalledWith(9))
+    expect(await screen.findByText('已取消剩余平台。')).toBeVisible()
   })
 })

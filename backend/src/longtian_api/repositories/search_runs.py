@@ -368,24 +368,30 @@ class SearchRunRepository:
                 connection.close()
 
     def list(
-        self, *, limit: int, before_id: int | None
+        self, *, limit: int, before_id: int | None, standalone_only: bool = False
     ) -> tuple[tuple[SearchRunRecord, ...], int | None]:
         with _translate_storage_errors():
             connection = self._database.connect()
             try:
-                if before_id is None:
-                    rows = connection.execute(
-                        "SELECT id FROM search_runs ORDER BY id DESC LIMIT ?",
-                        (limit + 1,),
-                    ).fetchall()
-                else:
-                    rows = connection.execute(
-                        """
-                        SELECT id FROM search_runs
-                        WHERE id < ? ORDER BY id DESC LIMIT ?
-                        """,
-                        (before_id, limit + 1),
-                    ).fetchall()
+                clauses: list[str] = []
+                parameters: list[object] = []
+                if before_id is not None:
+                    clauses.append("runs.id < ?")
+                    parameters.append(before_id)
+                if standalone_only:
+                    clauses.append(
+                        "NOT EXISTS (SELECT 1 FROM search_batch_attempts AS attempts "
+                        "WHERE attempts.search_run_id = runs.id)"
+                    )
+                where = " WHERE " + " AND ".join(clauses) if clauses else ""
+                parameters.append(limit + 1)
+                rows = connection.execute(
+                    f"""
+                    SELECT runs.id FROM search_runs AS runs{where}
+                    ORDER BY runs.id DESC LIMIT ?
+                    """,  # noqa: S608 - clauses are selected from fixed literals.
+                    parameters,
+                ).fetchall()
                 selected = rows[:limit]
                 records = tuple(
                     _read_run(connection, int(row["id"])) for row in selected

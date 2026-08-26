@@ -1,6 +1,6 @@
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { ArrowRight, LoaderCircle, Search, Square } from 'lucide-react'
+import { ArrowRight, LoaderCircle, Pause, Search } from 'lucide-react'
 import { Controller, useForm } from 'react-hook-form'
 import { Link, useNavigate } from 'react-router'
 import { z } from 'zod'
@@ -8,7 +8,14 @@ import { z } from 'zod'
 import { Badge } from '@/components/ui/badge'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Field, FieldError, FieldLabel } from '@/components/ui/field'
+import { Checkbox } from '@/components/ui/checkbox'
+import {
+  Field,
+  FieldError,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import {
   Select,
@@ -27,17 +34,24 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { useMonitoringRules } from '@/hooks/use-monitoring-rules'
+import { useSearchBatches } from '@/hooks/use-search-batches'
 import { useSearchRuns } from '@/hooks/use-search-runs'
 import {
-  cancelSearchRun,
+  isActiveSearchBatch,
+  SEARCH_BATCHES_QUERY_KEY,
+  SearchBatchApiError,
+  startSearchBatch,
+  type SearchBatchStatus,
+  type SearchBatchSummary,
+} from '@/lib/api/search-batches'
+import {
   isActiveSearchRun,
-  SEARCH_RUNS_QUERY_KEY,
-  SearchRunApiError,
-  startSearchRun,
+  type SearchRunStatus,
   type SearchRunSummary,
 } from '@/lib/api/search-runs'
 import {
   formatLocalDate,
+  searchBatchStatusLabel,
   searchPlatformOrder,
   searchPlatformPresenters,
   searchRunStatusLabel,
@@ -45,7 +59,11 @@ import {
 
 const startSchema = z.object({
   ruleId: z.string().min(1, '请选择监控规则。'),
-  platform: z.enum(searchPlatformOrder),
+  platforms: z
+    .array(z.enum(searchPlatformOrder))
+    .min(1, '请至少选择一个采集平台。')
+    .max(5)
+    .refine((platforms) => new Set(platforms).size === platforms.length),
   maxResultsPerTerm: z.coerce
     .number<number>()
     .int('请输入整数。')
@@ -55,7 +73,16 @@ const startSchema = z.object({
 
 type StartValues = z.infer<typeof startSchema>
 
-function runBadgeVariant(status: SearchRunSummary['status']) {
+function batchBadgeVariant(status: SearchBatchStatus) {
+  if (status === 'completed') return 'secondary' as const
+  if (isActiveSearchBatch(status)) return 'default' as const
+  if (status === 'paused_for_manual_action' || status === 'cancelled') {
+    return 'outline' as const
+  }
+  return 'destructive' as const
+}
+
+function runBadgeVariant(status: SearchRunStatus) {
   if (status === 'completed_with_results') return 'secondary' as const
   if (isActiveSearchRun(status)) return 'default' as const
   if (
@@ -69,74 +96,106 @@ function runBadgeVariant(status: SearchRunSummary['status']) {
   return 'destructive' as const
 }
 
-function cancelErrorMessage(error: unknown) {
-  return error instanceof SearchRunApiError
-    ? error.message
-    : '取消任务失败，请重新尝试。'
-}
-
-function ActiveRun({ run }: { run: SearchRunSummary }) {
-  const queryClient = useQueryClient()
-  const cancelMutation = useMutation({
-    mutationFn: () => cancelSearchRun(run.id),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: SEARCH_RUNS_QUERY_KEY })
-    },
-  })
-  const position = run.current_term_position
-  const platform = searchPlatformPresenters[run.platform]
-  const progress =
-    position === null
-      ? `正在连接${platform.label}…`
-      : `第 ${position + 1} / ${run.term_count} 个搜索词`
+function ActiveBatch({ batch }: { batch: SearchBatchSummary }) {
+  const paused = batch.status === 'paused_for_manual_action'
 
   return (
     <Card aria-live="polite" className="border-primary/30 bg-card">
-      <CardContent className="py-5">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
+      <CardContent className="flex flex-col gap-4 py-5 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            {paused ? (
+              <Pause className="size-4 text-primary" aria-hidden />
+            ) : (
               <LoaderCircle
                 className="size-4 animate-spin text-primary motion-reduce:animate-none"
                 aria-hidden
               />
-              <p className="font-medium">正在采集“{run.rule_name}”</p>
-            </div>
-            <p className="mt-1 text-sm text-muted-foreground">{progress}</p>
+            )}
+            <p className="font-medium">
+              {paused ? '采集正在等待安全验证' : `正在采集“${batch.rule_name}”`}
+            </p>
           </div>
-          <Button
-            type="button"
-            variant="outline"
-            className="min-h-11 shrink-0 sm:min-h-8"
-            disabled={cancelMutation.isPending}
-            onClick={() => cancelMutation.mutate()}
-          >
-            <Square className="size-3" aria-hidden />
-            {cancelMutation.isPending ? '正在取消…' : '取消任务'}
-          </Button>
-        </div>
-        {cancelMutation.isError && (
-          <p className="mt-3 text-sm text-destructive" role="alert">
-            {cancelErrorMessage(cancelMutation.error)}
+          <p className="mt-1 text-sm text-muted-foreground">
+            已完成 {batch.terminal_item_count} / {batch.platform_count} 个平台
           </p>
-        )}
+        </div>
+        <Link
+          className={buttonVariants({ variant: 'outline' })}
+          to={`/collection-batches/${batch.id}`}
+        >
+          查看进度
+          <ArrowRight aria-hidden />
+        </Link>
       </CardContent>
     </Card>
   )
 }
 
-function RunHistory({ runs }: { runs: SearchRunSummary[] }) {
-  if (runs.length === 0) {
+function BatchHistory({ batches }: { batches: SearchBatchSummary[] }) {
+  if (batches.length === 0) {
     return (
       <div className="rounded-lg border border-dashed p-8 text-center">
         <p className="font-medium">还没有采集记录</p>
         <p className="mt-1 text-sm text-muted-foreground">
-          选择监控规则和采集平台，开始第一次搜索。
+          选择监控规则和平台，开始第一次采集。
         </p>
       </div>
     )
   }
 
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>状态</TableHead>
+          <TableHead>监控规则</TableHead>
+          <TableHead>平台进度</TableHead>
+          <TableHead>创建时间</TableHead>
+          <TableHead className="text-right">操作</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {batches.map((batch) => (
+          <TableRow key={batch.id}>
+            <TableCell>
+              <Badge variant={batchBadgeVariant(batch.status)}>
+                {searchBatchStatusLabel(batch.status)}
+              </Badge>
+            </TableCell>
+            <TableCell>
+              <p className="max-w-72 truncate font-medium">{batch.rule_name}</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {batch.term_count} 个搜索词 · 每词最多{' '}
+                {batch.max_results_per_term} 条
+              </p>
+            </TableCell>
+            <TableCell>
+              <span className="font-medium text-foreground">
+                {batch.terminal_item_count} / {batch.platform_count}
+              </span>
+              <span className="ml-1 text-muted-foreground">个平台</span>
+            </TableCell>
+            <TableCell className="text-muted-foreground">
+              {formatLocalDate(batch.created_at)}
+            </TableCell>
+            <TableCell className="text-right">
+              <Link
+                className={buttonVariants({ variant: 'ghost', size: 'sm' })}
+                to={`/collection-batches/${batch.id}`}
+              >
+                查看
+                <ArrowRight aria-hidden />
+              </Link>
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  )
+}
+
+function RunHistory({ runs }: { runs: SearchRunSummary[] }) {
   return (
     <Table>
       <TableHeader>
@@ -162,10 +221,7 @@ function RunHistory({ runs }: { runs: SearchRunSummary[] }) {
                 <p className="max-w-72 truncate font-medium">{run.rule_name}</p>
                 <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
                   <img src={platform.logoSrc} alt="" className="size-4" />
-                  <span>
-                    {platform.label} · {run.term_count} 个搜索词 · 每词最多{' '}
-                    {run.max_results_per_term} 条
-                  </span>
+                  <span>{platform.label}</span>
                 </div>
               </TableCell>
               <TableCell>
@@ -201,6 +257,7 @@ export function CollectionRuns() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const rulesQuery = useMonitoringRules()
+  const batchesQuery = useSearchBatches()
   const runsQuery = useSearchRuns()
   const enabledRules =
     rulesQuery.data?.rules.filter((rule) => rule.enabled) ?? []
@@ -208,11 +265,12 @@ export function CollectionRuns() {
     label: `${rule.name}（${rule.terms.length} 个词）`,
     value: String(rule.id),
   }))
-  const platformOptions = searchPlatformOrder.map((platform) => ({
-    label: searchPlatformPresenters[platform].label,
-    value: platform,
-  }))
-  const activeRun = runsQuery.data?.runs.find((run) =>
+  const openBatch = batchesQuery.data?.batches.find(
+    (batch) =>
+      isActiveSearchBatch(batch.status) ||
+      batch.status === 'paused_for_manual_action',
+  )
+  const activeStandaloneRun = runsQuery.data?.runs.find((run) =>
     isActiveSearchRun(run.status),
   )
   const form = useForm<StartValues>({
@@ -220,13 +278,13 @@ export function CollectionRuns() {
     mode: 'onBlur',
     defaultValues: {
       ruleId: '',
-      platform: 'toutiao',
+      platforms: [...searchPlatformOrder],
       maxResultsPerTerm: 10,
     },
   })
   const startMutation = useMutation({
-    mutationFn: (input: Parameters<typeof startSearchRun>[0]) =>
-      startSearchRun(input),
+    mutationFn: (input: Parameters<typeof startSearchBatch>[0]) =>
+      startSearchBatch(input),
   })
   const submit = form.handleSubmit(async (values) => {
     form.clearErrors('root.server')
@@ -248,22 +306,32 @@ export function CollectionRuns() {
       return
     }
     try {
-      const run = await startMutation.mutateAsync({
+      const selected = searchPlatformOrder.filter((platform) =>
+        values.platforms.includes(platform),
+      )
+      const batch = await startMutation.mutateAsync({
         monitoring_rule_id: rule.id,
-        platform: values.platform,
+        platforms: selected,
         max_results_per_term: values.maxResultsPerTerm,
       })
-      await queryClient.invalidateQueries({ queryKey: SEARCH_RUNS_QUERY_KEY })
-      void navigate(`/collection-runs/${run.id}`)
+      await queryClient.invalidateQueries({
+        queryKey: SEARCH_BATCHES_QUERY_KEY,
+      })
+      void navigate(`/collection-batches/${batch.id}`)
     } catch (error) {
       form.setError('root.server', {
         message:
-          error instanceof SearchRunApiError
+          error instanceof SearchBatchApiError
             ? error.message
-            : '采集任务未能开始，请重新尝试。',
+            : '批量采集未能开始，请重新尝试。',
       })
     }
   })
+
+  const controlsDisabled =
+    startMutation.isPending ||
+    openBatch !== undefined ||
+    activeStandaloneRun !== undefined
 
   return (
     <div className="space-y-6">
@@ -278,154 +346,146 @@ export function CollectionRuns() {
             </CardTitle>
           </CardHeader>
           <CardContent className="pt-5">
-            <form
-              onSubmit={submit}
-              noValidate
-              className="grid gap-5 lg:grid-cols-[minmax(16rem,1fr)_15rem_12rem_auto] lg:items-end"
-            >
-              <Controller
-                name="ruleId"
-                control={form.control}
-                render={({ field, fieldState }) => (
-                  <Field data-invalid={fieldState.invalid}>
-                    <FieldLabel htmlFor="collection-rule">监控规则</FieldLabel>
-                    <Select
-                      items={ruleOptions}
-                      value={field.value || null}
-                      onValueChange={(value) => field.onChange(value ?? '')}
-                      disabled={rulesQuery.isPending || startMutation.isPending}
-                    >
-                      <SelectTrigger
-                        ref={field.ref}
-                        id="collection-rule"
-                        className="min-h-11 w-full sm:min-h-8"
-                        aria-invalid={fieldState.invalid}
+            <form onSubmit={submit} noValidate className="grid gap-5">
+              <div className="grid gap-5 lg:grid-cols-[minmax(16rem,1fr)_12rem_auto] lg:items-end">
+                <Controller
+                  name="ruleId"
+                  control={form.control}
+                  render={({ field, fieldState }) => (
+                    <Field data-invalid={fieldState.invalid}>
+                      <FieldLabel htmlFor="collection-rule">
+                        监控规则
+                      </FieldLabel>
+                      <Select
+                        items={ruleOptions}
+                        value={field.value || null}
+                        onValueChange={(value) => field.onChange(value ?? '')}
+                        disabled={rulesQuery.isPending || controlsDisabled}
                       >
-                        <SelectValue placeholder="选择监控规则" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {ruleOptions.map((option) => (
-                          <SelectItem key={option.value} value={option.value}>
-                            {option.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <FieldError errors={[fieldState.error]} />
-                  </Field>
-                )}
-              />
+                        <SelectTrigger
+                          ref={field.ref}
+                          id="collection-rule"
+                          className="min-h-11 w-full sm:min-h-8"
+                          aria-invalid={fieldState.invalid}
+                        >
+                          <SelectValue placeholder="选择监控规则" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {ruleOptions.map((option) => (
+                            <SelectItem key={option.value} value={option.value}>
+                              {option.label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <FieldError errors={[fieldState.error]} />
+                    </Field>
+                  )}
+                />
+
+                <Controller
+                  name="maxResultsPerTerm"
+                  control={form.control}
+                  render={({ field, fieldState }) => (
+                    <Field data-invalid={fieldState.invalid}>
+                      <FieldLabel htmlFor="collection-limit">
+                        每词最多采集
+                      </FieldLabel>
+                      <Input
+                        {...field}
+                        id="collection-limit"
+                        type="number"
+                        inputMode="numeric"
+                        min={1}
+                        max={50}
+                        className="min-h-11 sm:min-h-8"
+                        aria-invalid={fieldState.invalid}
+                        disabled={controlsDisabled}
+                      />
+                      <FieldError errors={[fieldState.error]} />
+                    </Field>
+                  )}
+                />
+
+                <Button
+                  type="submit"
+                  className="min-h-11 sm:min-h-8"
+                  disabled={controlsDisabled || enabledRules.length === 0}
+                >
+                  <Search aria-hidden />
+                  {startMutation.isPending ? '正在创建…' : '开始采集'}
+                </Button>
+              </div>
 
               <Controller
-                name="platform"
+                name="platforms"
                 control={form.control}
                 render={({ field, fieldState }) => (
-                  <Field data-invalid={fieldState.invalid}>
-                    <FieldLabel htmlFor="collection-platform">
-                      采集平台
-                    </FieldLabel>
-                    <Select
-                      items={platformOptions}
-                      value={field.value}
-                      onValueChange={(value) => field.onChange(value)}
-                      disabled={startMutation.isPending}
-                    >
-                      <SelectTrigger
-                        ref={field.ref}
-                        id="collection-platform"
-                        className="min-h-11 w-full sm:min-h-8"
-                        aria-invalid={fieldState.invalid}
-                      >
-                        <SelectValue>
-                          <span className="flex items-center gap-2">
-                            <img
-                              src={
-                                searchPlatformPresenters[field.value].logoSrc
-                              }
-                              alt=""
-                              className="size-5"
-                            />
-                            {searchPlatformPresenters[field.value].label}
-                          </span>
-                        </SelectValue>
-                      </SelectTrigger>
-                      <SelectContent>
-                        {searchPlatformOrder.map((platform) => (
-                          <SelectItem key={platform} value={platform}>
-                            <span className="flex items-center gap-2">
-                              <img
-                                src={searchPlatformPresenters[platform].logoSrc}
-                                alt=""
-                                className="size-5"
+                  <FieldSet
+                    data-invalid={fieldState.invalid}
+                    aria-describedby={
+                      fieldState.error ? 'collection-platform-error' : undefined
+                    }
+                  >
+                    <FieldLegend variant="label">采集平台</FieldLegend>
+                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                      {searchPlatformOrder.map((platform) => {
+                        const presenter = searchPlatformPresenters[platform]
+                        const checked = field.value.includes(platform)
+                        return (
+                          <FieldLabel
+                            key={platform}
+                            className="min-h-14 cursor-pointer rounded-lg border border-border bg-card p-3 has-data-checked:border-primary/40 has-data-checked:bg-primary/5"
+                          >
+                            <Field orientation="horizontal">
+                              <Checkbox
+                                checked={checked}
+                                disabled={controlsDisabled}
+                                aria-invalid={fieldState.invalid}
+                                onCheckedChange={(nextChecked) => {
+                                  const next = nextChecked
+                                    ? [...field.value, platform]
+                                    : field.value.filter(
+                                        (value) => value !== platform,
+                                      )
+                                  field.onChange(next)
+                                }}
                               />
-                              {searchPlatformPresenters[platform].label}
-                            </span>
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <FieldError errors={[fieldState.error]} />
-                  </Field>
-                )}
-              />
-
-              <Controller
-                name="maxResultsPerTerm"
-                control={form.control}
-                render={({ field, fieldState }) => (
-                  <Field data-invalid={fieldState.invalid}>
-                    <FieldLabel htmlFor="collection-limit">
-                      每词最多采集
-                    </FieldLabel>
-                    <Input
-                      {...field}
-                      id="collection-limit"
-                      type="number"
-                      inputMode="numeric"
-                      min={1}
-                      max={50}
-                      className="min-h-11 sm:min-h-8"
-                      aria-invalid={fieldState.invalid}
-                      disabled={startMutation.isPending}
+                              <span className="flex items-center gap-2 font-medium">
+                                <img
+                                  src={presenter.logoSrc}
+                                  alt=""
+                                  className="size-6"
+                                />
+                                {presenter.label}
+                              </span>
+                            </Field>
+                          </FieldLabel>
+                        )
+                      })}
+                    </div>
+                    <FieldError
+                      id="collection-platform-error"
+                      errors={[fieldState.error]}
                     />
-                    <FieldError errors={[fieldState.error]} />
-                  </Field>
+                  </FieldSet>
                 )}
               />
-
-              <Button
-                type="submit"
-                className="min-h-11 sm:min-h-8"
-                disabled={
-                  startMutation.isPending ||
-                  activeRun !== undefined ||
-                  enabledRules.length === 0
-                }
-              >
-                <Search aria-hidden />
-                {startMutation.isPending ? '正在创建…' : '开始采集'}
-              </Button>
 
               {form.formState.errors.root?.server?.message && (
-                <p
-                  role="alert"
-                  className="text-sm text-destructive lg:col-span-full"
-                >
+                <p role="alert" className="text-sm text-destructive">
                   {form.formState.errors.root.server.message}
                 </p>
               )}
               {rulesQuery.isError && (
-                <p
-                  role="alert"
-                  className="text-sm text-destructive lg:col-span-full"
-                >
+                <p role="alert" className="text-sm text-destructive">
                   监控规则暂时无法读取，请稍后重试。
                 </p>
               )}
               {!rulesQuery.isPending &&
                 !rulesQuery.isError &&
                 enabledRules.length === 0 && (
-                  <p className="text-sm text-muted-foreground lg:col-span-full">
+                  <p className="text-sm text-muted-foreground">
                     还没有启用的监控规则，请先到“监控规则”创建或启用一条规则。
                   </p>
                 )}
@@ -434,57 +494,49 @@ export function CollectionRuns() {
         </Card>
       </section>
 
-      {activeRun && <ActiveRun run={activeRun} />}
+      {openBatch && <ActiveBatch batch={openBatch} />}
 
       <section aria-labelledby="collection-history-title">
-        <div className="mb-3 flex items-center justify-between">
-          <h2
-            id="collection-history-title"
-            className="font-display text-xl font-semibold"
-          >
-            历史任务
-          </h2>
-        </div>
+        <h2
+          id="collection-history-title"
+          className="mb-3 font-display text-xl font-semibold"
+        >
+          历史任务
+        </h2>
         <Card>
           <CardContent className="p-0">
-            {runsQuery.isPending ? (
+            {batchesQuery.isPending ? (
               <div className="space-y-3 p-5" aria-label="正在加载采集记录">
                 <Skeleton className="h-10 w-full" />
                 <Skeleton className="h-14 w-full" />
                 <Skeleton className="h-14 w-full" />
               </div>
-            ) : runsQuery.isError ? (
+            ) : batchesQuery.isError ? (
               <div className="p-8 text-center" role="alert">
                 <p className="font-medium">采集记录暂时无法读取</p>
                 <Button
                   variant="outline"
                   className="mt-4"
-                  onClick={() => runsQuery.refetch()}
+                  onClick={() => batchesQuery.refetch()}
                 >
                   重新加载
                 </Button>
               </div>
             ) : (
               <>
-                <RunHistory runs={runsQuery.data?.runs ?? []} />
-                {runsQuery.hasNextPage && (
+                <BatchHistory batches={batchesQuery.data?.batches ?? []} />
+                {batchesQuery.hasNextPage && (
                   <div className="border-t p-3 text-center">
                     <Button
                       type="button"
                       variant="outline"
-                      className="min-h-11 sm:min-h-8"
-                      disabled={runsQuery.isFetchingNextPage}
-                      onClick={() => runsQuery.fetchNextPage()}
+                      disabled={batchesQuery.isFetchingNextPage}
+                      onClick={() => batchesQuery.fetchNextPage()}
                     >
-                      {runsQuery.isFetchingNextPage
+                      {batchesQuery.isFetchingNextPage
                         ? '正在加载…'
                         : '加载更多任务'}
                     </Button>
-                    {runsQuery.isFetchNextPageError && (
-                      <p className="mt-2 text-sm text-destructive" role="alert">
-                        更多采集记录暂时无法读取，请重新尝试。
-                      </p>
-                    )}
                   </div>
                 )}
               </>
@@ -492,6 +544,36 @@ export function CollectionRuns() {
           </CardContent>
         </Card>
       </section>
+
+      {(runsQuery.data?.runs.length ?? 0) > 0 && (
+        <section aria-labelledby="standalone-history-title">
+          <h2
+            id="standalone-history-title"
+            className="mb-3 font-display text-lg font-semibold"
+          >
+            之前的单平台任务
+          </h2>
+          <Card>
+            <CardContent className="p-0">
+              <RunHistory runs={runsQuery.data?.runs ?? []} />
+              {runsQuery.hasNextPage && (
+                <div className="border-t p-3 text-center">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={runsQuery.isFetchingNextPage}
+                    onClick={() => runsQuery.fetchNextPage()}
+                  >
+                    {runsQuery.isFetchingNextPage
+                      ? '正在加载…'
+                      : '加载更多单平台任务'}
+                  </Button>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </section>
+      )}
     </div>
   )
 }

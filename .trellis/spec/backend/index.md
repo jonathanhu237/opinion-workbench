@@ -24,6 +24,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Visible Browser Search Adapter](./browser-search-adapter-guidelines.md) | Search-only browser lifecycle, DOM/link contracts, storage, and live validation | Active |
 | [Platform Connection](./platform-connection-guidelines.md) | Authentication-only subprocess protocol, product state, and borrowed-Chrome ownership | Active |
 | [Product Search](./product-search-guidelines.md) | Borrowed-Chrome collection runs, product SQLite deduplication, API/worker contracts, and validation | Active |
+| [Batch Search](./batch-search-guidelines.md) | Durable multi-platform batches, serial ownership, attempts, recovery, and UI/API contracts | Active |
 
 ---
 

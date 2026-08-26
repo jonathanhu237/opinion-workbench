@@ -1157,6 +1157,10 @@ def test_version_one_database_upgrades_without_reseeding_monitoring_rules(
     with database.connect() as connection:
         connection.execute("BEGIN IMMEDIATE")
         for table in (
+            "search_batch_attempts",
+            "search_batch_items",
+            "search_batch_terms",
+            "search_batches",
             "search_run_content_terms",
             "search_run_contents",
             "search_contents",
@@ -1547,7 +1551,9 @@ def test_version_five_migration_preserves_rows_sequences_and_adds_xhs(
                 """
             ).fetchall()
         )
-        assert migrated.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert migrated.execute("PRAGMA user_version").fetchone()[0] == (
+            CURRENT_DATABASE_VERSION
+        )
         assert migrated.execute("PRAGMA foreign_key_check").fetchall() == []
 
     assert after == before

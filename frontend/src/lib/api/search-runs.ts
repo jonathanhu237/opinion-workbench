@@ -3,6 +3,13 @@ import { z } from 'zod'
 import { getApiBaseUrl } from '@/lib/api/client'
 
 export const SEARCH_RUNS_QUERY_KEY = ['search-runs'] as const
+export const SEARCH_PLATFORM_ORDER = [
+  'toutiao',
+  'wb',
+  'ks',
+  'dy',
+  'xhs',
+] as const
 
 const activeStatuses = ['queued', 'running'] as const
 const terminalStatuses = [
@@ -17,9 +24,12 @@ const terminalStatuses = [
   'cancelled',
   'internal_error',
 ] as const
-const searchRunStatusSchema = z.enum([...activeStatuses, ...terminalStatuses])
-const searchPlatformSchema = z.enum(['toutiao', 'wb', 'ks', 'dy', 'xhs'])
-const isoDateSchema = z.string().datetime({ offset: true })
+export const searchRunStatusSchema = z.enum([
+  ...activeStatuses,
+  ...terminalStatuses,
+])
+export const searchPlatformSchema = z.enum(SEARCH_PLATFORM_ORDER)
+export const isoDateSchema = z.string().datetime({ offset: true })
 const positiveSafeIntegerSchema = z
   .number()
   .int()
@@ -46,7 +56,7 @@ const summaryShape = {
   started_at: isoDateSchema.nullable(),
   finished_at: isoDateSchema.nullable(),
 } as const
-const searchRunSummarySchema = z
+export const searchRunSummarySchema = z
   .strictObject(summaryShape)
   .superRefine((value, context) => {
     if (value.new_count + value.repeated_count !== value.total_count) {
@@ -369,9 +379,16 @@ export async function startSearchRun(
 
 export async function fetchSearchRuns(
   signal: AbortSignal,
-  options: { limit?: number; beforeId?: number } = {},
+  options: {
+    limit?: number
+    beforeId?: number
+    scope?: 'all' | 'standalone'
+  } = {},
 ) {
   const query = new URLSearchParams({ limit: String(options.limit ?? 20) })
+  if (options.scope !== undefined) {
+    query.set('scope', options.scope)
+  }
   if (options.beforeId !== undefined) {
     query.set('before_id', String(options.beforeId))
   }

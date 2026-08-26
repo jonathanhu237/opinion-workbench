@@ -1,0 +1,440 @@
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import {
+  ArrowLeft,
+  ArrowRight,
+  Check,
+  Circle,
+  LoaderCircle,
+  Pause,
+  Square,
+  TriangleAlert,
+} from 'lucide-react'
+import { useState } from 'react'
+import { Link, useParams } from 'react-router'
+
+import { Badge } from '@/components/ui/badge'
+import { Button, buttonVariants } from '@/components/ui/button'
+import { Card, CardContent, CardHeader } from '@/components/ui/card'
+import { Skeleton } from '@/components/ui/skeleton'
+import {
+  useSearchBatch,
+  useSearchBatchAttempts,
+} from '@/hooks/use-search-batches'
+import {
+  cancelSearchBatch,
+  continueSearchBatch,
+  SEARCH_BATCHES_QUERY_KEY,
+  SearchBatchApiError,
+  type SearchBatchDetail,
+  type SearchBatchItem,
+  type SearchBatchItemStatus,
+  type SearchBatchStatus,
+} from '@/lib/api/search-batches'
+import { SEARCH_RUNS_QUERY_KEY } from '@/lib/api/search-runs'
+import {
+  formatLocalDate,
+  searchBatchItemStatusLabel,
+  searchBatchStatusLabel,
+  searchPlatformPresenters,
+  searchRunStatusGuidance,
+  searchRunStatusLabel,
+} from '@/routes/search-run-presenters'
+
+function parseBatchId(value: string | undefined) {
+  if (!value || !/^[1-9][0-9]*$/u.test(value)) return null
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) ? parsed : null
+}
+
+function batchBadgeVariant(status: SearchBatchStatus) {
+  if (status === 'completed') return 'secondary' as const
+  if (status === 'queued' || status === 'running') return 'default' as const
+  if (status === 'paused_for_manual_action' || status === 'cancelled') {
+    return 'outline' as const
+  }
+  return 'destructive' as const
+}
+
+function itemBadgeVariant(status: SearchBatchItemStatus) {
+  if (status === 'completed') return 'secondary' as const
+  if (status === 'running') return 'default' as const
+  if (
+    status === 'queued' ||
+    status === 'paused_for_manual_action' ||
+    status === 'cancelled'
+  ) {
+    return 'outline' as const
+  }
+  return 'destructive' as const
+}
+
+function StatusMark({ status }: { status: SearchBatchItemStatus }) {
+  if (status === 'completed') {
+    return <Check className="size-4" aria-hidden />
+  }
+  if (status === 'running') {
+    return (
+      <LoaderCircle
+        className="size-4 animate-spin motion-reduce:animate-none"
+        aria-hidden
+      />
+    )
+  }
+  if (status === 'paused_for_manual_action') {
+    return <Pause className="size-4" aria-hidden />
+  }
+  if (status === 'failed') {
+    return <TriangleAlert className="size-4" aria-hidden />
+  }
+  if (status === 'cancelled') {
+    return <Square className="size-3" aria-hidden />
+  }
+  return <Circle className="size-3" aria-hidden />
+}
+
+function AttemptHistory({
+  batchId,
+  item,
+}: {
+  batchId: number
+  item: SearchBatchItem
+}) {
+  const [open, setOpen] = useState(false)
+  const attemptsQuery = useSearchBatchAttempts(
+    open ? batchId : null,
+    open ? item.position : null,
+  )
+
+  if (item.attempt_count <= 1) return null
+
+  return (
+    <div className="mt-3 border-t border-border/70 pt-3">
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+      >
+        {open ? '收起尝试记录' : `查看 ${item.attempt_count} 次尝试`}
+      </Button>
+      {open && (
+        <div className="mt-2 space-y-2">
+          {attemptsQuery.isPending ? (
+            <p className="text-sm text-muted-foreground" role="status">
+              正在读取尝试记录…
+            </p>
+          ) : attemptsQuery.isError ? (
+            <p className="text-sm text-destructive" role="alert">
+              尝试记录暂时无法读取。
+            </p>
+          ) : (
+            attemptsQuery.data?.attempts.map((attempt) => (
+              <div
+                key={attempt.attempt_number}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-muted/60 px-3 py-2 text-sm"
+              >
+                <span>
+                  第 {attempt.attempt_number} 次 ·{' '}
+                  {searchRunStatusLabel(attempt.run.status)}
+                </span>
+                <Link
+                  className={buttonVariants({ variant: 'ghost', size: 'sm' })}
+                  to={`/collection-runs/${attempt.run.id}`}
+                >
+                  查看任务
+                </Link>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function BatchRail({ batch }: { batch: SearchBatchDetail }) {
+  return (
+    <ol className="relative space-y-3 before:absolute before:top-7 before:bottom-7 before:left-6 before:w-px before:bg-border sm:before:left-7">
+      {batch.items.map((item) => {
+        const platform = searchPlatformPresenters[item.platform]
+        const run = item.latest_attempt?.run
+        const guidance = run
+          ? searchRunStatusGuidance(run.status, item.platform)
+          : null
+        const progress =
+          run?.status === 'running'
+            ? run.current_term_position === null
+              ? `正在连接${platform.label}…`
+              : `第 ${run.current_term_position + 1} / ${run.term_count} 个搜索词`
+            : null
+        return (
+          <li key={item.platform} className="relative pl-13 sm:pl-16">
+            <div
+              className={`absolute top-4 left-2.5 z-10 grid size-7 place-items-center rounded-full border bg-background sm:left-3.5 ${
+                item.status === 'running'
+                  ? 'border-primary text-primary'
+                  : item.status === 'failed'
+                    ? 'border-destructive text-destructive'
+                    : 'border-border text-muted-foreground'
+              }`}
+            >
+              <StatusMark status={item.status} />
+            </div>
+            <Card>
+              <CardContent className="p-4 sm:p-5">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2.5">
+                      <img src={platform.logoSrc} alt="" className="size-7" />
+                      <h3 className="font-medium">{platform.label}</h3>
+                      <Badge variant={itemBadgeVariant(item.status)}>
+                        {searchBatchItemStatusLabel(item.status)}
+                      </Badge>
+                      {item.attempt_count > 1 && (
+                        <span className="text-xs text-muted-foreground">
+                          第 {item.attempt_count} 次尝试
+                        </span>
+                      )}
+                    </div>
+                    {progress && (
+                      <p className="mt-2 text-sm text-muted-foreground">
+                        {progress}
+                      </p>
+                    )}
+                    {run && item.status !== 'running' && (
+                      <p className="mt-2 text-sm text-muted-foreground">
+                        {searchRunStatusLabel(run.status)}
+                      </p>
+                    )}
+                    {guidance && item.status !== 'running' && (
+                      <p className="mt-1 text-sm text-muted-foreground">
+                        {guidance}
+                      </p>
+                    )}
+                    {run && (
+                      <p className="mt-2 text-sm">
+                        <span className="font-medium">
+                          新增 {run.new_count}
+                        </span>
+                        <span className="mx-2 text-border">/</span>
+                        <span className="text-muted-foreground">
+                          再次命中 {run.repeated_count}
+                        </span>
+                      </p>
+                    )}
+                  </div>
+                  {run && (
+                    <Link
+                      className={buttonVariants({
+                        variant: 'outline',
+                        size: 'sm',
+                      })}
+                      to={`/collection-runs/${run.id}`}
+                    >
+                      查看结果
+                      <ArrowRight aria-hidden />
+                    </Link>
+                  )}
+                </div>
+                <AttemptHistory batchId={batch.id} item={item} />
+              </CardContent>
+            </Card>
+          </li>
+        )
+      })}
+    </ol>
+  )
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof SearchBatchApiError
+    ? error.message
+    : '操作未能完成，请重新尝试。'
+}
+
+export function CollectionBatchDetail() {
+  const batchId = parseBatchId(useParams().batchId)
+  const queryClient = useQueryClient()
+  const batchQuery = useSearchBatch(batchId)
+  const [actionMessage, setActionMessage] = useState('')
+  const continueMutation = useMutation({
+    mutationFn: () => continueSearchBatch(batchId ?? 0),
+    onSuccess: async () => {
+      setActionMessage('已继续采集，正在重新检查当前平台。')
+      await queryClient.invalidateQueries({
+        queryKey: SEARCH_BATCHES_QUERY_KEY,
+      })
+      await queryClient.invalidateQueries({ queryKey: SEARCH_RUNS_QUERY_KEY })
+    },
+  })
+  const cancelMutation = useMutation({
+    mutationFn: () => cancelSearchBatch(batchId ?? 0),
+    onSuccess: async () => {
+      setActionMessage('已取消剩余平台。')
+      await queryClient.invalidateQueries({
+        queryKey: SEARCH_BATCHES_QUERY_KEY,
+      })
+      await queryClient.invalidateQueries({ queryKey: SEARCH_RUNS_QUERY_KEY })
+    },
+  })
+  const pending = continueMutation.isPending || cancelMutation.isPending
+  const mutationError = continueMutation.error ?? cancelMutation.error
+  const continueCollection = () => {
+    cancelMutation.reset()
+    setActionMessage('')
+    continueMutation.mutate()
+  }
+  const cancelCollection = () => {
+    continueMutation.reset()
+    setActionMessage('')
+    cancelMutation.mutate()
+  }
+
+  if (batchId === null) {
+    return (
+      <Card>
+        <CardContent className="p-8 text-center" role="alert">
+          <p className="font-medium">采集批次编号不正确</p>
+          <Link
+            className={buttonVariants({ variant: 'outline' })}
+            to="/collection-runs"
+          >
+            返回采集任务
+          </Link>
+        </CardContent>
+      </Card>
+    )
+  }
+
+  if (batchQuery.isPending) {
+    return (
+      <div className="space-y-4" aria-label="正在加载批次进度">
+        <Skeleton className="h-24 w-full" />
+        <Skeleton className="h-32 w-full" />
+        <Skeleton className="h-32 w-full" />
+      </div>
+    )
+  }
+
+  if (batchQuery.isError || !batchQuery.data) {
+    return (
+      <Card>
+        <CardContent className="p-8 text-center" role="alert">
+          <p className="font-medium">批次进度暂时无法读取</p>
+          <Button
+            variant="outline"
+            className="mt-4"
+            onClick={() => batchQuery.refetch()}
+          >
+            重新加载
+          </Button>
+        </CardContent>
+      </Card>
+    )
+  }
+
+  const batch = batchQuery.data
+  const canCancel = ['queued', 'running', 'paused_for_manual_action'].includes(
+    batch.status,
+  )
+  const pausedItem = batch.items.find(
+    (item) => item.status === 'paused_for_manual_action',
+  )
+  const pausedPlatform = pausedItem
+    ? searchPlatformPresenters[pausedItem.platform].label
+    : null
+
+  return (
+    <div className="space-y-5">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <Link
+            to="/collection-runs"
+            className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+          >
+            <ArrowLeft className="size-4" aria-hidden />
+            返回采集任务
+          </Link>
+          <div className="mt-3 flex flex-wrap items-center gap-3">
+            <h2 className="font-display text-2xl font-semibold">
+              {batch.rule_name}
+            </h2>
+            <Badge variant={batchBadgeVariant(batch.status)}>
+              {searchBatchStatusLabel(batch.status)}
+            </Badge>
+          </div>
+          <p className="mt-2 text-sm text-muted-foreground">
+            已完成 {batch.terminal_item_count} / {batch.platform_count} 个平台 ·{' '}
+            {batch.term_count} 个搜索词 · 创建于{' '}
+            {formatLocalDate(batch.created_at)}
+          </p>
+        </div>
+        {canCancel && batch.status !== 'paused_for_manual_action' && (
+          <Button
+            type="button"
+            variant="outline"
+            disabled={pending}
+            onClick={cancelCollection}
+          >
+            <Square className="size-3" aria-hidden />
+            {cancelMutation.isPending ? '正在取消…' : '取消批次'}
+          </Button>
+        )}
+      </div>
+
+      {batch.status === 'paused_for_manual_action' && pausedPlatform && (
+        <Card className="border-primary/35">
+          <CardHeader>
+            <h3 className="text-lg font-medium">
+              请完成{pausedPlatform}安全验证
+            </h3>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              请在谷歌浏览器中完成当前页面显示的验证码或滑块。完成后继续采集，系统会先重新检查
+              {pausedPlatform}，再处理后续平台。
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                disabled={pending}
+                onClick={continueCollection}
+              >
+                {continueMutation.isPending ? '正在继续…' : '继续采集'}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={pending}
+                onClick={cancelCollection}
+              >
+                {cancelMutation.isPending ? '正在取消…' : '取消批次'}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      <div aria-live="polite" aria-atomic="true">
+        {mutationError ? (
+          <p className="text-sm text-destructive" role="alert">
+            {errorMessage(mutationError)}
+          </p>
+        ) : actionMessage ? (
+          <p className="text-sm text-muted-foreground">{actionMessage}</p>
+        ) : null}
+      </div>
+
+      <section aria-labelledby="platform-progress-title">
+        <h2
+          id="platform-progress-title"
+          className="mb-3 font-display text-xl font-semibold"
+        >
+          平台进度
+        </h2>
+        <BatchRail batch={batch} />
+      </section>
+    </div>
+  )
+}

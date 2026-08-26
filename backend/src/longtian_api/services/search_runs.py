@@ -73,7 +73,7 @@ class SearchRunRepositoryProtocol(Protocol):
     def get(self, run_id: int) -> SearchRunRecord: ...
 
     def list(
-        self, *, limit: int, before_id: int | None
+        self, *, limit: int, before_id: int | None, standalone_only: bool = False
     ) -> tuple[tuple[SearchRunRecord, ...], int | None]: ...
 
     def list_results(
@@ -127,9 +127,12 @@ class SearchRunService:
         self._monitoring_rules = monitoring_rules
         self._worker = worker
         self._browser_operations = browser_operations
-        self._repository = repository or SearchRunRepository(
-            database or Database(database_path)
-        )
+        if repository is None:
+            self._database: Database | None = database or Database(database_path)
+            self._repository = SearchRunRepository(self._database)
+        else:
+            self._database = None
+            self._repository = repository
         self._search_timeout_seconds = search_timeout_seconds
         self._open_timeout_seconds = open_timeout_seconds
         self._lock = asyncio.Lock()
@@ -140,11 +143,16 @@ class SearchRunService:
         self._active_open_request_id: UUID | None = None
         self._shutdown_started = False
 
+    @property
+    def database(self) -> Database | None:
+        """Return the shared product database when this service owns one."""
+        return self._database
+
     def initialize(self) -> None:
         self._repository.initialize()
 
     async def start_run(self, payload: SearchRunCreate) -> SearchRunDetail:
-        rule = await self._load_rule(payload.monitoring_rule_id)
+        rule = await self.load_rule(payload.monitoring_rule_id)
         if len(rule.terms) > MAX_SEARCH_TERMS:
             raise SearchRunError(
                 status_code=422,
@@ -186,13 +194,14 @@ class SearchRunService:
             return _to_detail(record)
 
     async def list_runs(
-        self, *, limit: int, before_id: int | None
+        self, *, limit: int, before_id: int | None, standalone_only: bool = False
     ) -> SearchRunListResponse:
         try:
             records, next_before_id = await asyncio.to_thread(
                 self._repository.list,
                 limit=limit,
                 before_id=before_id,
+                standalone_only=standalone_only,
             )
         except SearchRunRepositoryUnavailableError:
             raise _storage_unavailable() from None
@@ -317,7 +326,17 @@ class SearchRunService:
             except asyncio.CancelledError:
                 pass
 
-    async def _load_rule(self, rule_id: int) -> MonitoringRule:
+    async def execute_attempt(
+        self, record: SearchRunRecord, request_id: UUID
+    ) -> SearchRunRecord:
+        """Execute one already-persisted batch attempt under external ownership."""
+        terminal, cancelled = await self._execute_record(record, request_id)
+        if cancelled:
+            raise asyncio.CancelledError
+        return await self._get_record(record.id)
+
+    async def load_rule(self, rule_id: int) -> MonitoringRule:
+        """Load and validate the enabled rule shared by run orchestrators."""
         try:
             enabled_rules = await asyncio.to_thread(self._monitoring_rules.list_enabled)
         except MonitoringRuleError:
@@ -358,6 +377,22 @@ class SearchRunService:
         request_id: UUID,
         owner: BrowserOperationOwner,
     ) -> None:
+        cancelled = False
+        try:
+            _, cancelled = await self._execute_record(record, request_id)
+        finally:
+            await self._browser_operations.release(owner)
+            async with self._lock:
+                if self._active_request_id == request_id:
+                    self._active_run_id = None
+                    self._active_request_id = None
+                    self._current_task = None
+        if cancelled:
+            raise asyncio.CancelledError
+
+    async def _execute_record(
+        self, record: SearchRunRecord, request_id: UUID
+    ) -> tuple[SearchRunStatus, bool]:
         terminal: SearchRunStatus = "internal_error"
         cancelled = False
         try:
@@ -412,15 +447,7 @@ class SearchRunService:
             )
         except (SearchRunNotActiveError, SearchRunRepositoryUnavailableError):
             pass
-        finally:
-            await self._browser_operations.release(owner)
-            async with self._lock:
-                if self._active_request_id == request_id:
-                    self._active_run_id = None
-                    self._active_request_id = None
-                    self._current_task = None
-        if cancelled:
-            raise asyncio.CancelledError
+        return terminal, cancelled
 
 
 def _project_worker_outcome(outcome: str) -> SearchRunStatus:

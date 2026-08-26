@@ -6,6 +6,7 @@ from fastapi import Depends, Request
 
 from longtian_api.services.monitoring_rules import MonitoringRuleService
 from longtian_api.services.platform_connections import PlatformConnectionService
+from longtian_api.services.search_batches import SearchBatchService
 from longtian_api.services.search_runs import SearchRunService
 
 
@@ -36,3 +37,12 @@ def get_search_run_service(request: Request) -> SearchRunService:
 
 
 SearchRunServiceDep = Annotated[SearchRunService, Depends(get_search_run_service)]
+
+
+def get_search_batch_service(request: Request) -> SearchBatchService:
+    """Retrieve the lifespan-owned search-batch service."""
+
+    return request.app.state.search_batch_service
+
+
+SearchBatchServiceDep = Annotated[SearchBatchService, Depends(get_search_batch_service)]
