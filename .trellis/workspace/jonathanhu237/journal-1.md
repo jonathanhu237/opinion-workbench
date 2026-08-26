@@ -280,3 +280,25 @@ Added SQLite-backed monitoring-rule CRUD, a typed FastAPI resource, and a Shadcn
 ### Status
 
 [OK] **Completed**
+
+
+## Session 14: 今日头条平台搜索
+
+**Date**: 2026-08-26
+**Task**: 今日头条平台搜索
+**Branch**: `main`
+
+### Summary
+
+完成今日头条搜索运行、结果持久化、全局去重与前后端链路，补充真实 Chrome 验收证据和产品搜索规范。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a45bbf5` | (see git log) |
+| `8a72f86` | (see git log) |
+
+### Status
+
+[OK] **Completed**
