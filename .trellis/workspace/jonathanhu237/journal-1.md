@@ -344,3 +344,42 @@ Added SQLite-backed monitoring-rule CRUD, a typed FastAPI resource, and a Shadcn
 ### Status
 
 [OK] **Completed**
+
+
+## Session 17: Add Douyin product search
+
+**Date**: 2026-08-26
+**Task**: Add Douyin product search
+**Branch**: `main`
+
+### Summary
+
+Added durable Douyin keyword collection through the approved persistent Google Chrome session and verified cross-run deduplication.
+
+### Main Changes
+
+- Added the narrow single-attempt Douyin product adapter and strict dy worker protocol.
+- Migrated product SQLite to version 5 and exposed Douyin in the existing Shadcn collection workflow.
+- Archived the completed Douyin Trellis task with real-browser evidence and updated the product-search specification.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `b963eba` | (see git log) |
+| `714721c` | (see git log) |
+
+### Testing
+
+- [OK] Local: FastAPI 162 passed; React 81 passed and built; Douyin/product search 34 passed.
+- [OK] Local MediaCrawler: 491 passed and 8 skipped without Redis-dependent files; full suite had only 6 expected Redis failures.
+- [OK] Centaurus: FastAPI 162, React 81, MediaCrawler 488 passed with 11 platform skips.
+- [OK] Real Chrome: first run 9 new; later run 3 new and 3 repeated with canonical URLs and correct timestamps.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Plan and approve Xiaohongshu product search as the remaining JD platform.
