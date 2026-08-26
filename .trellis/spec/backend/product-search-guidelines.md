@@ -15,12 +15,12 @@ This is a product orchestration contract, not a general crawler contract. The st
 contract in `browser-search-adapter-guidelines.md` continues to require a fresh context. Only this
 lifespan-owned product worker may borrow the already approved default Chrome context, and only with
 the ownership and serialization rules below. The exact supported search-platform set is
-`toutiao | wb`; extending it requires coordinated API, database, worker-protocol, adapter, frontend,
+`toutiao | wb | ks`; extending it requires coordinated API, database, worker-protocol, adapter, frontend,
 and migration changes.
 
 ### 2. Signatures
 
-Database version 3 owns:
+Database version 4 owns:
 
 ```text
 search_runs(
@@ -65,11 +65,11 @@ POST /api/v1/search-runs/{run_id}/cancel
 Start input is exact and strict:
 
 ```json
-{"monitoring_rule_id": 1, "platform": "wb", "max_results_per_term": 10}
+{"monitoring_rule_id": 1, "platform": "ks", "max_results_per_term": 10}
 ```
 
 - `monitoring_rule_id`: SQLite signed-int64 integer from 1 upward.
-- `platform`: exact literal `toutiao | wb`.
+- `platform`: exact literal `toutiao | wb | ks`.
 - `max_results_per_term`: strict integer 1–50, default 10.
 - The selected enabled rule must contain 1–20 terms.
 
@@ -148,8 +148,11 @@ Search cancellation uses the search-command prefix with exact `command="cancel"`
   generation, broad pagination, blocked-navigation retry, or fallback to a second browser.
 - Toutiao uses the visible official PC search page. Weibo uses the borrowed session to refresh only
   Weibo state, then calls the existing `m.weibo.cn` real-time search endpoint through a
-  product-specific single-attempt client. The generic five-retry Weibo client, crawler stores,
-  full-text requests, comments, user profiles, and media helpers are forbidden.
+  product-specific single-attempt client. Kuaishou creates one task-owned page, installs the
+  existing signer on that page only, proves the account state online, and calls the official
+  `/rest/v/search/feed` endpoint through its product-specific single-attempt client. Generic retry
+  clients, crawler stores, full-text/detail requests, comments, user profiles, and media helpers are
+  forbidden.
 - A disconnected account check is not itself a search failure. The official public search page may
   be used without an authenticated Toutiao account; return `login_required` only when the search
   page itself presents a recognized mandatory login wall.
@@ -164,6 +167,13 @@ Search cancellation uses the search-command prefix with exact `command="cancel"`
   normalizes whitespace, and constructs `https://m.weibo.cn/detail/<id>` itself with no query or
   fragment. Unknown successful response/card shapes fail as `structure_changed`; they never become
   a false empty result.
+- The Kuaishou adapter requests at most `ceil(max_results_per_term / 20)` pages per term, sends a
+  numeric page `pcursor`, and carries the response `searchSessionId` to later pages. Each page is
+  requested once. It accepts only recognized successful feeds containing a stable `photo.id` and
+  usable bounded caption, builds the canonical URL itself, and never exposes signing values,
+  Cookies, raw response data, author IDs, media URLs, counters, or page-local state. Login,
+  challenge, HTTP 403/429, recognized block, signer failure, and unknown response shapes remain
+  distinct terminal outcomes and never become empty success.
 - Deduplicate repeated anchors within one term, but emit the same content again for another
   `term_position`; FastAPI owns cross-term merging and provenance.
 - Item frames use `term_position`, not a copied source-term string. They contain only the bounded
@@ -184,6 +194,9 @@ Search cancellation uses the search-command prefix with exact `command="cancel"`
   parameters, sort any remaining meaningful query pairs, and never retain redirect/session tokens.
   Weibo is stricter: only `https://m.weibo.cn/detail/<matching-platform-content-id>` with no query,
   fragment, credentials, or non-default port is valid.
+  Kuaishou is equally strict: only
+  `https://www.kuaishou.com/short-video/<matching-platform-content-id>` is valid; hostname case
+  variants, explicit ports, queries, fragments, credentials, and mismatched IDs are rejected.
 - Normal completion and cancellation close the task-owned search page. Login/challenge outcomes may
   leave that one official page visible for manual action; it remains registered and is closed before
   the next task-owned operation or worker shutdown. Pre-existing pages are never cleanup targets.
@@ -193,7 +206,7 @@ Search cancellation uses the search-command prefix with exact `command="cancel"`
 - Add the real sidebar label `采集任务` and routes `/collection-runs` and
   `/collection-runs/:runId`; the sidebar item is active for both.
 - The start view uses enabled monitoring rules, a Shadcn platform Select containing exactly the
-  executable `今日头条` and `微博` targets, and a labeled 1–50 number field with default 10. It does
+  executable `今日头条`、`微博` and `快手` targets, and a labeled 1–50 number field with default 10. It does
   not show unavailable platforms as executable controls or add a sort selector.
 - Poll once per second only while the selected/latest run is active. Terminal/history queries use
   ordinary TanStack Query caching and explicit invalidation.
@@ -240,19 +253,19 @@ Chinese guidance.
 
 ### 5. Good / Base / Bad Cases
 
-- **Good:** A five-term Weibo rule starts one durable run, searches each term in fixed real-time
-  mode through the borrowed context, stores one global content row for a cross-term match, records
-  both matching terms, and reports consistent new/repeated counts on a later run.
+- **Good:** A five-term Kuaishou rule starts one durable run, searches each term sequentially through
+  the task-owned signer page, stores one global content row for a cross-term match, records both
+  matching terms, and reports consistent new/repeated counts on a later run.
 - **Base:** A one-term run reaches a recognized empty state and persists `completed_empty` with zero
   results; no store or private endpoint is invoked.
-- **Bad:** Terms appear in process arguments/logs, the generic Weibo five-retry client or crawler
+- **Bad:** Terms appear in process arguments/logs, a generic retry client or crawler
   store is used, repeated content is inserted again, a cross-term match loses provenance, an unknown
   response becomes empty success, one layer silently substitutes Toutiao, or cleanup closes the
   user's context/tab.
 
 ### 6. Tests Required
 
-1. Migration: version 1→2→3, direct version 2→3, fresh version 3, repeated initialization,
+1. Migration: version 1→2→3→4, direct version 3→4, fresh version 4, repeated initialization,
    forward-version rejection, foreign keys/indexes, active-row reconciliation, preservation of all
    Toutiao IDs/relations/timestamps, and same content ID isolation across platforms.
 2. Repository: run snapshots, stable history pagination, state transitions, transactional item
@@ -267,10 +280,10 @@ Chinese guidance.
 5. Borrowed Chrome: reuse one CDP/default context, task-page registration, no context-wide scripts,
    no close of browser/context/pre-existing pages, challenge-page lifecycle, cancellation, disconnect,
    and worker recycle.
-6. Platform adapters: retain all Toutiao fixtures, plus Weibo exact request parameters, single
-   attempt, bounded pages, flat/nested result cards, HTML cleanup, canonical URL construction,
-   publisher masking, within-term deduplication, cross-term re-emission, hard limit, and every
-   recognized terminal outcome.
+6. Platform adapters: retain all Toutiao and Weibo fixtures, plus Kuaishou exact signed request
+   parameters, task-local signer isolation, numeric pagination/session propagation, single attempt,
+   bounded pages, canonical URL construction, publisher masking, within-term deduplication,
+   cross-term re-emission, hard limit, and every recognized terminal outcome.
 7. Frontend: runtime decoders, exact status/code pairs, start validation, active polling, cancel,
    history/deep link, new/repeated filters and counts, matched terms, safe original links, empty/error/
    login guidance, keyboard/focus/live-region behavior, mobile layout, and no fake data.

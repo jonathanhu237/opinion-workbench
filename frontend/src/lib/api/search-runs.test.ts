@@ -57,6 +57,15 @@ const weiboResult: SearchResult = {
   content_url: 'https://m.weibo.cn/detail/5012345678901234',
 }
 
+const kuaishouResult: SearchResult = {
+  ...result,
+  platform: 'ks',
+  platform_content_id: '3xabc123',
+  content_type: 'video',
+  title: '快手公开信息',
+  content_url: 'https://www.kuaishou.com/short-video/3xabc123',
+}
+
 describe('search runs API boundary', () => {
   const fetchMock = vi.fn<typeof fetch>()
 
@@ -109,6 +118,24 @@ describe('search runs API boundary', () => {
     }
 
     await expect(startSearchRun(input)).resolves.toEqual(weiboRun)
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/search-runs',
+      expect.objectContaining({ body: JSON.stringify(input) }),
+    )
+  })
+
+  it('accepts the exact Kuaishou platform and sends it unchanged', async () => {
+    const kuaishouRun = { ...run, platform: 'ks' as const }
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify(kuaishouRun), { status: 202 }),
+    )
+    const input = {
+      monitoring_rule_id: 1,
+      platform: 'ks' as const,
+      max_results_per_term: 8,
+    }
+
+    await expect(startSearchRun(input)).resolves.toEqual(kuaishouRun)
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/v1/search-runs',
       expect.objectContaining({ body: JSON.stringify(input) }),
@@ -254,6 +281,54 @@ describe('search runs API boundary', () => {
         content_url: 'https://m.weibo.cn/detail/5012345678901234?q=1',
       },
       { ...weiboResult, platform: 'toutiao' },
+    ]) {
+      fetchMock.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            results: [invalid],
+            total: 1,
+            limit: 50,
+            offset: 0,
+          }),
+          { status: 200 },
+        ),
+      )
+      await expect(
+        fetchSearchRunResults(7, 'all', new AbortController().signal),
+      ).rejects.toMatchObject({ code: 'invalid_response' })
+    }
+  })
+
+  it('correlates Kuaishou result links with the platform and content ID', async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          results: [kuaishouResult],
+          total: 1,
+          limit: 50,
+          offset: 0,
+        }),
+        { status: 200 },
+      ),
+    )
+    await expect(
+      fetchSearchRunResults(7, 'all', new AbortController().signal),
+    ).resolves.toMatchObject({ results: [kuaishouResult] })
+
+    for (const invalid of [
+      {
+        ...kuaishouResult,
+        content_url: 'https://www.kuaishou.com/short-video/other-id',
+      },
+      {
+        ...kuaishouResult,
+        content_url:
+          'https://www.kuaishou.com/short-video/3xabc123?shareToken=secret',
+      },
+      {
+        ...kuaishouResult,
+        content_url: 'https://evil.example/short-video/3xabc123',
+      },
     ]) {
       fetchMock.mockResolvedValueOnce(
         new Response(

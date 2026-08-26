@@ -18,7 +18,7 @@ const terminalStatuses = [
   'internal_error',
 ] as const
 const searchRunStatusSchema = z.enum([...activeStatuses, ...terminalStatuses])
-const searchPlatformSchema = z.enum(['toutiao', 'wb'])
+const searchPlatformSchema = z.enum(['toutiao', 'wb', 'ks'])
 const isoDateSchema = z.string().datetime({ offset: true })
 const positiveSafeIntegerSchema = z
   .number()
@@ -214,12 +214,23 @@ function isValidSearchContentUrl(
       (hostname === 'toutiao.com' || hostname.endsWith('.toutiao.com'))
     )
   }
-  return (
-    value === `https://m.weibo.cn/detail/${platformContentId}` &&
-    url.protocol === 'https:' &&
-    hostname === 'm.weibo.cn' &&
-    url.search === ''
-  )
+  if (platform === 'wb') {
+    return (
+      value === `https://m.weibo.cn/detail/${platformContentId}` &&
+      url.protocol === 'https:' &&
+      hostname === 'm.weibo.cn' &&
+      url.search === ''
+    )
+  }
+  if (platform === 'ks') {
+    return (
+      value === `https://www.kuaishou.com/short-video/${platformContentId}` &&
+      url.protocol === 'https:' &&
+      hostname === 'www.kuaishou.com' &&
+      url.search === ''
+    )
+  }
+  return false
 }
 
 async function request(path: string, init: RequestInit) {

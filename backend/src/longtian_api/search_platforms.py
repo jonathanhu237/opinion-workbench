@@ -3,8 +3,8 @@
 from typing import Literal
 from urllib.parse import urlsplit
 
-SearchPlatform = Literal["toutiao", "wb"]
-SEARCH_PLATFORMS: tuple[SearchPlatform, ...] = ("toutiao", "wb")
+SearchPlatform = Literal["toutiao", "wb", "ks"]
+SEARCH_PLATFORMS: tuple[SearchPlatform, ...] = ("toutiao", "wb", "ks")
 
 
 def is_valid_search_content_url(
@@ -35,6 +35,15 @@ def is_valid_search_content_url(
             value == f"https://m.weibo.cn/detail/{platform_content_id}"
             and parsed.scheme == "https"
             and hostname == "m.weibo.cn"
+            and port is None
+            and parsed.query == ""
+        )
+
+    if platform == "ks":
+        return (
+            value == f"https://www.kuaishou.com/short-video/{platform_content_id}"
+            and parsed.scheme == "https"
+            and hostname == "www.kuaishou.com"
             and port is None
             and parsed.query == ""
         )

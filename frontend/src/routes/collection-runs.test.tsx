@@ -7,6 +7,7 @@ import { RouterProvider } from 'react-router/dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import weiboLogo from '@/assets/platforms/weibo.svg'
+import kuaishouLogo from '@/assets/platforms/kuaishou.svg'
 import {
   fetchMonitoringRules,
   type MonitoringRule,
@@ -206,6 +207,7 @@ describe('collection runs routes', () => {
     expect(platformOptions.map((option) => option.textContent)).toEqual([
       '今日头条',
       '微博',
+      '快手',
     ])
     await user.keyboard('{ArrowDown}{Enter}')
     expect(platformSelect).toHaveTextContent('微博')
@@ -215,6 +217,32 @@ describe('collection runs routes', () => {
       expect(mockedStartRun).toHaveBeenCalledWith({
         monitoring_rule_id: 1,
         platform: 'wb',
+        max_results_per_term: 10,
+      }),
+    )
+  })
+
+  it('switches to Kuaishou with the existing Shadcn platform selector', async () => {
+    const user = userEvent.setup()
+    mockedStartRun.mockResolvedValue(
+      run({ id: 10, platform: 'ks', status: 'queued' }),
+    )
+    renderRoute()
+    await screen.findByText(rule.name)
+
+    await user.click(screen.getByRole('combobox', { name: '监控规则' }))
+    await user.click(await screen.findByRole('option', { name: /龙田街道/u }))
+    await user.click(screen.getByRole('combobox', { name: '采集平台' }))
+    await user.click(await screen.findByRole('option', { name: '快手' }))
+    expect(
+      screen.getByRole('combobox', { name: '采集平台' }),
+    ).toHaveTextContent('快手')
+    await user.click(screen.getByRole('button', { name: '开始采集' }))
+
+    await waitFor(() =>
+      expect(mockedStartRun).toHaveBeenCalledWith({
+        monitoring_rule_id: 1,
+        platform: 'ks',
         max_results_per_term: 10,
       }),
     )
@@ -409,6 +437,47 @@ describe('collection runs routes', () => {
     expect(screen.getByRole('link', { name: '打开原文' })).toHaveAttribute(
       'href',
       'https://m.weibo.cn/detail/5012345678901234',
+    )
+  })
+
+  it('renders the Kuaishou identity in history and detail views', async () => {
+    mockedFetchRuns.mockResolvedValue({
+      runs: [run({ platform: 'ks' })],
+      next_before_id: null,
+    })
+    const list = renderRoute()
+
+    const historyPlatform = await screen.findByText(/快手 · 2 个搜索词/u)
+    expect(historyPlatform.parentElement?.querySelector('img')).toHaveAttribute(
+      'src',
+      kuaishouLogo,
+    )
+    list.unmount()
+
+    mockedFetchRun.mockResolvedValue(run({ platform: 'ks' }))
+    mockedFetchResults.mockResolvedValue({
+      results: [
+        result({
+          platform: 'ks',
+          platform_content_id: '3xabc123',
+          content_type: 'video',
+          content_url: 'https://www.kuaishou.com/short-video/3xabc123',
+        }),
+      ],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    })
+    renderRoute('/collection-runs/7')
+
+    const detailPlatform = await screen.findByText('快手 · 规则快照')
+    expect(detailPlatform.querySelector('img')).toHaveAttribute(
+      'src',
+      kuaishouLogo,
+    )
+    expect(screen.getByRole('link', { name: '打开原文' })).toHaveAttribute(
+      'href',
+      'https://www.kuaishou.com/short-video/3xabc123',
     )
   })
 

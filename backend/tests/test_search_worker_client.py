@@ -133,7 +133,11 @@ class SearchProcess:
                 else (
                     "https://m.weibo.cn/detail/100"
                     if platform == "wb"
-                    else "https://www.toutiao.com/article/100/"
+                    else (
+                        "https://www.kuaishou.com/short-video/100"
+                        if platform == "ks"
+                        else "https://www.toutiao.com/article/100/"
+                    )
                 )
             ),
             "discovered_at": 1_777_000_000_000,
@@ -434,6 +438,32 @@ def test_client_threads_weibo_platform_and_rejects_cross_platform_events() -> No
     asyncio.run(mismatched_event())
 
 
+def test_client_threads_kuaishou_platform_and_canonical_url() -> None:
+    async def scenario() -> None:
+        process = SearchProcess()
+        client, _launcher, _terminator, _disconnects = build_client(process)
+        items: list[str] = []
+
+        async def on_item(_position: int, item: SearchWorkerItem) -> None:
+            items.append(item.content_url)
+
+        result = await client.search(
+            request_id=uuid4(),
+            platform="ks",
+            terms=("龙田街道",),
+            max_results_per_term=10,
+            on_progress=lambda _position, _count: asyncio.sleep(0),
+            on_item=on_item,
+        )
+
+        assert result.outcome == "completed_with_results"
+        assert items == ["https://www.kuaishou.com/short-video/100"]
+        assert process.commands[0][1]["platform"] == "ks"
+        await client.shutdown()
+
+    asyncio.run(scenario())
+
+
 def test_client_search_cancellation_uses_the_search_cancel_frame() -> None:
     async def scenario() -> None:
         process = SearchProcess(hanging=True)
@@ -518,6 +548,33 @@ def test_search_event_parser_rejects_noncanonical_weibo_detail_url() -> None:
         item={
             **SearchProcess.item(platform="wb"),
             "content_url": "https://m.weibo.cn/detail/other-id",
+        },
+    )
+
+    with pytest.raises(AuthWorkerError):
+        _parse_event(frame)
+
+
+@pytest.mark.parametrize(
+    "content_url",
+    [
+        "https://www.kuaishou.com/short-video/other-id",
+        "https://www.kuaishou.com/short-video/100?shareToken=secret",
+        "https://evil.example/short-video/100",
+    ],
+)
+def test_search_event_parser_rejects_noncanonical_kuaishou_url(
+    content_url: str,
+) -> None:
+    request_id = str(uuid4())
+    frame = search_event(
+        "item",
+        request_id,
+        platform="ks",
+        term_position=0,
+        item={
+            **SearchProcess.item(platform="ks", content_type="video"),
+            "content_url": content_url,
         },
     )
 
