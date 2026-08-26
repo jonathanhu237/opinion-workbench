@@ -302,3 +302,24 @@ Added SQLite-backed monitoring-rule CRUD, a typed FastAPI resource, and a Shadcn
 ### Status
 
 [OK] **Completed**
+
+
+## Session 15: 微博搜索适配
+
+**Date**: 2026-08-26
+**Task**: 微博搜索适配
+**Branch**: `main`
+
+### Summary
+
+新增微博实时关键词搜索、SQLite v3 多平台去重、React 平台选择与真实借用浏览器复跑验收；MediaCrawler 派生仓库先行提交并推送。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `60ecff9` | (see git log) |
+
+### Status
+
+[OK] **Completed**
