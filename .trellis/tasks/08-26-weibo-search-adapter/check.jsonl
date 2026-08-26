@@ -1,0 +1,8 @@
+{"file": ".trellis/spec/backend/product-search-guidelines.md", "reason": "Verify search state, protocol correlation, deduplication, outcomes, privacy, and real-browser acceptance across Toutiao and Weibo."}
+{"file": ".trellis/spec/backend/platform-connection-guidelines.md", "reason": "Check worker reuse, browser ownership, cross-feature serialization, strict events, and account-check regressions."}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Verify migration safety, transactionality, preservation, cross-platform identity, and storage failure handling."}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Audit API/log/evidence sanitization and exact stable failure envelopes."}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Run the complete frozen frontend quality and loopback browser gates."}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "Check runtime decoding and platform-dependent original-link validation."}
+{"file": ".trellis/spec/infra/submodule-guidelines.md", "reason": "Verify clean reachable derivative revision, gitlink mode, recursive initialization, and fresh clone."}
+{"file": ".trellis/tasks/08-26-weibo-search-adapter/research/current-weibo-search-contract.md", "reason": "Verify implementation stayed within the audited fixed real-time, single-attempt, no-extra-collection boundary."}

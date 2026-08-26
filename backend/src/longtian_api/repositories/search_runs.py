@@ -5,9 +5,10 @@ from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Literal
+from typing import Literal, cast
 
 from longtian_api.database import Database
+from longtian_api.search_platforms import SearchPlatform
 
 SearchRunStatus = Literal[
     "queued",
@@ -30,7 +31,7 @@ DiscoveryKind = Literal["new", "repeated"]
 class SearchRunRecord:
     id: int
     monitoring_rule_id: int | None
-    platform: str
+    platform: SearchPlatform
     rule_name: str
     terms: tuple[str, ...]
     max_results_per_term: int
@@ -60,7 +61,7 @@ class SearchContentInput:
 @dataclass(frozen=True, slots=True)
 class SearchResultRecord:
     id: int
-    platform: str
+    platform: SearchPlatform
     platform_content_id: str
     content_type: str
     title: str
@@ -120,7 +121,7 @@ class SearchRunRepository:
         self,
         *,
         monitoring_rule_id: int,
-        platform: str,
+        platform: SearchPlatform,
         rule_name: str,
         terms: Sequence[str],
         max_results_per_term: int,
@@ -190,11 +191,15 @@ class SearchRunRepository:
     ) -> None:
         with _translate_storage_errors(), self._write_connection() as connection:
             active = connection.execute(
-                "SELECT 1 FROM search_runs WHERE id = ? AND status = 'running'",
+                """
+                SELECT platform FROM search_runs
+                WHERE id = ? AND status = 'running'
+                """,
                 (run_id,),
             ).fetchone()
             if active is None:
                 _raise_missing_or_inactive(connection, run_id)
+            platform = cast(SearchPlatform, str(active["platform"]))
             term = connection.execute(
                 """
                 SELECT 1 FROM search_run_terms
@@ -208,9 +213,9 @@ class SearchRunRepository:
             content_row = connection.execute(
                 """
                 SELECT id FROM search_contents
-                WHERE platform = 'toutiao' AND platform_content_id = ?
+                WHERE platform = ? AND platform_content_id = ?
                 """,
-                (item.platform_content_id,),
+                (platform, item.platform_content_id),
             ).fetchone()
             created = content_row is None
             if created:
@@ -220,9 +225,10 @@ class SearchRunRepository:
                       platform, platform_content_id, content_type, title, snippet,
                       creator_hash, publisher_name, published_at_text, content_url,
                       first_seen_at, last_seen_at
-                    ) VALUES ('toutiao', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
+                        platform,
                         item.platform_content_id,
                         item.content_type,
                         item.title,
@@ -491,7 +497,7 @@ def _read_run(connection: sqlite3.Connection, run_id: int) -> SearchRunRecord:
             if row["monitoring_rule_id"] is not None
             else None
         ),
-        platform=str(row["platform"]),
+        platform=cast(SearchPlatform, str(row["platform"])),
         rule_name=str(row["rule_name"]),
         terms=terms,
         max_results_per_term=int(row["max_results_per_term"]),
@@ -527,7 +533,7 @@ def _assemble_result(
     ).fetchall()
     return SearchResultRecord(
         id=int(row["id"]),
-        platform=str(row["platform"]),
+        platform=cast(SearchPlatform, str(row["platform"])),
         platform_content_id=str(row["platform_content_id"]),
         content_type=str(row["content_type"]),
         title=str(row["title"]),

@@ -26,6 +26,7 @@ from longtian_api.schemas.search_runs import (
     SearchRunListResponse,
     SearchRunSummary,
 )
+from longtian_api.search_platforms import SearchPlatform
 from longtian_api.services.browser_operations import (
     BrowserOperationCoordinator,
     BrowserOperationOwner,
@@ -50,7 +51,7 @@ class SearchRunRepositoryProtocol(Protocol):
         self,
         *,
         monitoring_rule_id: int,
-        platform: str,
+        platform: SearchPlatform,
         rule_name: str,
         terms: tuple[str, ...],
         max_results_per_term: int,
@@ -319,6 +320,7 @@ class SearchRunService:
             async with asyncio.timeout(self._search_timeout_seconds):
                 result = await self._worker.search(
                     request_id=request_id,
+                    platform=record.platform,
                     terms=record.terms,
                     max_results_per_term=record.max_results_per_term,
                     on_progress=on_progress,
@@ -373,7 +375,7 @@ def _to_summary(record: SearchRunRecord) -> SearchRunSummary:
     return SearchRunSummary(
         id=record.id,
         monitoring_rule_id=record.monitoring_rule_id,
-        platform="toutiao",
+        platform=record.platform,
         rule_name=record.rule_name,
         term_count=len(record.terms),
         max_results_per_term=record.max_results_per_term,
@@ -395,7 +397,7 @@ def _to_detail(record: SearchRunRecord) -> SearchRunDetail:
 def _to_result(record: SearchResultRecord) -> SearchResult:
     return SearchResult(
         id=record.id,
-        platform="toutiao",
+        platform=record.platform,
         platform_content_id=record.platform_content_id,
         content_type=record.content_type,
         title=record.title,

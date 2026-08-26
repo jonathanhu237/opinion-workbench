@@ -9,8 +9,13 @@ from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, Protocol, cast
-from urllib.parse import urlsplit
 from uuid import UUID
+
+from longtian_api.search_platforms import (
+    SEARCH_PLATFORMS,
+    SearchPlatform,
+    is_valid_search_content_url,
+)
 
 AUTH_COMMAND_PREFIX = b"__MEDIACRAWLER_AUTH_COMMAND__"
 AUTH_EVENT_PREFIX = b"__MEDIACRAWLER_AUTH_EVENT__"
@@ -268,16 +273,21 @@ class PersistentAuthWorkerClient:
         self,
         *,
         request_id: UUID,
+        platform: SearchPlatform,
         terms: Sequence[str],
         max_results_per_term: int,
         on_progress: SearchProgressCallback,
         on_item: SearchItemCallback,
     ) -> SearchWorkerResult:
-        """Run one correlated Toutiao search on the shared worker."""
+        """Run one correlated product search on the shared worker."""
 
         if self._request_lock.locked():
             raise AuthWorkerBusyError
-        if not 1 <= len(terms) <= 20 or not 1 <= max_results_per_term <= 50:
+        if (
+            platform not in SEARCH_PLATFORMS
+            or not 1 <= len(terms) <= 20
+            or not 1 <= max_results_per_term <= 50
+        ):
             raise AuthWorkerError
 
         async with self._request_lock:
@@ -295,7 +305,7 @@ class PersistentAuthWorkerClient:
             loop = asyncio.get_running_loop()
             request = _ActiveRequest(
                 request_id=request_id,
-                platform="toutiao",
+                platform=platform,
                 kind="search",
                 result=loop.create_future(),
                 search_term_count=len(terms),
@@ -315,7 +325,7 @@ class PersistentAuthWorkerClient:
                         "type": "command",
                         "command": "search",
                         "request_id": str(request_id),
-                        "platform": "toutiao",
+                        "platform": platform,
                         "terms": list(terms),
                         "max_results_per_term": max_results_per_term,
                     },
@@ -843,8 +853,12 @@ def _parse_search_event(line: bytes) -> dict[str, object]:
         raise AuthWorkerError
     if type(raw.get("type")) is not str or raw.get("type") != "event":
         raise AuthWorkerError
-    if raw.get("platform") != "toutiao" or type(raw.get("platform")) is not str:
+    if (
+        type(raw.get("platform")) is not str
+        or raw.get("platform") not in SEARCH_PLATFORMS
+    ):
         raise AuthWorkerError
+    platform = cast(SearchPlatform, raw["platform"])
     raw["request_id"] = _parse_canonical_uuid(raw.get("request_id"))
 
     event = raw.get("event")
@@ -866,7 +880,7 @@ def _parse_search_event(line: bytes) -> dict[str, object]:
         position = raw["term_position"]
         if type(position) is not int or not 0 <= position < 20:
             raise AuthWorkerError
-        raw["item"] = _parse_search_item(raw["item"])
+        raw["item"] = _parse_search_item(raw["item"], platform)
     elif event == "result":
         _require_exact_fields(raw, base | {"outcome"})
         if raw["outcome"] not in {
@@ -887,7 +901,7 @@ def _parse_search_event(line: bytes) -> dict[str, object]:
     return raw
 
 
-def _parse_search_item(value: object) -> SearchWorkerItem:
+def _parse_search_item(value: object, platform: SearchPlatform) -> SearchWorkerItem:
     if not isinstance(value, dict):
         raise AuthWorkerError
     fields = {
@@ -937,19 +951,10 @@ def _parse_search_item(value: object) -> SearchWorkerItem:
         or not 1_000_000_000_000 <= discovered_at <= 9_999_999_999_999
     ):
         raise AuthWorkerError
-    try:
-        parsed_url = urlsplit(cast(str, value["content_url"]))
-        hostname = (parsed_url.hostname or "").rstrip(".").lower()
-        port = parsed_url.port
-    except ValueError:
-        raise AuthWorkerError from None
-    if (
-        parsed_url.scheme not in {"http", "https"}
-        or not (hostname == "toutiao.com" or hostname.endswith(".toutiao.com"))
-        or parsed_url.username is not None
-        or parsed_url.password is not None
-        or (port is not None and port != (80 if parsed_url.scheme == "http" else 443))
-        or parsed_url.fragment
+    if not is_valid_search_content_url(
+        platform,
+        cast(str, value["content_id"]),
+        cast(str, value["content_url"]),
     ):
         raise AuthWorkerError
     return SearchWorkerItem(**cast(dict[str, object], value))

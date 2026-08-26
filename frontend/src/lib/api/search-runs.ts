@@ -18,6 +18,7 @@ const terminalStatuses = [
   'internal_error',
 ] as const
 const searchRunStatusSchema = z.enum([...activeStatuses, ...terminalStatuses])
+const searchPlatformSchema = z.enum(['toutiao', 'wb'])
 const isoDateSchema = z.string().datetime({ offset: true })
 const positiveSafeIntegerSchema = z
   .number()
@@ -32,7 +33,7 @@ const nonnegativeSafeIntegerSchema = z
 const summaryShape = {
   id: positiveSafeIntegerSchema,
   monitoring_rule_id: positiveSafeIntegerSchema.nullable(),
-  platform: z.literal('toutiao'),
+  platform: searchPlatformSchema,
   rule_name: z.string(),
   term_count: z.number().int().positive().max(20),
   max_results_per_term: z.number().int().min(1).max(50),
@@ -69,7 +70,7 @@ const searchRunListSchema = z.strictObject({
 const searchResultSchema = z
   .strictObject({
     id: positiveSafeIntegerSchema,
-    platform: z.literal('toutiao'),
+    platform: searchPlatformSchema,
     platform_content_id: z.string().min(1).max(128),
     content_type: z.string().min(1).max(32),
     title: z.string().min(1).max(300),
@@ -77,21 +78,7 @@ const searchResultSchema = z
     creator_hash: z.string().regex(/^(?:|[0-9a-f]{16})$/u),
     publisher_name: z.string().max(100),
     published_at_text: z.string().max(100),
-    content_url: z
-      .string()
-      .url()
-      .refine((value) => {
-        const url = new URL(value)
-        const hostname = url.hostname.toLowerCase().replace(/\.$/u, '')
-        return (
-          (url.protocol === 'http:' || url.protocol === 'https:') &&
-          (hostname === 'toutiao.com' || hostname.endsWith('.toutiao.com')) &&
-          url.username === '' &&
-          url.password === '' &&
-          url.port === '' &&
-          url.hash === ''
-        )
-      }),
+    content_url: z.string().url(),
     kind: z.enum(['new', 'repeated']),
     matched_terms: z.array(z.string()).min(1).max(20),
     first_seen_at: isoDateSchema,
@@ -100,12 +87,23 @@ const searchResultSchema = z
     last_observed_at: isoDateSchema,
   })
   .superRefine((value, context) => {
+    if (
+      !isValidSearchContentUrl(
+        value.platform,
+        value.platform_content_id,
+        value.content_url,
+      )
+    ) {
+      context.addIssue({ code: 'custom', message: 'invalid content URL' })
+    }
     const name = value.publisher_name
+    const nameCharacters = [...name]
     const masked =
       name === '' ||
       name === '*' ||
-      (name.length === 2 && name.endsWith('*')) ||
-      (name.length === 5 && name.slice(1, 4) === '***')
+      (nameCharacters.length === 2 && nameCharacters[1] === '*') ||
+      (nameCharacters.length === 5 &&
+        nameCharacters.slice(1, 4).join('') === '***')
     if (Boolean(value.creator_hash) !== Boolean(name) || !masked) {
       context.addIssue({ code: 'custom', message: 'invalid masked publisher' })
     }
@@ -121,6 +119,7 @@ const errorEnvelopeSchema = z.strictObject({
 })
 
 export type SearchRunStatus = z.infer<typeof searchRunStatusSchema>
+export type SearchPlatform = z.infer<typeof searchPlatformSchema>
 export type SearchRunSummary = z.infer<typeof searchRunSummarySchema>
 export type SearchRunDetail = z.infer<typeof searchRunDetailSchema>
 export type SearchRunListResponse = z.infer<typeof searchRunListSchema>
@@ -187,6 +186,40 @@ export class SearchRunApiError extends Error {
 
 export function isActiveSearchRun(status: SearchRunStatus) {
   return activeStatuses.includes(status as (typeof activeStatuses)[number])
+}
+
+function isValidSearchContentUrl(
+  platform: SearchPlatform,
+  platformContentId: string,
+  value: string,
+) {
+  let url: URL
+  try {
+    url = new URL(value)
+  } catch {
+    return false
+  }
+  const hostname = url.hostname.toLowerCase().replace(/\.$/u, '')
+  if (
+    url.username !== '' ||
+    url.password !== '' ||
+    url.port !== '' ||
+    url.hash !== ''
+  ) {
+    return false
+  }
+  if (platform === 'toutiao') {
+    return (
+      (url.protocol === 'http:' || url.protocol === 'https:') &&
+      (hostname === 'toutiao.com' || hostname.endsWith('.toutiao.com'))
+    )
+  }
+  return (
+    value === `https://m.weibo.cn/detail/${platformContentId}` &&
+    url.protocol === 'https:' &&
+    hostname === 'm.weibo.cn' &&
+    url.search === ''
+  )
 }
 
 async function request(path: string, init: RequestInit) {
@@ -261,7 +294,7 @@ async function parseResponse<T>(
 export async function startSearchRun(
   input: {
     monitoring_rule_id: number
-    platform: 'toutiao'
+    platform: SearchPlatform
     max_results_per_term: number
   },
   signal?: AbortSignal,

@@ -14,6 +14,7 @@ from longtian_api.services.media_crawler_auth_worker import (
     SEARCH_EVENT_PREFIX,
     AuthWorkerError,
     PersistentAuthWorkerClient,
+    SearchWorkerItem,
     _parse_event,
 )
 
@@ -55,7 +56,13 @@ def auth_event(event: str) -> bytes:
     )
 
 
-def search_event(event: str, request_id: str, **fields: object) -> bytes:
+def search_event(
+    event: str,
+    request_id: str,
+    *,
+    platform: str = "toutiao",
+    **fields: object,
+) -> bytes:
     return (
         SEARCH_EVENT_PREFIX
         + json.dumps(
@@ -64,7 +71,7 @@ def search_event(event: str, request_id: str, **fields: object) -> bytes:
                 "type": "event",
                 "event": event,
                 "request_id": request_id,
-                "platform": "toutiao",
+                "platform": platform,
                 **fields,
             },
             separators=(",", ":"),
@@ -91,6 +98,7 @@ class SearchProcess:
         hanging: bool = False,
         malformed: bool = False,
         scenario: str = "normal",
+        event_platform_override: str | None = None,
     ) -> None:
         self.pid = 99001
         self.returncode: int | None = None
@@ -101,10 +109,16 @@ class SearchProcess:
         self.hanging = hanging
         self.malformed = malformed
         self.scenario = scenario
+        self.event_platform_override = event_platform_override
         self.finished = asyncio.Event()
 
     @staticmethod
-    def item(*, content_type: str = "article", unsafe_url: bool = False):
+    def item(
+        *,
+        platform: str = "toutiao",
+        content_type: str = "article",
+        unsafe_url: bool = False,
+    ):
         return {
             "content_id": "100",
             "content_type": content_type,
@@ -116,7 +130,11 @@ class SearchProcess:
             "content_url": (
                 "https://evil.example/article/100/"
                 if unsafe_url
-                else "https://www.toutiao.com/article/100/"
+                else (
+                    "https://m.weibo.cn/detail/100"
+                    if platform == "wb"
+                    else "https://www.toutiao.com/article/100/"
+                )
             ),
             "discovered_at": 1_777_000_000_000,
         }
@@ -131,14 +149,16 @@ class SearchProcess:
         self.commands.append((prefix, payload))
         if payload["command"] == "search":
             request_id = str(payload["request_id"])
+            platform = self.event_platform_override or str(payload["platform"])
             term_count = len(payload["terms"])
             if self.scenario == "item_before_progress":
                 self.stdout.feed(
                     search_event(
                         "item",
                         request_id,
+                        platform=platform,
                         term_position=0,
-                        item=self.item(),
+                        item=self.item(platform=platform),
                     )
                 )
                 return
@@ -146,6 +166,7 @@ class SearchProcess:
                 search_event(
                     "progress",
                     request_id,
+                    platform=platform,
                     phase="term_started",
                     term_position=0,
                     term_count=term_count,
@@ -158,6 +179,7 @@ class SearchProcess:
                     search_event(
                         "progress",
                         request_id,
+                        platform=platform,
                         phase="term_started",
                         term_position=0,
                         term_count=term_count,
@@ -166,20 +188,32 @@ class SearchProcess:
                 return
             if self.scenario == "results_without_item":
                 self.stdout.feed(
-                    search_event("result", request_id, outcome="completed_with_results")
+                    search_event(
+                        "result",
+                        request_id,
+                        platform=platform,
+                        outcome="completed_with_results",
+                    )
                 )
                 return
             if self.scenario == "unsolicited_cancel":
                 self.stdout.feed(
-                    search_event("result", request_id, outcome="cancelled")
+                    search_event(
+                        "result",
+                        request_id,
+                        platform=platform,
+                        outcome="cancelled",
+                    )
                 )
                 return
             self.stdout.feed(
                 search_event(
                     "item",
                     request_id,
+                    platform=platform,
                     term_position=0,
                     item=self.item(
+                        platform=platform,
                         content_type=(
                             "" if self.scenario == "empty_content_type" else "article"
                         ),
@@ -197,13 +231,27 @@ class SearchProcess:
                     search_event(
                         "item",
                         request_id,
+                        platform=platform,
                         term_position=0,
-                        item={**self.item(), "content_id": "101"},
+                        item={
+                            **self.item(platform=platform),
+                            "content_id": "101",
+                            "content_url": (
+                                "https://m.weibo.cn/detail/101"
+                                if platform == "wb"
+                                else "https://www.toutiao.com/article/100/"
+                            ),
+                        },
                     )
                 )
             if self.scenario == "empty_after_item":
                 self.stdout.feed(
-                    search_event("result", request_id, outcome="completed_empty")
+                    search_event(
+                        "result",
+                        request_id,
+                        platform=platform,
+                        outcome="completed_empty",
+                    )
                 )
                 return
             if not self.malformed and self.scenario not in {
@@ -215,17 +263,31 @@ class SearchProcess:
                         search_event(
                             "progress",
                             request_id,
+                            platform=platform,
                             phase="term_started",
                             term_position=position,
                             term_count=term_count,
                         )
                     )
                 self.stdout.feed(
-                    search_event("result", request_id, outcome="completed_with_results")
+                    search_event(
+                        "result",
+                        request_id,
+                        platform=platform,
+                        outcome="completed_with_results",
+                    )
                 )
         elif payload["command"] == "cancel":
             self.stdout.feed(
-                search_event("result", str(payload["request_id"]), outcome="cancelled")
+                search_event(
+                    "result",
+                    str(payload["request_id"]),
+                    platform=(
+                        self.event_platform_override
+                        or str(self.commands[0][1]["platform"])
+                    ),
+                    outcome="cancelled",
+                )
             )
         elif payload["command"] == "shutdown":
             self.stdout.feed(auth_event("stopped"))
@@ -308,6 +370,7 @@ def test_client_decodes_progress_items_and_result_from_search_protocol() -> None
 
         result = await client.search(
             request_id=uuid4(),
+            platform="toutiao",
             terms=("龙田街道", "坪山大道"),
             max_results_per_term=10,
             on_progress=on_progress,
@@ -327,6 +390,50 @@ def test_client_decodes_progress_items_and_result_from_search_protocol() -> None
     asyncio.run(scenario())
 
 
+def test_client_threads_weibo_platform_and_rejects_cross_platform_events() -> None:
+    async def successful_weibo() -> None:
+        process = SearchProcess()
+        client, _launcher, _terminator, _disconnects = build_client(process)
+        items: list[str] = []
+
+        async def on_item(_position: int, item: SearchWorkerItem) -> None:
+            items.append(item.content_url)
+
+        result = await client.search(
+            request_id=uuid4(),
+            platform="wb",
+            terms=("龙田街道",),
+            max_results_per_term=10,
+            on_progress=lambda _position, _count: asyncio.sleep(0),
+            on_item=on_item,
+        )
+
+        assert result.outcome == "completed_with_results"
+        assert items == ["https://m.weibo.cn/detail/100"]
+        assert process.commands[0][1]["platform"] == "wb"
+        await client.shutdown()
+
+    async def mismatched_event() -> None:
+        process = SearchProcess(event_platform_override="toutiao")
+        client, _launcher, terminator, disconnects = build_client(process)
+
+        with pytest.raises(AuthWorkerError):
+            await client.search(
+                request_id=uuid4(),
+                platform="wb",
+                terms=("龙田街道",),
+                max_results_per_term=10,
+                on_progress=lambda _position, _count: asyncio.sleep(0),
+                on_item=lambda _position, _item: asyncio.sleep(0),
+            )
+
+        assert terminator.calls == 1
+        assert len(disconnects) == 1
+
+    asyncio.run(successful_weibo())
+    asyncio.run(mismatched_event())
+
+
 def test_client_search_cancellation_uses_the_search_cancel_frame() -> None:
     async def scenario() -> None:
         process = SearchProcess(hanging=True)
@@ -334,6 +441,7 @@ def test_client_search_cancellation_uses_the_search_cancel_frame() -> None:
         task = asyncio.create_task(
             client.search(
                 request_id=uuid4(),
+                platform="toutiao",
                 terms=("龙田街道",),
                 max_results_per_term=10,
                 on_progress=lambda _position, _count: asyncio.sleep(0),
@@ -364,6 +472,7 @@ def test_client_rejects_non_toutiao_item_urls_and_recycles_worker() -> None:
         with pytest.raises(AuthWorkerError):
             await client.search(
                 request_id=uuid4(),
+                platform="toutiao",
                 terms=("龙田街道",),
                 max_results_per_term=10,
                 on_progress=lambda _position, _count: asyncio.sleep(0),
@@ -399,6 +508,23 @@ def test_search_event_parser_rejects_non_millisecond_discovery_time() -> None:
         _parse_event(frame)
 
 
+def test_search_event_parser_rejects_noncanonical_weibo_detail_url() -> None:
+    request_id = str(uuid4())
+    frame = search_event(
+        "item",
+        request_id,
+        platform="wb",
+        term_position=0,
+        item={
+            **SearchProcess.item(platform="wb"),
+            "content_url": "https://m.weibo.cn/detail/other-id",
+        },
+    )
+
+    with pytest.raises(AuthWorkerError):
+        _parse_event(frame)
+
+
 @pytest.mark.parametrize(
     ("scenario", "limit"),
     [
@@ -423,6 +549,7 @@ def test_client_rejects_inconsistent_search_event_sequences_and_recycles_worker(
         with pytest.raises(AuthWorkerError):
             await client.search(
                 request_id=uuid4(),
+                platform="toutiao",
                 terms=("龙田街道",),
                 max_results_per_term=limit,
                 on_progress=lambda _position, _count: asyncio.sleep(0),

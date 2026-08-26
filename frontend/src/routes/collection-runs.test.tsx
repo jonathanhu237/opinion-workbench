@@ -6,6 +6,7 @@ import { createMemoryRouter } from 'react-router'
 import { RouterProvider } from 'react-router/dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import weiboLogo from '@/assets/platforms/weibo.svg'
 import {
   fetchMonitoringRules,
   type MonitoringRule,
@@ -186,6 +187,39 @@ describe('collection runs routes', () => {
     )
   })
 
+  it('switches to Weibo with the Shadcn platform selector', async () => {
+    const user = userEvent.setup()
+    mockedStartRun.mockResolvedValue(
+      run({ id: 9, platform: 'wb', status: 'queued' }),
+    )
+    renderRoute()
+    await screen.findByText(rule.name)
+
+    const ruleSelect = screen.getByRole('combobox', { name: '监控规则' })
+    await user.click(ruleSelect)
+    await user.click(await screen.findByRole('option', { name: /龙田街道/u }))
+    const platformSelect = screen.getByRole('combobox', { name: '采集平台' })
+    expect(platformSelect).toHaveTextContent('今日头条')
+    platformSelect.focus()
+    await user.keyboard('{Enter}')
+    const platformOptions = await screen.findAllByRole('option')
+    expect(platformOptions.map((option) => option.textContent)).toEqual([
+      '今日头条',
+      '微博',
+    ])
+    await user.keyboard('{ArrowDown}{Enter}')
+    expect(platformSelect).toHaveTextContent('微博')
+    await user.click(screen.getByRole('button', { name: '开始采集' }))
+
+    await waitFor(() =>
+      expect(mockedStartRun).toHaveBeenCalledWith({
+        monitoring_rule_id: 1,
+        platform: 'wb',
+        max_results_per_term: 10,
+      }),
+    )
+  })
+
   it('rejects more than twenty terms before creating a task', async () => {
     const user = userEvent.setup()
     const oversized = {
@@ -338,6 +372,46 @@ describe('collection runs routes', () => {
     )
   })
 
+  it('renders the Weibo identity in history and detail views', async () => {
+    mockedFetchRuns.mockResolvedValue({
+      runs: [run({ platform: 'wb' })],
+      next_before_id: null,
+    })
+    const list = renderRoute()
+
+    const historyPlatform = await screen.findByText(/微博 · 2 个搜索词/u)
+    expect(historyPlatform.parentElement?.querySelector('img')).toHaveAttribute(
+      'src',
+      weiboLogo,
+    )
+    list.unmount()
+
+    mockedFetchRun.mockResolvedValue(run({ platform: 'wb' }))
+    mockedFetchResults.mockResolvedValue({
+      results: [
+        result({
+          platform: 'wb',
+          platform_content_id: '5012345678901234',
+          content_url: 'https://m.weibo.cn/detail/5012345678901234',
+        }),
+      ],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    })
+    renderRoute('/collection-runs/7')
+
+    const detailPlatform = await screen.findByText('微博 · 规则快照')
+    expect(detailPlatform.querySelector('img')).toHaveAttribute(
+      'src',
+      weiboLogo,
+    )
+    expect(screen.getByRole('link', { name: '打开原文' })).toHaveAttribute(
+      'href',
+      'https://m.weibo.cn/detail/5012345678901234',
+    )
+  })
+
   it('performs one final result refresh when an active task finishes', async () => {
     mockedFetchRun.mockResolvedValue(
       run({
@@ -388,6 +462,29 @@ describe('collection runs routes', () => {
       '/platform-accounts',
     )
     expect(screen.queryByText(/自动登录|绕过/u)).toBeNull()
+  })
+
+  it('uses the selected platform name in active and login guidance', async () => {
+    mockedFetchRun.mockResolvedValue(
+      run({
+        platform: 'wb',
+        status: 'login_required',
+        new_count: 0,
+        repeated_count: 0,
+        total_count: 0,
+      }),
+    )
+    mockedFetchResults.mockResolvedValue({
+      results: [],
+      total: 0,
+      limit: 50,
+      offset: 0,
+    })
+    renderRoute('/collection-runs/7')
+
+    expect(
+      await screen.findByText('请先到“平台账号”检查微博登录状态，再重新采集。'),
+    ).toBeVisible()
   })
 
   it('rejects invalid deep links without issuing any API request', () => {

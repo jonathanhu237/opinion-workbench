@@ -2,9 +2,13 @@
 
 from datetime import datetime
 from typing import Literal
-from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+from longtian_api.search_platforms import (
+    SearchPlatform,
+    is_valid_search_content_url,
+)
 
 SearchRunStatus = Literal[
     "queued",
@@ -37,7 +41,7 @@ class SearchRunCreate(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     monitoring_rule_id: int = Field(ge=1, le=9_223_372_036_854_775_807)
-    platform: Literal["toutiao"]
+    platform: SearchPlatform
     max_results_per_term: int = Field(default=10, ge=1, le=50)
 
 
@@ -46,7 +50,7 @@ class SearchRunSummary(BaseModel):
 
     id: int
     monitoring_rule_id: int | None
-    platform: Literal["toutiao"]
+    platform: SearchPlatform
     rule_name: str
     term_count: int
     max_results_per_term: int
@@ -75,7 +79,7 @@ class SearchResult(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     id: int
-    platform: Literal["toutiao"]
+    platform: SearchPlatform
     platform_content_id: str = Field(min_length=1, max_length=128)
     content_type: str = Field(min_length=1, max_length=32)
     title: str = Field(min_length=1, max_length=300)
@@ -91,28 +95,12 @@ class SearchResult(BaseModel):
     first_observed_at: datetime
     last_observed_at: datetime
 
-    @field_validator("content_url")
-    @classmethod
-    def validate_content_url(cls, value: str) -> str:
-        try:
-            parsed = urlsplit(value)
-            hostname = (parsed.hostname or "").rstrip(".").lower()
-            port = parsed.port
-        except ValueError:
-            raise ValueError("invalid content URL") from None
-        if (
-            parsed.scheme not in {"http", "https"}
-            or not (hostname == "toutiao.com" or hostname.endswith(".toutiao.com"))
-            or parsed.username is not None
-            or parsed.password is not None
-            or (port is not None and port != (80 if parsed.scheme == "http" else 443))
-            or parsed.fragment
+    @model_validator(mode="after")
+    def validate_correlated_fields(self) -> "SearchResult":
+        if not is_valid_search_content_url(
+            self.platform, self.platform_content_id, self.content_url
         ):
             raise ValueError("invalid content URL")
-        return value
-
-    @model_validator(mode="after")
-    def validate_masked_publisher(self) -> "SearchResult":
         name = self.publisher_name
         masked = (
             not name

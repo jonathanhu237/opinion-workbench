@@ -8,7 +8,12 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi.testclient import TestClient
 
-from longtian_api.database import CURRENT_DATABASE_VERSION, Database
+from longtian_api.database import (
+    CURRENT_DATABASE_VERSION,
+    Database,
+    _migrate_to_version_1,
+    _migrate_to_version_2,
+)
 from longtian_api.main import create_app
 from longtian_api.repositories.search_runs import (
     SearchContentInput,
@@ -191,7 +196,7 @@ class FakeSearchWorker:
         outcome: str = "completed_with_results",
         emit_item: bool = True,
     ) -> None:
-        self.calls: list[tuple[UUID, tuple[str, ...], int]] = []
+        self.calls: list[tuple[UUID, str, tuple[str, ...], int]] = []
         self.outcome = outcome
         self.emit_item = emit_item
 
@@ -199,25 +204,30 @@ class FakeSearchWorker:
         self,
         *,
         request_id: UUID,
+        platform: str,
         terms: Sequence[str],
         max_results_per_term: int,
         on_progress: Callable[[int, int], Awaitable[None]],
         on_item: Callable[[int, SearchWorkerItem], Awaitable[None]],
     ) -> SearchWorkerResult:
-        self.calls.append((request_id, tuple(terms), max_results_per_term))
+        self.calls.append((request_id, platform, tuple(terms), max_results_per_term))
         await on_progress(0, len(terms))
         if self.emit_item:
             await on_item(
                 0,
                 SearchWorkerItem(
                     content_id="news-100",
-                    content_type="article",
+                    content_type="article" if platform == "toutiao" else "post",
                     title="龙田街道公开信息",
                     snippet="来自公开搜索页面",
                     creator_hash="0123456789abcdef",
                     publisher_name="本***察",
                     published_at_text="刚刚",
-                    content_url="https://www.toutiao.com/article/100/",
+                    content_url=(
+                        "https://www.toutiao.com/article/100/"
+                        if platform == "toutiao"
+                        else "https://m.weibo.cn/detail/news-100"
+                    ),
                     discovered_at=1_777_000_000_000,
                 ),
             )
@@ -322,13 +332,63 @@ def test_http_search_vertical_slice_is_non_blocking_durable_and_deduplicated(
         ).json()
         assert repeated["total"] == 1
         assert repeated["results"][0]["kind"] == "repeated"
-        assert len(worker.calls) == 2
+        assert [call[1] for call in worker.calls] == ["toutiao", "toutiao"]
 
     with sqlite3.connect(database_path) as connection:
         assert connection.execute(
             "SELECT COUNT(*) FROM search_contents"
         ).fetchone() == (1,)
         assert connection.execute("SELECT COUNT(*) FROM search_runs").fetchone() == (2,)
+
+
+def test_http_weibo_search_threads_platform_and_deduplicates_repeated_runs(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "weibo-http.sqlite3"
+    worker = FakeSearchWorker()
+    with TestClient(_search_app(database_path, worker)) as client:
+        first_response = client.post(
+            "/api/v1/search-runs",
+            json={"monitoring_rule_id": 1, "platform": "wb"},
+        )
+        assert first_response.status_code == 202
+        first = _wait_for_terminal(client, first_response.json()["id"])
+        first_results = client.get(f"/api/v1/search-runs/{first['id']}/results").json()
+
+        assert first["platform"] == "wb"
+        assert first["status"] == "completed_with_results"
+        assert first_results["results"][0]["platform"] == "wb"
+        assert (
+            first_results["results"][0]["content_url"]
+            == "https://m.weibo.cn/detail/news-100"
+        )
+
+        second_response = client.post(
+            "/api/v1/search-runs",
+            json={"monitoring_rule_id": 1, "platform": "wb"},
+        )
+        second = _wait_for_terminal(client, second_response.json()["id"])
+
+    assert (second["new_count"], second["repeated_count"]) == (0, 1)
+    assert [call[1] for call in worker.calls] == ["wb", "wb"]
+
+
+def test_http_rejects_unknown_search_platform_without_starting_worker(
+    tmp_path: Path,
+) -> None:
+    worker = FakeSearchWorker()
+    app = _search_app(tmp_path / "unknown-platform.sqlite3", worker)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/search-runs",
+            json={"monitoring_rule_id": 1, "platform": "dy"},
+        )
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "detail": {"code": "invalid_request", "message": "请求内容不正确。"}
+    }
+    assert worker.calls == []
 
 
 def test_http_search_validation_and_error_contracts(tmp_path: Path) -> None:
@@ -575,6 +635,124 @@ def test_fresh_database_contains_all_search_tables_and_indexes(tmp_path: Path) -
     }
 
 
+def test_version_two_migration_preserves_toutiao_and_isolates_weibo_identity(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "version-two.sqlite3"
+    connection = sqlite3.connect(database_path, isolation_level=None)
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON")
+    try:
+        _migrate_to_version_1(connection)
+        _migrate_to_version_2(connection)
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute(
+            """
+            INSERT INTO search_runs (
+              id, monitoring_rule_id, platform, rule_name, max_results_per_term,
+              status, current_term_position, created_at, started_at, finished_at
+            ) VALUES (41, 1, 'toutiao', '旧任务', 7, 'completed_with_results',
+                      0, '2026-08-25T08:00:00+00:00',
+                      '2026-08-25T08:00:01+00:00',
+                      '2026-08-25T08:00:02+00:00')
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO search_run_terms (run_id, position, value)
+            VALUES (41, 0, '龙田街道')
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO search_contents (
+              id, platform, platform_content_id, content_type, title, snippet,
+              creator_hash, publisher_name, published_at_text, content_url,
+              first_seen_at, last_seen_at
+            ) VALUES (
+              99, 'toutiao', 'shared-100', 'article', '旧标题', '旧摘要',
+              '0123456789abcdef', '本***察', '刚刚',
+              'https://www.toutiao.com/article/shared-100/',
+              '2026-08-25T08:00:01+00:00', '2026-08-25T08:00:01+00:00'
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO search_run_contents (
+              run_id, search_content_id, discovery_kind,
+              first_observed_at, last_observed_at
+            ) VALUES (41, 99, 'new', '2026-08-25T08:00:01+00:00',
+                      '2026-08-25T08:00:01+00:00')
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO search_run_content_terms (
+              run_id, search_content_id, term_position, observed_at
+            ) VALUES (41, 99, 0, '2026-08-25T08:00:01+00:00')
+            """
+        )
+        connection.execute("COMMIT")
+    finally:
+        connection.close()
+
+    database = Database(database_path)
+    database.initialize()
+    repository = SearchRunRepository(database)
+    preserved = repository.get(41)
+    preserved_results, preserved_total = repository.list_results(
+        run_id=41, kind="all", limit=50, offset=0
+    )
+
+    assert preserved.platform == "toutiao"
+    assert preserved.terms == ("龙田街道",)
+    assert preserved.created_at == "2026-08-25T08:00:00+00:00"
+    assert preserved_total == 1
+    assert preserved_results[0].id == 99
+    assert preserved_results[0].matched_terms == ("龙田街道",)
+    assert preserved_results[0].first_seen_at == "2026-08-25T08:00:01+00:00"
+
+    weibo = repository.create_run(
+        monitoring_rule_id=1,
+        platform="wb",
+        rule_name="微博任务",
+        terms=("龙田街道",),
+        max_results_per_term=7,
+    )
+    repository.mark_running(weibo.id)
+    repository.observe_item(
+        run_id=weibo.id,
+        term_position=0,
+        item=SearchContentInput(
+            platform_content_id="shared-100",
+            content_type="post",
+            title="微博标题",
+            snippet="微博正文",
+            creator_hash="0123456789abcdef",
+            publisher_name="微***户",
+            published_at_text="刚刚",
+            content_url="https://m.weibo.cn/detail/shared-100",
+            observed_at="2026-08-26T08:00:00+00:00",
+        ),
+    )
+    completed = repository.finish(weibo.id, "completed_with_results")
+
+    assert (completed.new_count, completed.repeated_count) == (1, 0)
+    with database.connect() as migrated:
+        assert migrated.execute("PRAGMA user_version").fetchone()[0] == 3
+        rows = migrated.execute(
+            """
+            SELECT platform, id FROM search_contents
+            WHERE platform_content_id = 'shared-100' ORDER BY platform
+            """
+        ).fetchall()
+    assert [(row["platform"], row["id"]) for row in rows] == [
+        ("toutiao", 99),
+        ("wb", 100),
+    ]
+
+
 def test_version_one_database_upgrades_without_reseeding_monitoring_rules(
     tmp_path: Path,
 ) -> None:
@@ -597,7 +775,7 @@ def test_version_one_database_upgrades_without_reseeding_monitoring_rules(
     database.initialize()
 
     with database.connect() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
         assert (
             connection.execute(
                 "SELECT name FROM monitoring_rules WHERE id = 1"

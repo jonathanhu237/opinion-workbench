@@ -5,7 +5,6 @@ import { Controller, useForm } from 'react-hook-form'
 import { Link, useNavigate } from 'react-router'
 import { z } from 'zod'
 
-import toutiaoLogo from '@/assets/platforms/toutiao.svg'
 import { Badge } from '@/components/ui/badge'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -39,11 +38,14 @@ import {
 } from '@/lib/api/search-runs'
 import {
   formatLocalDate,
+  searchPlatformOrder,
+  searchPlatformPresenters,
   searchRunStatusLabel,
 } from '@/routes/search-run-presenters'
 
 const startSchema = z.object({
   ruleId: z.string().min(1, '请选择监控规则。'),
+  platform: z.enum(searchPlatformOrder),
   maxResultsPerTerm: z.coerce
     .number<number>()
     .int('请输入整数。')
@@ -82,9 +84,10 @@ function ActiveRun({ run }: { run: SearchRunSummary }) {
     },
   })
   const position = run.current_term_position
+  const platform = searchPlatformPresenters[run.platform]
   const progress =
     position === null
-      ? '正在连接今日头条…'
+      ? `正在连接${platform.label}…`
       : `第 ${position + 1} / ${run.term_count} 个搜索词`
 
   return (
@@ -128,7 +131,7 @@ function RunHistory({ runs }: { runs: SearchRunSummary[] }) {
       <div className="rounded-lg border border-dashed p-8 text-center">
         <p className="font-medium">还没有采集记录</p>
         <p className="mt-1 text-sm text-muted-foreground">
-          选择一条监控规则，开始第一次今日头条搜索。
+          选择监控规则和采集平台，开始第一次搜索。
         </p>
       </div>
     )
@@ -146,43 +149,49 @@ function RunHistory({ runs }: { runs: SearchRunSummary[] }) {
         </TableRow>
       </TableHeader>
       <TableBody>
-        {runs.map((run) => (
-          <TableRow key={run.id}>
-            <TableCell>
-              <Badge variant={runBadgeVariant(run.status)}>
-                {searchRunStatusLabel(run.status)}
-              </Badge>
-            </TableCell>
-            <TableCell>
-              <p className="max-w-72 truncate font-medium">{run.rule_name}</p>
-              <p className="text-xs text-muted-foreground">
-                {run.term_count} 个搜索词 · 每词最多 {run.max_results_per_term}{' '}
-                条
-              </p>
-            </TableCell>
-            <TableCell>
-              <span className="font-medium text-foreground">
-                新增 {run.new_count}
-              </span>
-              <span className="mx-2 text-border">/</span>
-              <span className="text-muted-foreground">
-                再次命中 {run.repeated_count}
-              </span>
-            </TableCell>
-            <TableCell className="text-muted-foreground">
-              {formatLocalDate(run.created_at)}
-            </TableCell>
-            <TableCell className="text-right">
-              <Link
-                className={buttonVariants({ variant: 'ghost', size: 'sm' })}
-                to={`/collection-runs/${run.id}`}
-              >
-                查看
-                <ArrowRight aria-hidden />
-              </Link>
-            </TableCell>
-          </TableRow>
-        ))}
+        {runs.map((run) => {
+          const platform = searchPlatformPresenters[run.platform]
+          return (
+            <TableRow key={run.id}>
+              <TableCell>
+                <Badge variant={runBadgeVariant(run.status)}>
+                  {searchRunStatusLabel(run.status)}
+                </Badge>
+              </TableCell>
+              <TableCell>
+                <p className="max-w-72 truncate font-medium">{run.rule_name}</p>
+                <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <img src={platform.logoSrc} alt="" className="size-4" />
+                  <span>
+                    {platform.label} · {run.term_count} 个搜索词 · 每词最多{' '}
+                    {run.max_results_per_term} 条
+                  </span>
+                </div>
+              </TableCell>
+              <TableCell>
+                <span className="font-medium text-foreground">
+                  新增 {run.new_count}
+                </span>
+                <span className="mx-2 text-border">/</span>
+                <span className="text-muted-foreground">
+                  再次命中 {run.repeated_count}
+                </span>
+              </TableCell>
+              <TableCell className="text-muted-foreground">
+                {formatLocalDate(run.created_at)}
+              </TableCell>
+              <TableCell className="text-right">
+                <Link
+                  className={buttonVariants({ variant: 'ghost', size: 'sm' })}
+                  to={`/collection-runs/${run.id}`}
+                >
+                  查看
+                  <ArrowRight aria-hidden />
+                </Link>
+              </TableCell>
+            </TableRow>
+          )
+        })}
       </TableBody>
     </Table>
   )
@@ -199,13 +208,21 @@ export function CollectionRuns() {
     label: `${rule.name}（${rule.terms.length} 个词）`,
     value: String(rule.id),
   }))
+  const platformOptions = searchPlatformOrder.map((platform) => ({
+    label: searchPlatformPresenters[platform].label,
+    value: platform,
+  }))
   const activeRun = runsQuery.data?.runs.find((run) =>
     isActiveSearchRun(run.status),
   )
   const form = useForm<StartValues>({
     resolver: zodResolver(startSchema),
     mode: 'onBlur',
-    defaultValues: { ruleId: '', maxResultsPerTerm: 10 },
+    defaultValues: {
+      ruleId: '',
+      platform: 'toutiao',
+      maxResultsPerTerm: 10,
+    },
   })
   const startMutation = useMutation({
     mutationFn: (input: Parameters<typeof startSearchRun>[0]) =>
@@ -233,7 +250,7 @@ export function CollectionRuns() {
     try {
       const run = await startMutation.mutateAsync({
         monitoring_rule_id: rule.id,
-        platform: 'toutiao',
+        platform: values.platform,
         max_results_per_term: values.maxResultsPerTerm,
       })
       await queryClient.invalidateQueries({ queryKey: SEARCH_RUNS_QUERY_KEY })
@@ -299,13 +316,58 @@ export function CollectionRuns() {
                 )}
               />
 
-              <Field>
-                <FieldLabel>采集平台</FieldLabel>
-                <div className="flex min-h-11 items-center gap-2 rounded-lg border bg-secondary/45 px-3 sm:min-h-8">
-                  <img src={toutiaoLogo} alt="" className="size-5" />
-                  <span className="text-sm font-medium">今日头条</span>
-                </div>
-              </Field>
+              <Controller
+                name="platform"
+                control={form.control}
+                render={({ field, fieldState }) => (
+                  <Field data-invalid={fieldState.invalid}>
+                    <FieldLabel htmlFor="collection-platform">
+                      采集平台
+                    </FieldLabel>
+                    <Select
+                      items={platformOptions}
+                      value={field.value}
+                      onValueChange={(value) => field.onChange(value)}
+                      disabled={startMutation.isPending}
+                    >
+                      <SelectTrigger
+                        ref={field.ref}
+                        id="collection-platform"
+                        className="min-h-11 w-full sm:min-h-8"
+                        aria-invalid={fieldState.invalid}
+                      >
+                        <SelectValue>
+                          <span className="flex items-center gap-2">
+                            <img
+                              src={
+                                searchPlatformPresenters[field.value].logoSrc
+                              }
+                              alt=""
+                              className="size-5"
+                            />
+                            {searchPlatformPresenters[field.value].label}
+                          </span>
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectContent>
+                        {searchPlatformOrder.map((platform) => (
+                          <SelectItem key={platform} value={platform}>
+                            <span className="flex items-center gap-2">
+                              <img
+                                src={searchPlatformPresenters[platform].logoSrc}
+                                alt=""
+                                className="size-5"
+                              />
+                              {searchPlatformPresenters[platform].label}
+                            </span>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <FieldError errors={[fieldState.error]} />
+                  </Field>
+                )}
+              />
 
               <Controller
                 name="maxResultsPerTerm"

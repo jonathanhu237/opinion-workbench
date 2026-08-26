@@ -19,6 +19,7 @@ import {
 } from '@/lib/api/search-runs'
 import {
   formatLocalDate,
+  searchPlatformPresenters,
   searchRunStatusGuidance,
   searchRunStatusLabel,
 } from '@/routes/search-run-presenters'
@@ -194,10 +195,11 @@ export function CollectionRunDetail() {
   }
 
   const run = runQuery.data
-  const guidance = searchRunStatusGuidance(run.status)
+  const platform = searchPlatformPresenters[run.platform]
+  const guidance = searchRunStatusGuidance(run.status, run.platform)
   const progress =
     run.current_term_position === null
-      ? '正在连接今日头条…'
+      ? `正在连接${platform.label}…`
       : `第 ${run.current_term_position + 1} / ${run.term_count} 个搜索词`
   const results = resultsQuery.data?.results ?? []
   const resultTotal = resultsQuery.data?.total ?? 0
@@ -220,8 +222,9 @@ export function CollectionRunDetail() {
         <CardHeader className="border-b">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <p className="text-xs tracking-wide text-muted-foreground">
-                今日头条 · 规则快照
+              <p className="flex items-center gap-1.5 text-xs tracking-wide text-muted-foreground">
+                <img src={platform.logoSrc} alt="" className="size-4" />
+                {platform.label} · 规则快照
               </p>
               <CardTitle className="mt-1 font-display text-2xl">
                 {run.rule_name}

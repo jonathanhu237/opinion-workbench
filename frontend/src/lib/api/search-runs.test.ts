@@ -48,6 +48,15 @@ const result: SearchResult = {
   last_observed_at: '2026-08-26T08:00:02+00:00',
 }
 
+const weiboResult: SearchResult = {
+  ...result,
+  platform: 'wb',
+  platform_content_id: '5012345678901234',
+  content_type: 'post',
+  title: '微博公开信息',
+  content_url: 'https://m.weibo.cn/detail/5012345678901234',
+}
+
 describe('search runs API boundary', () => {
   const fetchMock = vi.fn<typeof fetch>()
 
@@ -86,6 +95,24 @@ describe('search runs API boundary', () => {
       code: 'invalid_response',
       status: 200,
     })
+  })
+
+  it('accepts the exact Weibo platform and sends it unchanged', async () => {
+    const weiboRun = { ...run, platform: 'wb' as const }
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify(weiboRun), { status: 202 }),
+    )
+    const input = {
+      monitoring_rule_id: 1,
+      platform: 'wb' as const,
+      max_results_per_term: 8,
+    }
+
+    await expect(startSearchRun(input)).resolves.toEqual(weiboRun)
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/search-runs',
+      expect.objectContaining({ body: JSON.stringify(input) }),
+    )
   })
 
   it('forwards history pagination and abort signals', async () => {
@@ -183,6 +210,66 @@ describe('search runs API boundary', () => {
     await expect(
       fetchSearchRunResults(7, 'all', new AbortController().signal),
     ).rejects.toMatchObject({ code: 'invalid_response' })
+  })
+
+  it('correlates Weibo result links with the platform and content ID', async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          results: [weiboResult],
+          total: 1,
+          limit: 50,
+          offset: 0,
+        }),
+        { status: 200 },
+      ),
+    )
+    await expect(
+      fetchSearchRunResults(7, 'all', new AbortController().signal),
+    ).resolves.toMatchObject({ results: [weiboResult] })
+
+    const emojiPublisherResult = {
+      ...weiboResult,
+      publisher_name: '😀***😁',
+    }
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          results: [emojiPublisherResult],
+          total: 1,
+          limit: 50,
+          offset: 0,
+        }),
+        { status: 200 },
+      ),
+    )
+    await expect(
+      fetchSearchRunResults(7, 'all', new AbortController().signal),
+    ).resolves.toMatchObject({ results: [emojiPublisherResult] })
+
+    for (const invalid of [
+      { ...weiboResult, content_url: 'https://m.weibo.cn/detail/other-id' },
+      {
+        ...weiboResult,
+        content_url: 'https://m.weibo.cn/detail/5012345678901234?q=1',
+      },
+      { ...weiboResult, platform: 'toutiao' },
+    ]) {
+      fetchMock.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            results: [invalid],
+            total: 1,
+            limit: 50,
+            offset: 0,
+          }),
+          { status: 200 },
+        ),
+      )
+      await expect(
+        fetchSearchRunResults(7, 'all', new AbortController().signal),
+      ).rejects.toMatchObject({ code: 'invalid_response' })
+    }
   })
 
   it('rejects count drift and unexpected response fields', async () => {

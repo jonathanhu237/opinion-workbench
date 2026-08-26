@@ -4,7 +4,7 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
-CURRENT_DATABASE_VERSION = 2
+CURRENT_DATABASE_VERSION = 3
 DEFAULT_RULE_NAME = "龙田街道及四个社区"
 DEFAULT_RULE_TERMS = (
     "龙田街道",
@@ -58,6 +58,9 @@ class Database:
                 version = 1
             if version < 2:
                 _migrate_to_version_2(connection)
+                version = 2
+            if version < 3:
+                _migrate_to_version_3(connection)
         finally:
             connection.close()
 
@@ -255,6 +258,177 @@ def _migrate_to_version_2(connection: sqlite3.Connection) -> None:
             """
         )
         connection.execute("PRAGMA user_version = 2")
+        connection.execute("COMMIT")
+    except BaseException:
+        if connection.in_transaction:
+            connection.execute("ROLLBACK")
+        raise
+
+
+def _migrate_to_version_3(connection: sqlite3.Connection) -> None:
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        version = _read_user_version(connection)
+        if version >= 3:
+            connection.execute("COMMIT")
+            return
+        if version != 2:
+            raise DatabaseVersionError("Unsupported database migration source version.")
+
+        connection.execute(
+            """
+            CREATE TABLE search_runs_v3 (
+              id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+              monitoring_rule_id       INTEGER
+                                       REFERENCES monitoring_rules(id)
+                                       ON DELETE SET NULL,
+              platform                 TEXT NOT NULL
+                                       CHECK (platform IN ('toutiao', 'wb')),
+              rule_name                TEXT NOT NULL,
+              max_results_per_term     INTEGER NOT NULL
+                                       CHECK (max_results_per_term BETWEEN 1 AND 50),
+              status                   TEXT NOT NULL CHECK (status IN (
+                                         'queued', 'running',
+                                         'completed_with_results', 'completed_empty',
+                                         'login_required', 'manual_challenge_required',
+                                         'platform_blocked_or_rate_limited',
+                                         'structure_changed', 'browser_unavailable',
+                                         'timed_out', 'cancelled', 'internal_error'
+                                       )),
+              current_term_position    INTEGER CHECK (current_term_position >= 0),
+              created_at               TEXT NOT NULL,
+              started_at               TEXT,
+              finished_at              TEXT
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE search_run_terms_v3 (
+              run_id     INTEGER NOT NULL
+                         REFERENCES search_runs_v3(id) ON DELETE CASCADE,
+              position   INTEGER NOT NULL CHECK (position >= 0),
+              value      TEXT NOT NULL,
+              PRIMARY KEY (run_id, position)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE search_contents_v3 (
+              id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+              platform              TEXT NOT NULL
+                                    CHECK (platform IN ('toutiao', 'wb')),
+              platform_content_id   TEXT NOT NULL,
+              content_type          TEXT NOT NULL,
+              title                 TEXT NOT NULL,
+              snippet               TEXT NOT NULL,
+              creator_hash          TEXT NOT NULL,
+              publisher_name        TEXT NOT NULL,
+              published_at_text     TEXT NOT NULL,
+              content_url           TEXT NOT NULL,
+              first_seen_at         TEXT NOT NULL,
+              last_seen_at          TEXT NOT NULL,
+              UNIQUE (platform, platform_content_id)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE search_run_contents_v3 (
+              run_id              INTEGER NOT NULL
+                                  REFERENCES search_runs_v3(id) ON DELETE CASCADE,
+              search_content_id   INTEGER NOT NULL
+                                  REFERENCES search_contents_v3(id) ON DELETE CASCADE,
+              discovery_kind      TEXT NOT NULL
+                                  CHECK (discovery_kind IN ('new', 'repeated')),
+              first_observed_at   TEXT NOT NULL,
+              last_observed_at    TEXT NOT NULL,
+              PRIMARY KEY (run_id, search_content_id)
+            )
+            """
+        )
+        connection.execute(
+            """
+            CREATE TABLE search_run_content_terms_v3 (
+              run_id              INTEGER NOT NULL,
+              search_content_id   INTEGER NOT NULL,
+              term_position       INTEGER NOT NULL,
+              observed_at         TEXT NOT NULL,
+              PRIMARY KEY (run_id, search_content_id, term_position),
+              FOREIGN KEY (run_id, search_content_id)
+                REFERENCES search_run_contents_v3(run_id, search_content_id)
+                ON DELETE CASCADE,
+              FOREIGN KEY (run_id, term_position)
+                REFERENCES search_run_terms_v3(run_id, position)
+                ON DELETE CASCADE
+            )
+            """
+        )
+
+        connection.execute(
+            """
+            INSERT INTO search_runs_v3
+            SELECT * FROM search_runs ORDER BY id
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO search_run_terms_v3
+            SELECT * FROM search_run_terms ORDER BY run_id, position
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO search_contents_v3
+            SELECT * FROM search_contents ORDER BY id
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO search_run_contents_v3
+            SELECT * FROM search_run_contents ORDER BY run_id, search_content_id
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO search_run_content_terms_v3
+            SELECT * FROM search_run_content_terms
+            ORDER BY run_id, search_content_id, term_position
+            """
+        )
+
+        for table in (
+            "search_run_content_terms",
+            "search_run_contents",
+            "search_run_terms",
+            "search_contents",
+            "search_runs",
+        ):
+            connection.execute(f"DROP TABLE {table}")
+
+        for old_name, stable_name in (
+            ("search_runs_v3", "search_runs"),
+            ("search_run_terms_v3", "search_run_terms"),
+            ("search_contents_v3", "search_contents"),
+            ("search_run_contents_v3", "search_run_contents"),
+            ("search_run_content_terms_v3", "search_run_content_terms"),
+        ):
+            connection.execute(f"ALTER TABLE {old_name} RENAME TO {stable_name}")
+
+        connection.execute(
+            "CREATE INDEX ix_search_runs_status_id ON search_runs(status, id)"
+        )
+        connection.execute(
+            "CREATE INDEX ix_search_runs_rule_id ON search_runs(monitoring_rule_id)"
+        )
+        connection.execute(
+            """
+            CREATE INDEX ix_search_run_contents_kind_observed
+            ON search_run_contents(run_id, discovery_kind, first_observed_at DESC)
+            """
+        )
+        connection.execute("PRAGMA user_version = 3")
         connection.execute("COMMIT")
     except BaseException:
         if connection.in_transaction:

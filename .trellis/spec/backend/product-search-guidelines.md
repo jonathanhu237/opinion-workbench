@@ -3,7 +3,7 @@
 > Executable contract for product-owned collection runs, borrowed-Chrome search, durable results,
 > and cross-run deduplication.
 
-## Scenario: Manual Toutiao product search through the persistent worker
+## Scenario: Manual multi-platform product search through the persistent worker
 
 ### 1. Scope / Trigger
 
@@ -14,11 +14,13 @@ Chrome session.
 This is a product orchestration contract, not a general crawler contract. The standalone adapter
 contract in `browser-search-adapter-guidelines.md` continues to require a fresh context. Only this
 lifespan-owned product worker may borrow the already approved default Chrome context, and only with
-the ownership and serialization rules below. The first supported search platform is `toutiao`.
+the ownership and serialization rules below. The exact supported search-platform set is
+`toutiao | wb`; extending it requires coordinated API, database, worker-protocol, adapter, frontend,
+and migration changes.
 
 ### 2. Signatures
 
-Database version 2 adds:
+Database version 3 owns:
 
 ```text
 search_runs(
@@ -63,11 +65,11 @@ POST /api/v1/search-runs/{run_id}/cancel
 Start input is exact and strict:
 
 ```json
-{"monitoring_rule_id": 1, "platform": "toutiao", "max_results_per_term": 10}
+{"monitoring_rule_id": 1, "platform": "wb", "max_results_per_term": 10}
 ```
 
 - `monitoring_rule_id`: SQLite signed-int64 integer from 1 upward.
-- `platform`: literal `toutiao` in the first release.
+- `platform`: exact literal `toutiao | wb`.
 - `max_results_per_term`: strict integer 1–50, default 10.
 - The selected enabled rule must contain 1–20 terms.
 
@@ -82,10 +84,10 @@ browser_unavailable | timed_out | cancelled | internal_error
 The worker keeps the existing auth v2 frames unchanged and adds a separate strict search protocol:
 
 ```text
-__MEDIACRAWLER_SEARCH_COMMAND__{"version":1,"type":"command","command":"search","request_id":"<uuid4>","platform":"toutiao","terms":["..."],"max_results_per_term":10}
-__MEDIACRAWLER_SEARCH_EVENT__{"version":1,"type":"event","event":"progress","request_id":"<uuid4>","platform":"toutiao","phase":"term_started","term_position":0,"term_count":5}
-__MEDIACRAWLER_SEARCH_EVENT__{"version":1,"type":"event","event":"item","request_id":"<uuid4>","platform":"toutiao","term_position":0,"item":{...}}
-__MEDIACRAWLER_SEARCH_EVENT__{"version":1,"type":"event","event":"result","request_id":"<uuid4>","platform":"toutiao","outcome":"completed_with_results"}
+__MEDIACRAWLER_SEARCH_COMMAND__{"version":1,"type":"command","command":"search","request_id":"<uuid4>","platform":"wb","terms":["..."],"max_results_per_term":10}
+__MEDIACRAWLER_SEARCH_EVENT__{"version":1,"type":"event","event":"progress","request_id":"<uuid4>","platform":"wb","phase":"term_started","term_position":0,"term_count":5}
+__MEDIACRAWLER_SEARCH_EVENT__{"version":1,"type":"event","event":"item","request_id":"<uuid4>","platform":"wb","term_position":0,"item":{...}}
+__MEDIACRAWLER_SEARCH_EVENT__{"version":1,"type":"event","event":"result","request_id":"<uuid4>","platform":"wb","outcome":"completed_with_results"}
 ```
 
 Search cancellation uses the search-command prefix with exact `command="cancel"` and matching
@@ -111,6 +113,9 @@ Search cancellation uses the search-command prefix with exact `command="cancel"`
   The run list may return a smaller summary but uses the same status/count definitions.
 - Results contain one row per unique run content with `matched_terms` in original rule position
   order. `kind=new|repeated` filters only the run relationship, never the global content table.
+- Platform is never defaulted after validation. The stored run platform must be carried unchanged
+  through the service, active worker request, every correlated worker event, repository lookup, and
+  response. A valid event for the other supported platform is protocol drift and fails closed.
 - `POST /cancel` returns HTTP 202 only for the active run. Cancellation is idempotent inside the
   worker boundary but a second public request after terminal state returns `search_run_not_active`.
 
@@ -139,9 +144,12 @@ Search cancellation uses the search-command prefix with exact `command="cancel"`
 - Search reuses the worker's single Playwright/CDP/browser/default-context session. It creates and
   registers only task-owned pages, never closes the borrowed context/browser, and never mutates or
   closes pre-existing tabs.
-- Search performs sequential visible-page Toutiao searches without context-wide init scripts,
-  private API replay, signature generation, broad pagination, blocked-navigation retry, or fallback
-  to a second browser.
+- Search performs sequential bounded platform searches without context-wide init scripts, signature
+  generation, broad pagination, blocked-navigation retry, or fallback to a second browser.
+- Toutiao uses the visible official PC search page. Weibo uses the borrowed session to refresh only
+  Weibo state, then calls the existing `m.weibo.cn` real-time search endpoint through a
+  product-specific single-attempt client. The generic five-retry Weibo client, crawler stores,
+  full-text requests, comments, user profiles, and media helpers are forbidden.
 - A disconnected account check is not itself a search failure. The official public search page may
   be used without an authenticated Toutiao account; return `login_required` only when the search
   page itself presents a recognized mandatory login wall.
@@ -150,11 +158,18 @@ Search cancellation uses the search-command prefix with exact `command="cancel"`
   by unwrapped content identity, prefers the human title over image/duration/detail labels, and scopes
   recognized empty text to that same main column. A missing or ambiguous main container fails as
   `structure_changed`.
+- The Weibo adapter fixes search type `61`, visits only the allowlisted mobile origin, requests at
+  most `ceil(max_results_per_term / 10)` pages per term, and accepts only recognized card type 9
+  mblogs with a stable non-empty ID and usable cleaned text. It strips HTML, decodes entities,
+  normalizes whitespace, and constructs `https://m.weibo.cn/detail/<id>` itself with no query or
+  fragment. Unknown successful response/card shapes fail as `structure_changed`; they never become
+  a false empty result.
 - Deduplicate repeated anchors within one term, but emit the same content again for another
   `term_position`; FastAPI owns cross-term merging and provenance.
 - Item frames use `term_position`, not a copied source-term string. They contain only the bounded
-  normalized Toutiao model: content ID/type, title, snippet, masked publisher fields, visible
-  publication text, allowlisted canonical URL, and a 13-digit Unix-millisecond discovery timestamp.
+  normalized platform model: content ID/type, title, snippet, masked publisher fields, visible
+  publication text, platform-allowlisted canonical URL, and a 13-digit Unix-millisecond discovery
+  timestamp.
 - Search command frames are at most 32 KiB and search event lines at most 64 KiB. Decode UTF-8,
   reject duplicate JSON keys/unknown fields/wrong types, correlate exact UUID/platform, and fail the
   request on protocol drift. Never retain or log raw stdout/stderr.
@@ -167,6 +182,8 @@ Search cancellation uses the search-command prefix with exact `command="cancel"`
   fields remain paired. Raw publisher identifiers or labels fail the protocol boundary.
 - Canonical content URLs remove fragments, known search/tracking parameters, and empty query
   parameters, sort any remaining meaningful query pairs, and never retain redirect/session tokens.
+  Weibo is stricter: only `https://m.weibo.cn/detail/<matching-platform-content-id>` with no query,
+  fragment, credentials, or non-default port is valid.
 - Normal completion and cancellation close the task-owned search page. Login/challenge outcomes may
   leave that one official page visible for manual action; it remains registered and is closed before
   the next task-owned operation or worker shutdown. Pre-existing pages are never cleanup targets.
@@ -175,8 +192,9 @@ Search cancellation uses the search-command prefix with exact `command="cancel"`
 
 - Add the real sidebar label `采集任务` and routes `/collection-runs` and
   `/collection-runs/:runId`; the sidebar item is active for both.
-- The start view uses enabled monitoring rules, a fixed truthful Toutiao target, and a labeled
-  1–50 number field with default 10. It does not show unavailable platforms as executable controls.
+- The start view uses enabled monitoring rules, a Shadcn platform Select containing exactly the
+  executable `今日头条` and `微博` targets, and a labeled 1–50 number field with default 10. It does
+  not show unavailable platforms as executable controls or add a sort selector.
 - Poll once per second only while the selected/latest run is active. Terminal/history queries use
   ordinary TanStack Query caching and explicit invalidation.
 - The run detail displays real counts and labels every item `新增` or `历史内容再次命中`. Original
@@ -206,6 +224,7 @@ Chinese guidance.
 | Run missing | HTTP 404 `search_run_not_found` | No child action |
 | Cancel requested for terminal/non-active run | HTTP 409 `search_run_not_active` | Preserve terminal row |
 | Product SQLite unavailable | HTTP 503 `search_storage_unavailable` | Constant message, no path/SQL |
+| Unknown search platform or platform-dependent URL mismatch | HTTP 422 / worker protocol failure | No default substitution; fail closed |
 | Recognized results | `completed_with_results` | Persist items/matches and counts |
 | Recognized empty page for every term | `completed_empty` | Persist truthful zero-result run |
 | Account check is disconnected but public search is available | Continue search | Do not invent a login prerequisite |
@@ -221,19 +240,21 @@ Chinese guidance.
 
 ### 5. Good / Base / Bad Cases
 
-- **Good:** A five-term rule starts one durable run, searches each term on task-owned pages in the
-  borrowed context, stores one global content row for a cross-term match, records both matching
-  terms, and reports consistent new/repeated counts on a later run.
+- **Good:** A five-term Weibo rule starts one durable run, searches each term in fixed real-time
+  mode through the borrowed context, stores one global content row for a cross-term match, records
+  both matching terms, and reports consistent new/repeated counts on a later run.
 - **Base:** A one-term run reaches a recognized empty state and persists `completed_empty` with zero
   results; no store or private endpoint is invoked.
-- **Bad:** Terms appear in process arguments/logs, the generic crawler writes its own product data,
-  repeated content is inserted again, a cross-term match loses provenance, a login/block becomes
-  empty success, or cleanup closes the user's context/tab.
+- **Bad:** Terms appear in process arguments/logs, the generic Weibo five-retry client or crawler
+  store is used, repeated content is inserted again, a cross-term match loses provenance, an unknown
+  response becomes empty success, one layer silently substitutes Toutiao, or cleanup closes the
+  user's context/tab.
 
 ### 6. Tests Required
 
-1. Migration: version 1→2 and fresh version 2, repeated initialization, forward-version rejection,
-   foreign keys/indexes, active-row reconciliation, and preservation of monitoring-rule data.
+1. Migration: version 1→2→3, direct version 2→3, fresh version 3, repeated initialization,
+   forward-version rejection, foreign keys/indexes, active-row reconciliation, preservation of all
+   Toutiao IDs/relations/timestamps, and same content ID isolation across platforms.
 2. Repository: run snapshots, stable history pagination, state transitions, transactional item
    upsert, same-run cross-term provenance, cross-run new/repeated classification, monotonic times,
    non-empty field preservation, counts, filters, and rollback on failure.
@@ -246,16 +267,18 @@ Chinese guidance.
 5. Borrowed Chrome: reuse one CDP/default context, task-page registration, no context-wide scripts,
    no close of browser/context/pre-existing pages, challenge-page lifecycle, cancellation, disconnect,
    and worker recycle.
-6. Toutiao adapter: visible results/empty/login/challenge/block/structure fixtures, URL allowlist,
-   bounded text, publisher masking, within-term deduplication, cross-term re-emission, and hard limit.
+6. Platform adapters: retain all Toutiao fixtures, plus Weibo exact request parameters, single
+   attempt, bounded pages, flat/nested result cards, HTML cleanup, canonical URL construction,
+   publisher masking, within-term deduplication, cross-term re-emission, hard limit, and every
+   recognized terminal outcome.
 7. Frontend: runtime decoders, exact status/code pairs, start validation, active polling, cancel,
    history/deep link, new/repeated filters and counts, matched terms, safe original links, empty/error/
    login guidance, keyboard/focus/live-region behavior, mobile layout, and no fake data.
-8. Cross-layer and real browser: one approved borrowed-browser search plus one repeated run,
-   public-search behavior when the account check is disconnected, `login_required` only for a real
-   search-page login wall, account/search mutual exclusion, manual challenge evidence when
-   encountered, restart persistence, pre-existing-tab sentinel, no credential leakage, and clean
-   submodule/gitlink delivery.
+8. Cross-layer and real browser: for each newly supported platform, one approved borrowed-browser
+   search plus the exact repeated run, new/repeated classification, preserved first-seen and advanced
+   last-seen times, account/search mutual exclusion, truthful login/challenge outcomes, restart
+   persistence, pre-existing-tab sentinel, no credential leakage, and clean submodule/gitlink
+   delivery.
 
 ### 7. Wrong vs Correct
 
@@ -280,7 +303,7 @@ VALUES (?, ?, ?);
 # One lifespan-owned worker receives a bounded structured command over stdin.
 await worker.search(
     request_id=run_uuid,
-    platform="toutiao",
+    platform=stored_run.platform,
     terms=rule_snapshot.terms,
     max_results_per_term=limit,
     on_item=persist_normalized_item,
