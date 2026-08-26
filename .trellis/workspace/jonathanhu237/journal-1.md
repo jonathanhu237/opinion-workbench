@@ -420,3 +420,24 @@ Added durable Douyin keyword collection through the approved persistent Google C
 ### Next Steps
 
 - 继续讨论并实施下一项产品链路
+
+
+## Session 19: 多平台批量采集
+
+**Date**: 2026-08-27
+**Task**: 多平台批量采集
+**Branch**: `main`
+
+### Summary
+
+实现五平台多选批次、SQLite v7 持久化串行调度、失败继续、人工验证暂停与不可变重试、取消恢复和批次总览；完成本机真实三平台及 Centaurus 验收。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `a150bbf` | (see git log) |
+
+### Status
+
+[OK] **Completed**
