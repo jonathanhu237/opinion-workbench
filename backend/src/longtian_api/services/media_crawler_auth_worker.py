@@ -3,17 +3,24 @@
 import asyncio
 import json
 import os
+import re
 import signal
-from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal, Protocol, cast
+from urllib.parse import urlsplit
 from uuid import UUID
 
 AUTH_COMMAND_PREFIX = b"__MEDIACRAWLER_AUTH_COMMAND__"
 AUTH_EVENT_PREFIX = b"__MEDIACRAWLER_AUTH_EVENT__"
+SEARCH_COMMAND_PREFIX = b"__MEDIACRAWLER_SEARCH_COMMAND__"
+SEARCH_EVENT_PREFIX = b"__MEDIACRAWLER_SEARCH_EVENT__"
 MAX_AUTH_FRAME_BYTES = 1024
+MAX_SEARCH_COMMAND_BYTES = 32 * 1024
+MAX_SEARCH_EVENT_BYTES = 64 * 1024
 MAX_CHILD_OUTPUT_LINE_BYTES = 64 * 1024
+_MASKED_CREATOR_HASH = re.compile(r"[0-9a-f]{16}")
 
 AuthPlatformId = Literal["wb", "dy", "ks", "xhs", "toutiao"]
 AuthProgressPhase = Literal[
@@ -30,6 +37,18 @@ AuthReason = Literal[
     "browser_disconnected",
     "internal_error",
     "cancelled",
+]
+SearchOutcome = Literal[
+    "completed_with_results",
+    "completed_empty",
+    "login_required",
+    "manual_challenge_required",
+    "platform_blocked_or_rate_limited",
+    "structure_changed",
+    "browser_unavailable",
+    "browser_disconnected",
+    "cancelled",
+    "internal_error",
 ]
 
 _WORKER_COMMAND = (
@@ -86,6 +105,8 @@ ProcessLauncher = Callable[[tuple[str, ...], Path], Awaitable[ManagedProcess]]
 ProcessGroupTerminator = Callable[[ManagedProcess, float], Awaitable[None]]
 ProgressCallback = Callable[[UUID, AuthPlatformId, AuthProgressPhase], Awaitable[None]]
 SessionDisconnectedCallback = Callable[[UUID | None], Awaitable[None]]
+SearchProgressCallback = Callable[[int, int], Awaitable[None]]
+SearchItemCallback = Callable[[int, "SearchWorkerItem"], Awaitable[None]]
 
 
 class AuthWorkerError(Exception):
@@ -102,11 +123,38 @@ class AuthWorkerResult:
     reason: AuthReason
 
 
+@dataclass(frozen=True, slots=True)
+class SearchWorkerItem:
+    content_id: str
+    content_type: str
+    title: str
+    snippet: str
+    creator_hash: str
+    publisher_name: str
+    published_at_text: str
+    content_url: str
+    discovered_at: int
+
+
+@dataclass(frozen=True, slots=True)
+class SearchWorkerResult:
+    outcome: SearchOutcome
+
+
 @dataclass(slots=True)
 class _ActiveRequest:
     request_id: UUID
     platform: AuthPlatformId
-    result: asyncio.Future[AuthWorkerResult]
+    kind: Literal["auth", "search"]
+    result: asyncio.Future[AuthWorkerResult | SearchWorkerResult]
+    search_term_count: int = 0
+    search_max_results_per_term: int = 0
+    search_current_term_position: int = -1
+    search_item_count: int = 0
+    search_item_counts: list[int] = field(default_factory=list)
+    on_search_progress: SearchProgressCallback | None = None
+    on_search_item: SearchItemCallback | None = None
+    cancel_requested: bool = False
     previous_phase: AuthProgressPhase | None = None
     seen_login: bool = False
 
@@ -188,6 +236,7 @@ class PersistentAuthWorkerClient:
             request = _ActiveRequest(
                 request_id=request_id,
                 platform=platform,
+                kind="auth",
                 result=loop.create_future(),
             )
             if self._active is not None:
@@ -204,7 +253,79 @@ class PersistentAuthWorkerClient:
                         "platform": platform,
                     },
                 )
-                return await asyncio.shield(request.result)
+                result = await asyncio.shield(request.result)
+                if not isinstance(result, AuthWorkerResult):
+                    raise AuthWorkerError
+                return result
+            except asyncio.CancelledError:
+                await asyncio.shield(self._cancel_request(generation, request))
+                raise
+            finally:
+                if self._active is request:
+                    self._active = None
+
+    async def search(
+        self,
+        *,
+        request_id: UUID,
+        terms: Sequence[str],
+        max_results_per_term: int,
+        on_progress: SearchProgressCallback,
+        on_item: SearchItemCallback,
+    ) -> SearchWorkerResult:
+        """Run one correlated Toutiao search on the shared worker."""
+
+        if self._request_lock.locked():
+            raise AuthWorkerBusyError
+        if not 1 <= len(terms) <= 20 or not 1 <= max_results_per_term <= 50:
+            raise AuthWorkerError
+
+        async with self._request_lock:
+            if self._closed:
+                raise AuthWorkerError
+            self._completed_request_id = None
+            try:
+                generation = await self._ensure_worker()
+            except asyncio.CancelledError:
+                generation = self._generation
+                await asyncio.shield(
+                    self._recycle_generation(generation, invalidate=True)
+                )
+                raise
+            loop = asyncio.get_running_loop()
+            request = _ActiveRequest(
+                request_id=request_id,
+                platform="toutiao",
+                kind="search",
+                result=loop.create_future(),
+                search_term_count=len(terms),
+                search_max_results_per_term=max_results_per_term,
+                search_item_counts=[0] * len(terms),
+                on_search_progress=on_progress,
+                on_search_item=on_item,
+            )
+            if self._active is not None:
+                raise AuthWorkerBusyError
+            self._active = request
+            try:
+                await self._write_command(
+                    generation,
+                    {
+                        "version": 1,
+                        "type": "command",
+                        "command": "search",
+                        "request_id": str(request_id),
+                        "platform": "toutiao",
+                        "terms": list(terms),
+                        "max_results_per_term": max_results_per_term,
+                    },
+                    prefix=SEARCH_COMMAND_PREFIX,
+                    max_bytes=MAX_SEARCH_COMMAND_BYTES,
+                )
+                result = await asyncio.shield(request.result)
+                if not isinstance(result, SearchWorkerResult):
+                    raise AuthWorkerError
+                return result
             except asyncio.CancelledError:
                 await asyncio.shield(self._cancel_request(generation, request))
                 raise
@@ -315,23 +436,41 @@ class PersistentAuthWorkerClient:
         if request.result.done():
             return
         try:
+            is_search = request.kind == "search"
+            request.cancel_requested = True
             await self._write_command(
                 generation,
                 {
-                    "version": 2,
+                    "version": 1 if is_search else 2,
                     "type": "command",
                     "command": "cancel",
                     "request_id": str(request.request_id),
                 },
+                prefix=SEARCH_COMMAND_PREFIX if is_search else AUTH_COMMAND_PREFIX,
+                max_bytes=(
+                    MAX_SEARCH_COMMAND_BYTES if is_search else MAX_AUTH_FRAME_BYTES
+                ),
             )
             async with asyncio.timeout(self._cancel_timeout_seconds):
                 result = await asyncio.shield(request.result)
-            if result != AuthWorkerResult("cancelled", "cancelled"):
+            expected: AuthWorkerResult | SearchWorkerResult = (
+                SearchWorkerResult("cancelled")
+                if is_search
+                else AuthWorkerResult("cancelled", "cancelled")
+            )
+            if result != expected:
                 raise AuthWorkerError
         except (AuthWorkerError, TimeoutError):
             await self._recycle_generation(generation, invalidate=True)
 
-    async def _write_command(self, generation: int, payload: dict[str, object]) -> None:
+    async def _write_command(
+        self,
+        generation: int,
+        payload: dict[str, object],
+        *,
+        prefix: bytes = AUTH_COMMAND_PREFIX,
+        max_bytes: int = MAX_AUTH_FRAME_BYTES,
+    ) -> None:
         process = self._process
         if (
             generation != self._generation
@@ -341,13 +480,13 @@ class PersistentAuthWorkerClient:
         ):
             raise AuthWorkerError
         frame = (
-            AUTH_COMMAND_PREFIX
+            prefix
             + json.dumps(payload, ensure_ascii=True, separators=(",", ":")).encode(
                 "utf-8"
             )
             + b"\n"
         )
-        if len(frame) > MAX_AUTH_FRAME_BYTES:
+        if len(frame) > max_bytes:
             raise AuthWorkerError
         try:
             process.stdin.write(frame)
@@ -359,7 +498,7 @@ class PersistentAuthWorkerClient:
     async def _read_stdout(self, generation: int, reader: _AsyncLineReader) -> None:
         try:
             while line := await reader.readline():
-                event = _parse_event(line)
+                event = _parse_worker_event(line)
                 await self._handle_event(generation, event)
             if not self._is_valid_shutdown_eof(generation):
                 raise AuthWorkerError
@@ -387,13 +526,18 @@ class PersistentAuthWorkerClient:
         if generation != self._generation:
             return
         event_name = event["event"]
+        protocol = event["protocol"]
         if event_name == "ready":
+            if protocol != "auth":
+                raise AuthWorkerError
             ready = self._ready
             if ready is None or ready.done() or self._active is not None:
                 raise AuthWorkerError
             ready.set_result(None)
             return
         if event_name == "stopped":
+            if protocol != "auth":
+                raise AuthWorkerError
             stopped = self._stopped
             if (
                 self._shutdown_generation != generation
@@ -405,6 +549,8 @@ class PersistentAuthWorkerClient:
             stopped.set_result(None)
             return
         if event_name == "session":
+            if protocol != "auth":
+                raise AuthWorkerError
             active = self._active
             if active is not None and active.previous_phase is not None:
                 raise AuthWorkerError
@@ -425,6 +571,57 @@ class PersistentAuthWorkerClient:
         request_id = cast(UUID, event["request_id"])
         platform = cast(AuthPlatformId, event["platform"])
         if request_id != active.request_id or platform != active.platform:
+            raise AuthWorkerError
+
+        if active.kind == "search":
+            if protocol != "search":
+                raise AuthWorkerError
+            if event_name == "progress":
+                position = cast(int, event["term_position"])
+                count = cast(int, event["term_count"])
+                if (
+                    count != active.search_term_count
+                    or position != active.search_current_term_position + 1
+                ):
+                    raise AuthWorkerError
+                active.search_current_term_position = position
+                callback = active.on_search_progress
+                if callback is None:
+                    raise AuthWorkerError
+                await callback(position, count)
+                return
+            if event_name == "item":
+                position = cast(int, event["term_position"])
+                callback = active.on_search_item
+                if (
+                    callback is None
+                    or position != active.search_current_term_position
+                    or not 0 <= position < active.search_term_count
+                    or active.search_item_counts[position]
+                    >= active.search_max_results_per_term
+                ):
+                    raise AuthWorkerError
+                await callback(position, cast(SearchWorkerItem, event["item"]))
+                active.search_item_counts[position] += 1
+                active.search_item_count += 1
+                return
+            if event_name != "result" or active.result.done():
+                raise AuthWorkerError
+            outcome = cast(SearchOutcome, event["outcome"])
+            if outcome == "cancelled" and not active.cancel_requested:
+                raise AuthWorkerError
+            if outcome in {"completed_with_results", "completed_empty"}:
+                if active.search_current_term_position != active.search_term_count - 1:
+                    raise AuthWorkerError
+                if (outcome == "completed_with_results") != (
+                    active.search_item_count > 0
+                ):
+                    raise AuthWorkerError
+            self._active = None
+            active.result.set_result(SearchWorkerResult(outcome))
+            return
+
+        if protocol != "auth":
             raise AuthWorkerError
 
         if event_name == "progress":
@@ -536,7 +733,25 @@ class PersistentAuthWorkerClient:
         )
 
 
+def _parse_worker_event(line: bytes) -> dict[str, object]:
+    if line.startswith(AUTH_EVENT_PREFIX):
+        event = _parse_auth_event(line)
+        event["protocol"] = "auth"
+        return event
+    if line.startswith(SEARCH_EVENT_PREFIX):
+        event = _parse_search_event(line)
+        event["protocol"] = "search"
+        return event
+    raise AuthWorkerError
+
+
 def _parse_event(line: bytes) -> dict[str, object]:
+    """Backward-compatible test seam for the strict worker event parser."""
+
+    return _parse_worker_event(line)
+
+
+def _parse_auth_event(line: bytes) -> dict[str, object]:
     if (
         len(line) > MAX_AUTH_FRAME_BYTES
         or not line.endswith(b"\n")
@@ -605,6 +820,148 @@ def _parse_event(line: bytes) -> dict[str, object]:
     else:
         raise AuthWorkerError
     return raw
+
+
+def _parse_search_event(line: bytes) -> dict[str, object]:
+    if (
+        len(line) > MAX_SEARCH_EVENT_BYTES
+        or not line.endswith(b"\n")
+        or not line.startswith(SEARCH_EVENT_PREFIX)
+    ):
+        raise AuthWorkerError
+    try:
+        raw = json.loads(
+            line[len(SEARCH_EVENT_PREFIX) :].decode("utf-8"),
+            object_pairs_hook=_unique_object,
+            parse_constant=_reject_nonstandard_constant,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError):
+        raise AuthWorkerError from None
+    if not isinstance(raw, dict):
+        raise AuthWorkerError
+    if type(raw.get("version")) is not int or raw.get("version") != 1:
+        raise AuthWorkerError
+    if type(raw.get("type")) is not str or raw.get("type") != "event":
+        raise AuthWorkerError
+    if raw.get("platform") != "toutiao" or type(raw.get("platform")) is not str:
+        raise AuthWorkerError
+    raw["request_id"] = _parse_canonical_uuid(raw.get("request_id"))
+
+    event = raw.get("event")
+    base = {"version", "type", "event", "request_id", "platform"}
+    if event == "progress":
+        _require_exact_fields(raw, base | {"phase", "term_position", "term_count"})
+        if raw["phase"] != "term_started":
+            raise AuthWorkerError
+        position = raw["term_position"]
+        count = raw["term_count"]
+        if (
+            type(position) is not int
+            or type(count) is not int
+            or not 0 <= position < count <= 20
+        ):
+            raise AuthWorkerError
+    elif event == "item":
+        _require_exact_fields(raw, base | {"term_position", "item"})
+        position = raw["term_position"]
+        if type(position) is not int or not 0 <= position < 20:
+            raise AuthWorkerError
+        raw["item"] = _parse_search_item(raw["item"])
+    elif event == "result":
+        _require_exact_fields(raw, base | {"outcome"})
+        if raw["outcome"] not in {
+            "completed_with_results",
+            "completed_empty",
+            "login_required",
+            "manual_challenge_required",
+            "platform_blocked_or_rate_limited",
+            "structure_changed",
+            "browser_unavailable",
+            "browser_disconnected",
+            "cancelled",
+            "internal_error",
+        }:
+            raise AuthWorkerError
+    else:
+        raise AuthWorkerError
+    return raw
+
+
+def _parse_search_item(value: object) -> SearchWorkerItem:
+    if not isinstance(value, dict):
+        raise AuthWorkerError
+    fields = {
+        "content_id",
+        "content_type",
+        "title",
+        "snippet",
+        "creator_hash",
+        "publisher_name",
+        "published_at_text",
+        "content_url",
+        "discovered_at",
+    }
+    _require_exact_fields(value, fields)
+    limits = {
+        "content_id": 128,
+        "content_type": 32,
+        "title": 300,
+        "snippet": 1000,
+        "creator_hash": 64,
+        "publisher_name": 100,
+        "published_at_text": 100,
+        "content_url": 2048,
+    }
+    for item_field, limit in limits.items():
+        item_value = value[item_field]
+        if type(item_value) is not str or len(item_value) > limit:
+            raise AuthWorkerError
+    if (
+        not value["content_id"]
+        or not value["content_type"]
+        or not value["title"]
+        or not value["content_url"]
+    ):
+        raise AuthWorkerError
+    creator_hash = cast(str, value["creator_hash"])
+    publisher_name = cast(str, value["publisher_name"])
+    if (
+        bool(creator_hash) != bool(publisher_name)
+        or (creator_hash and _MASKED_CREATOR_HASH.fullmatch(creator_hash) is None)
+        or not _is_masked_publisher_name(publisher_name)
+    ):
+        raise AuthWorkerError
+    discovered_at = value["discovered_at"]
+    if (
+        type(discovered_at) is not int
+        or not 1_000_000_000_000 <= discovered_at <= 9_999_999_999_999
+    ):
+        raise AuthWorkerError
+    try:
+        parsed_url = urlsplit(cast(str, value["content_url"]))
+        hostname = (parsed_url.hostname or "").rstrip(".").lower()
+        port = parsed_url.port
+    except ValueError:
+        raise AuthWorkerError from None
+    if (
+        parsed_url.scheme not in {"http", "https"}
+        or not (hostname == "toutiao.com" or hostname.endswith(".toutiao.com"))
+        or parsed_url.username is not None
+        or parsed_url.password is not None
+        or (port is not None and port != (80 if parsed_url.scheme == "http" else 443))
+        or parsed_url.fragment
+    ):
+        raise AuthWorkerError
+    return SearchWorkerItem(**cast(dict[str, object], value))
+
+
+def _is_masked_publisher_name(value: str) -> bool:
+    return (
+        not value
+        or value == "*"
+        or (len(value) == 2 and value.endswith("*"))
+        or (len(value) == 5 and value[1:4] == "***")
+    )
 
 
 def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:

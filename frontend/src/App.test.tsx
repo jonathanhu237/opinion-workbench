@@ -28,6 +28,7 @@ import {
   type PlatformConnection,
   type PlatformConnectionsResponse,
 } from './lib/api/platform-connections'
+import { fetchSearchRuns } from './lib/api/search-runs'
 
 vi.mock('./lib/api/health', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./lib/api/health')>()
@@ -56,6 +57,15 @@ vi.mock('./lib/api/monitoring-rules', async (importOriginal) => {
   return {
     ...actual,
     fetchMonitoringRules: vi.fn(),
+  }
+})
+
+vi.mock('./lib/api/search-runs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./lib/api/search-runs')>()
+
+  return {
+    ...actual,
+    fetchSearchRuns: vi.fn(),
   }
 })
 
@@ -127,6 +137,7 @@ const mockedFetchHealth = vi.mocked(fetchHealth)
 const mockedFetchPlatformConnections = vi.mocked(fetchPlatformConnections)
 const mockedStartAttempt = vi.mocked(startPlatformConnectionAttempt)
 const mockedFetchMonitoringRules = vi.mocked(fetchMonitoringRules)
+const mockedFetchSearchRuns = vi.mocked(fetchSearchRuns)
 const defaultMatchMedia = window.matchMedia
 
 function renderRoute(initialEntry = '/') {
@@ -171,9 +182,14 @@ describe('Longtian public opinion application', () => {
     mockedFetchPlatformConnections.mockReset()
     mockedStartAttempt.mockReset()
     mockedFetchMonitoringRules.mockReset()
+    mockedFetchSearchRuns.mockReset()
     mockedFetchHealth.mockResolvedValue(connectedResponse)
     mockedFetchPlatformConnections.mockResolvedValue(catalog())
     mockedFetchMonitoringRules.mockResolvedValue(monitoringRulesResponse)
+    mockedFetchSearchRuns.mockResolvedValue({
+      runs: [],
+      next_before_id: null,
+    })
   })
 
   it('renders the empty workbench home through the application providers', () => {
@@ -192,7 +208,7 @@ describe('Longtian public opinion application', () => {
     expect(mockedFetchMonitoringRules).not.toHaveBeenCalled()
   })
 
-  it('keeps only the three real navigation destinations and marks them exactly', async () => {
+  it('keeps only the four real navigation destinations and marks them exactly', async () => {
     const user = userEvent.setup()
     const { router } = renderRoute()
 
@@ -202,11 +218,12 @@ describe('Longtian public opinion application', () => {
     ).toBeInTheDocument()
     const navigation = screen.getByRole('navigation', { name: '主导航' })
     const links = within(navigation).getAllByRole('link')
-    expect(links).toHaveLength(3)
+    expect(links).toHaveLength(4)
     expect(links.map((link) => link.textContent)).toEqual([
       '工作台',
       '平台账号',
       '监控规则',
+      '采集任务',
     ])
     const workbenchLink = within(navigation).getByRole('link', {
       name: '工作台',
@@ -221,7 +238,6 @@ describe('Longtian public opinion application', () => {
     expect(platformAccountsLink).not.toHaveAttribute('aria-current')
     expect(monitoringRulesLink).not.toHaveAttribute('aria-current')
     for (const label of [
-      '采集任务',
       '舆情信息',
       '监控关键词',
       '舆情日报',
@@ -264,6 +280,20 @@ describe('Longtian public opinion application', () => {
       within(navigation).getByRole('link', { name: '平台账号' }),
     ).not.toHaveAttribute('aria-current')
     expect(screen.getByRole('main')).toHaveAccessibleName('监控规则')
+    expect(screen.getByRole('main')).toHaveFocus()
+
+    await user.click(within(navigation).getByRole('link', { name: '采集任务' }))
+
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe('/collection-runs'),
+    )
+    expect(
+      await screen.findByRole('heading', { name: '采集任务', level: 1 }),
+    ).toBeInTheDocument()
+    expect(
+      within(navigation).getByRole('link', { name: '采集任务' }),
+    ).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByRole('main')).toHaveAccessibleName('采集任务')
     expect(screen.getByRole('main')).toHaveFocus()
   })
 
@@ -313,11 +343,12 @@ describe('Longtian public opinion application', () => {
       name: '主导航',
     })
     const links = within(navigation).getAllByRole('link')
-    expect(links).toHaveLength(3)
+    expect(links).toHaveLength(4)
     expect(links.map((link) => link.textContent)).toEqual([
       '工作台',
       '平台账号',
       '监控规则',
+      '采集任务',
     ])
     expect(within(dialog).getAllByRole('separator')).toHaveLength(1)
     expect(within(dialog).queryByText('单机值守模式')).toBeNull()

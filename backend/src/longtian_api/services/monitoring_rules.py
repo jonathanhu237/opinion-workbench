@@ -67,9 +67,16 @@ class MonitoringRuleService:
     ) -> None:
         if repository is not None and database_path is not None:
             raise ValueError("Provide either repository or database_path, not both.")
+        self._database: Database | None = None
         if repository is None:
-            repository = MonitoringRuleRepository(Database(database_path))
+            self._database = Database(database_path)
+            repository = MonitoringRuleRepository(self._database)
         self._repository = repository
+
+    @property
+    def database(self) -> Database | None:
+        """Return the shared product database when this is not a test fake."""
+        return self._database
 
     def initialize(self) -> None:
         """Initialize storage before the application accepts requests."""

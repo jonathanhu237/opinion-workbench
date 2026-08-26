@@ -6,6 +6,7 @@ from fastapi import Depends, Request
 
 from longtian_api.services.monitoring_rules import MonitoringRuleService
 from longtian_api.services.platform_connections import PlatformConnectionService
+from longtian_api.services.search_runs import SearchRunService
 
 
 def get_platform_connection_service(request: Request) -> PlatformConnectionService:
@@ -26,3 +27,12 @@ def get_monitoring_rule_service(request: Request) -> MonitoringRuleService:
 MonitoringRuleServiceDep = Annotated[
     MonitoringRuleService, Depends(get_monitoring_rule_service)
 ]
+
+
+def get_search_run_service(request: Request) -> SearchRunService:
+    """Retrieve the lifespan-owned search-run service."""
+
+    return request.app.state.search_run_service
+
+
+SearchRunServiceDep = Annotated[SearchRunService, Depends(get_search_run_service)]

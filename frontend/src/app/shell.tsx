@@ -1,4 +1,9 @@
-import { CircleUserRound, ListChecks, SlidersHorizontal } from 'lucide-react'
+import {
+  CircleUserRound,
+  ClipboardList,
+  ListChecks,
+  SlidersHorizontal,
+} from 'lucide-react'
 import { useEffect, useReducer, useRef } from 'react'
 import { NavLink, Outlet, useLocation, useOutletContext } from 'react-router'
 
@@ -39,6 +44,7 @@ const pageTitles: Record<string, string> = {
   '/': '工作台',
   '/platform-accounts': '平台账号',
   '/monitoring-rules': '监控规则',
+  '/collection-runs': '采集任务',
 }
 
 function healthReducer(_state: HealthState, action: HealthAction): HealthState {
@@ -99,6 +105,12 @@ function PrimaryNavigation() {
       to: '/monitoring-rules',
       icon: ListChecks,
       isActive: location.pathname === '/monitoring-rules',
+    },
+    {
+      label: '采集任务',
+      to: '/collection-runs',
+      icon: ClipboardList,
+      isActive: location.pathname.startsWith('/collection-runs'),
     },
   ] as const
 
@@ -179,7 +191,9 @@ export function AppShell() {
     document.getElementById('main-content')?.focus()
   }, [location.pathname])
 
-  const pageTitle = pageTitles[location.pathname] ?? '当前页面'
+  const pageTitle = location.pathname.startsWith('/collection-runs/')
+    ? '采集任务详情'
+    : (pageTitles[location.pathname] ?? '当前页面')
 
   return (
     <SidebarProvider>

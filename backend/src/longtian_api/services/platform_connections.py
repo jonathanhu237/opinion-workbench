@@ -15,6 +15,10 @@ from longtian_api.schemas.platform_connections import (
     PlatformConnectionListResponse,
     PlatformId,
 )
+from longtian_api.services.browser_operations import (
+    BrowserOperationCoordinator,
+    BrowserOperationOwner,
+)
 from longtian_api.services.media_crawler_auth_worker import (
     AuthPlatformId,
     AuthProgressPhase,
@@ -63,10 +67,14 @@ class PlatformConnectionService:
         worker_shutdown_timeout_seconds: float = 5.0,
         termination_grace_seconds: float = 3.0,
         clock: Clock | None = None,
+        browser_operation_coordinator: BrowserOperationCoordinator | None = None,
     ) -> None:
         self._media_crawler_dir = media_crawler_dir or _default_media_crawler_dir()
         self._attempt_timeout_seconds = attempt_timeout_seconds
         self._clock = clock or (lambda: datetime.now(UTC))
+        self._browser_operations = (
+            browser_operation_coordinator or BrowserOperationCoordinator()
+        )
 
         self._lock = asyncio.Lock()
         self._current_task: asyncio.Task[None] | None = None
@@ -83,6 +91,18 @@ class PlatformConnectionService:
             shutdown_timeout_seconds=worker_shutdown_timeout_seconds,
             termination_grace_seconds=termination_grace_seconds,
         )
+
+    @property
+    def worker(self) -> PersistentAuthWorkerClient:
+        """Expose the one process boundary shared with product search."""
+
+        return self._worker
+
+    @property
+    def browser_operations(self) -> BrowserOperationCoordinator:
+        """Return the coordinator shared with search-run admission."""
+
+        return self._browser_operations
 
     async def list_connections(self) -> PlatformConnectionListResponse:
         """Return isolated snapshots in stable catalog order."""
@@ -120,6 +140,13 @@ class PlatformConnectionService:
                 )
 
             attempt_id = uuid4()
+            owner = BrowserOperationOwner("platform_connection", attempt_id)
+            if not await self._browser_operations.try_claim(owner):
+                raise PlatformConnectionError(
+                    status_code=409,
+                    code="connection_attempt_active",
+                    message="已有平台连接任务正在进行，请稍后重试。",
+                )
             accepted = connection.model_copy(
                 update={
                     "status": "checking",
@@ -129,7 +156,7 @@ class PlatformConnectionService:
             )
             self._connections[connection.platform] = accepted
             self._current_task = asyncio.create_task(
-                self._run_attempt(auth_platform, attempt_id),
+                self._run_attempt(auth_platform, attempt_id, owner),
                 name=f"platform-connection-{connection.platform}-{attempt_id}",
             )
             return PlatformConnectionAttemptResponse(
@@ -166,7 +193,12 @@ class PlatformConnectionService:
                 )
             self._current_task = None
 
-    async def _run_attempt(self, platform: AuthPlatformId, attempt_id: UUID) -> None:
+    async def _run_attempt(
+        self,
+        platform: AuthPlatformId,
+        attempt_id: UUID,
+        owner: BrowserOperationOwner,
+    ) -> None:
         terminal_status: Literal["connected", "disconnected", "failed"] = "failed"
         terminal_guidance: PlatformConnectionGuidance = "retry"
         was_cancelled = False
@@ -197,9 +229,12 @@ class PlatformConnectionService:
             terminal_status = "failed"
             terminal_guidance = "retry"
 
-        await self._finish_attempt(
-            platform, attempt_id, terminal_status, terminal_guidance
-        )
+        try:
+            await self._finish_attempt(
+                platform, attempt_id, terminal_status, terminal_guidance
+            )
+        finally:
+            await self._browser_operations.release(owner)
         if was_cancelled:
             raise asyncio.CancelledError
 

@@ -9,6 +9,11 @@ from starlette.concurrency import run_in_threadpool
 from longtian_api.api.router import api_router
 from longtian_api.services.monitoring_rules import MonitoringRuleService
 from longtian_api.services.platform_connections import PlatformConnectionService
+from longtian_api.services.search_runs import SearchRunService
+
+SearchRunServiceFactory = Callable[
+    [MonitoringRuleService, PlatformConnectionService], SearchRunService
+]
 
 
 def create_app(
@@ -19,6 +24,7 @@ def create_app(
     monitoring_rule_service_factory: Callable[
         [], MonitoringRuleService
     ] = MonitoringRuleService,
+    search_run_service_factory: SearchRunServiceFactory | None = None,
 ) -> FastAPI:
     """Create the product API and lifespan-owned local services."""
 
@@ -28,10 +34,32 @@ def create_app(
         try:
             monitoring_rule_service = monitoring_rule_service_factory()
             await run_in_threadpool(monitoring_rule_service.initialize)
+            if search_run_service_factory is not None:
+                search_run_service = search_run_service_factory(
+                    monitoring_rule_service,
+                    platform_service,
+                )
+            else:
+                shared_database = monitoring_rule_service.database
+                if shared_database is None:
+                    raise RuntimeError(
+                        "A custom monitoring repository requires an explicit "
+                        "search-run service factory."
+                    )
+                search_run_service = SearchRunService(
+                    monitoring_rules=monitoring_rule_service,
+                    worker=platform_service.worker,
+                    browser_operations=platform_service.browser_operations,
+                    database=shared_database,
+                )
+            await run_in_threadpool(search_run_service.initialize)
             application.state.platform_connection_service = platform_service
             application.state.monitoring_rule_service = monitoring_rule_service
+            application.state.search_run_service = search_run_service
             yield
         finally:
+            if "search_run_service" in locals():
+                await search_run_service.shutdown()
             await platform_service.shutdown()
 
     application = FastAPI(

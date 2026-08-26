@@ -31,6 +31,31 @@ export const appRoutes: RouteObject[] = [
           return { Component: MonitoringRules }
         },
       },
+      {
+        path: 'collection-runs',
+        hydrateFallbackElement: (
+          <p role="status" className="text-sm text-muted-foreground">
+            正在加载采集任务…
+          </p>
+        ),
+        lazy: async () => {
+          const { CollectionRuns } = await import('@/routes/collection-runs')
+          return { Component: CollectionRuns }
+        },
+      },
+      {
+        path: 'collection-runs/:runId',
+        hydrateFallbackElement: (
+          <p role="status" className="text-sm text-muted-foreground">
+            正在加载采集任务…
+          </p>
+        ),
+        lazy: async () => {
+          const { CollectionRunDetail } =
+            await import('@/routes/collection-run-detail')
+          return { Component: CollectionRunDetail }
+        },
+      },
     ],
   },
 ]

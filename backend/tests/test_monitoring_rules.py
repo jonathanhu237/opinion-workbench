@@ -21,6 +21,7 @@ from longtian_api.repositories.monitoring_rules import (
 from longtian_api.schemas.monitoring_rules import MonitoringRuleCreate
 from longtian_api.services.monitoring_rules import MonitoringRuleService
 from longtian_api.services.platform_connections import PlatformConnectionService
+from longtian_api.services.search_runs import SearchRunService
 
 DEFAULT_RULE = {
     "id": 1,
@@ -406,6 +407,14 @@ def test_unavailable_repository_is_a_sanitized_503(tmp_path: Path) -> None:
     with TestClient(
         create_app(
             monitoring_rule_service_factory=lambda: service,
+            search_run_service_factory=lambda monitoring_rules, platform_connections: (
+                SearchRunService(
+                    monitoring_rules=monitoring_rules,
+                    worker=platform_connections.worker,
+                    browser_operations=platform_connections.browser_operations,
+                    database_path=tmp_path / "search.sqlite3",
+                )
+            ),
         )
     ) as client:
         response = client.get("/api/v1/monitoring-rules")
