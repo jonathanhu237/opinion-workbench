@@ -18,7 +18,7 @@ const terminalStatuses = [
   'internal_error',
 ] as const
 const searchRunStatusSchema = z.enum([...activeStatuses, ...terminalStatuses])
-const searchPlatformSchema = z.enum(['toutiao', 'wb', 'ks'])
+const searchPlatformSchema = z.enum(['toutiao', 'wb', 'ks', 'dy'])
 const isoDateSchema = z.string().datetime({ offset: true })
 const positiveSafeIntegerSchema = z
   .number()
@@ -227,6 +227,15 @@ function isValidSearchContentUrl(
       value === `https://www.kuaishou.com/short-video/${platformContentId}` &&
       url.protocol === 'https:' &&
       hostname === 'www.kuaishou.com' &&
+      url.search === ''
+    )
+  }
+  if (platform === 'dy') {
+    return (
+      /^[0-9]+$/u.test(platformContentId) &&
+      value === `https://www.douyin.com/video/${platformContentId}` &&
+      url.protocol === 'https:' &&
+      hostname === 'www.douyin.com' &&
       url.search === ''
     )
   }

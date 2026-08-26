@@ -136,7 +136,11 @@ class SearchProcess:
                     else (
                         "https://www.kuaishou.com/short-video/100"
                         if platform == "ks"
-                        else "https://www.toutiao.com/article/100/"
+                        else (
+                            "https://www.douyin.com/video/100"
+                            if platform == "dy"
+                            else "https://www.toutiao.com/article/100/"
+                        )
                     )
                 )
             ),
@@ -464,6 +468,50 @@ def test_client_threads_kuaishou_platform_and_canonical_url() -> None:
     asyncio.run(scenario())
 
 
+def test_client_threads_douyin_platform_and_canonical_url() -> None:
+    async def scenario() -> None:
+        process = SearchProcess()
+        client, _launcher, _terminator, _disconnects = build_client(process)
+        items: list[str] = []
+
+        async def on_item(_position: int, item: SearchWorkerItem) -> None:
+            items.append(item.content_url)
+
+        result = await client.search(
+            request_id=uuid4(),
+            platform="dy",
+            terms=("龙田街道",),
+            max_results_per_term=10,
+            on_progress=lambda _position, _count: asyncio.sleep(0),
+            on_item=on_item,
+        )
+
+        assert result.outcome == "completed_with_results"
+        assert items == ["https://www.douyin.com/video/100"]
+        assert process.commands[0][1]["platform"] == "dy"
+        await client.shutdown()
+
+    async def mismatched_event() -> None:
+        process = SearchProcess(event_platform_override="ks")
+        client, _launcher, terminator, disconnects = build_client(process)
+
+        with pytest.raises(AuthWorkerError):
+            await client.search(
+                request_id=uuid4(),
+                platform="dy",
+                terms=("龙田街道",),
+                max_results_per_term=10,
+                on_progress=lambda _position, _count: asyncio.sleep(0),
+                on_item=lambda _position, _item: asyncio.sleep(0),
+            )
+
+        assert terminator.calls == 1
+        assert len(disconnects) == 1
+
+    asyncio.run(scenario())
+    asyncio.run(mismatched_event())
+
+
 def test_client_search_cancellation_uses_the_search_cancel_frame() -> None:
     async def scenario() -> None:
         process = SearchProcess(hanging=True)
@@ -574,6 +622,36 @@ def test_search_event_parser_rejects_noncanonical_kuaishou_url(
         term_position=0,
         item={
             **SearchProcess.item(platform="ks", content_type="video"),
+            "content_url": content_url,
+        },
+    )
+
+    with pytest.raises(AuthWorkerError):
+        _parse_event(frame)
+
+
+@pytest.mark.parametrize(
+    ("content_id", "content_url"),
+    [
+        ("other-id", "https://www.douyin.com/video/other-id"),
+        ("100", "https://www.douyin.com/video/other"),
+        ("100", "https://www.douyin.com/video/100?source=search"),
+        ("100", "https://evil.example/video/100"),
+    ],
+)
+def test_search_event_parser_rejects_noncanonical_douyin_url(
+    content_id: str,
+    content_url: str,
+) -> None:
+    request_id = str(uuid4())
+    frame = search_event(
+        "item",
+        request_id,
+        platform="dy",
+        term_position=0,
+        item={
+            **SearchProcess.item(platform="dy", content_type="video"),
+            "content_id": content_id,
             "content_url": content_url,
         },
     )

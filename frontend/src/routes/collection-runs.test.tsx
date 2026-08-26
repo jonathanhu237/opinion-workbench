@@ -6,6 +6,7 @@ import { createMemoryRouter } from 'react-router'
 import { RouterProvider } from 'react-router/dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import douyinLogo from '@/assets/platforms/douyin.svg'
 import weiboLogo from '@/assets/platforms/weibo.svg'
 import kuaishouLogo from '@/assets/platforms/kuaishou.svg'
 import {
@@ -208,6 +209,7 @@ describe('collection runs routes', () => {
       '今日头条',
       '微博',
       '快手',
+      '抖音',
     ])
     await user.keyboard('{ArrowDown}{Enter}')
     expect(platformSelect).toHaveTextContent('微博')
@@ -243,6 +245,32 @@ describe('collection runs routes', () => {
       expect(mockedStartRun).toHaveBeenCalledWith({
         monitoring_rule_id: 1,
         platform: 'ks',
+        max_results_per_term: 10,
+      }),
+    )
+  })
+
+  it('switches to Douyin with the existing Shadcn platform selector', async () => {
+    const user = userEvent.setup()
+    mockedStartRun.mockResolvedValue(
+      run({ id: 11, platform: 'dy', status: 'queued' }),
+    )
+    renderRoute()
+    await screen.findByText(rule.name)
+
+    await user.click(screen.getByRole('combobox', { name: '监控规则' }))
+    await user.click(await screen.findByRole('option', { name: /龙田街道/u }))
+    await user.click(screen.getByRole('combobox', { name: '采集平台' }))
+    await user.click(await screen.findByRole('option', { name: '抖音' }))
+    expect(
+      screen.getByRole('combobox', { name: '采集平台' }),
+    ).toHaveTextContent('抖音')
+    await user.click(screen.getByRole('button', { name: '开始采集' }))
+
+    await waitFor(() =>
+      expect(mockedStartRun).toHaveBeenCalledWith({
+        monitoring_rule_id: 1,
+        platform: 'dy',
         max_results_per_term: 10,
       }),
     )
@@ -478,6 +506,47 @@ describe('collection runs routes', () => {
     expect(screen.getByRole('link', { name: '打开原文' })).toHaveAttribute(
       'href',
       'https://www.kuaishou.com/short-video/3xabc123',
+    )
+  })
+
+  it('renders the Douyin identity in history and detail views', async () => {
+    mockedFetchRuns.mockResolvedValue({
+      runs: [run({ platform: 'dy' })],
+      next_before_id: null,
+    })
+    const list = renderRoute()
+
+    const historyPlatform = await screen.findByText(/抖音 · 2 个搜索词/u)
+    expect(historyPlatform.parentElement?.querySelector('img')).toHaveAttribute(
+      'src',
+      douyinLogo,
+    )
+    list.unmount()
+
+    mockedFetchRun.mockResolvedValue(run({ platform: 'dy' }))
+    mockedFetchResults.mockResolvedValue({
+      results: [
+        result({
+          platform: 'dy',
+          platform_content_id: '7512345678901234567',
+          content_type: 'video',
+          content_url: 'https://www.douyin.com/video/7512345678901234567',
+        }),
+      ],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    })
+    renderRoute('/collection-runs/7')
+
+    const detailPlatform = await screen.findByText('抖音 · 规则快照')
+    expect(detailPlatform.querySelector('img')).toHaveAttribute(
+      'src',
+      douyinLogo,
+    )
+    expect(screen.getByRole('link', { name: '打开原文' })).toHaveAttribute(
+      'href',
+      'https://www.douyin.com/video/7512345678901234567',
     )
   })
 

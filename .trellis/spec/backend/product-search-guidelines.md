@@ -15,12 +15,12 @@ This is a product orchestration contract, not a general crawler contract. The st
 contract in `browser-search-adapter-guidelines.md` continues to require a fresh context. Only this
 lifespan-owned product worker may borrow the already approved default Chrome context, and only with
 the ownership and serialization rules below. The exact supported search-platform set is
-`toutiao | wb | ks`; extending it requires coordinated API, database, worker-protocol, adapter, frontend,
-and migration changes.
+`toutiao | wb | ks | dy`; extending it requires coordinated API, database, worker-protocol, adapter,
+frontend, and migration changes.
 
 ### 2. Signatures
 
-Database version 4 owns:
+Database version 5 owns:
 
 ```text
 search_runs(
@@ -65,11 +65,11 @@ POST /api/v1/search-runs/{run_id}/cancel
 Start input is exact and strict:
 
 ```json
-{"monitoring_rule_id": 1, "platform": "ks", "max_results_per_term": 10}
+{"monitoring_rule_id": 1, "platform": "dy", "max_results_per_term": 10}
 ```
 
 - `monitoring_rule_id`: SQLite signed-int64 integer from 1 upward.
-- `platform`: exact literal `toutiao | wb | ks`.
+- `platform`: exact literal `toutiao | wb | ks | dy`.
 - `max_results_per_term`: strict integer 1–50, default 10.
 - The selected enabled rule must contain 1–20 terms.
 
@@ -153,6 +153,14 @@ Search cancellation uses the search-command prefix with exact `command="cancel"`
   `/rest/v/search/feed` endpoint through its product-specific single-attempt client. Generic retry
   clients, crawler stores, full-text/detail requests, comments, user profiles, and media helpers are
   forbidden.
+- Douyin creates one task-owned official page, reuses the authoritative online account probe, reads
+  only `localStorage.getItem('xmst')`, and calls the official
+  `/aweme/v1/web/general/search/single/` endpoint through a product-specific single-attempt client.
+  It uses the default general sort, requests 15 results per page with offsets 0/15/…, carries
+  `extra.logid` as the next `search_id`, and requests at most
+  `ceil(max_results_per_term / 15)` pages. It does not call `DouYinCrawler.search`, generate
+  `a_bogus`, install context-wide scripts, use a proxy or retry, write crawler stores, or request
+  details, comments, profiles, covers or media.
 - A disconnected account check is not itself a search failure. The official public search page may
   be used without an authenticated Toutiao account; return `login_required` only when the search
   page itself presents a recognized mandatory login wall.
@@ -197,6 +205,10 @@ Search cancellation uses the search-command prefix with exact `command="cancel"`
   Kuaishou is equally strict: only
   `https://www.kuaishou.com/short-video/<matching-platform-content-id>` is valid; hostname case
   variants, explicit ports, queries, fragments, credentials, and mismatched IDs are rejected.
+  Douyin is equally strict: only
+  `https://www.douyin.com/video/<matching-numeric-platform-content-id>` is valid; hostname case
+  variants, explicit ports, queries, fragments, credentials, non-numeric IDs and mismatched IDs are
+  rejected.
 - Normal completion and cancellation close the task-owned search page. Login/challenge outcomes may
   leave that one official page visible for manual action; it remains registered and is closed before
   the next task-owned operation or worker shutdown. Pre-existing pages are never cleanup targets.
@@ -206,7 +218,7 @@ Search cancellation uses the search-command prefix with exact `command="cancel"`
 - Add the real sidebar label `采集任务` and routes `/collection-runs` and
   `/collection-runs/:runId`; the sidebar item is active for both.
 - The start view uses enabled monitoring rules, a Shadcn platform Select containing exactly the
-  executable `今日头条`、`微博` and `快手` targets, and a labeled 1–50 number field with default 10. It does
+  executable `今日头条`、`微博`、`快手` and `抖音` targets, and a labeled 1–50 number field with default 10. It does
   not show unavailable platforms as executable controls or add a sort selector.
 - Poll once per second only while the selected/latest run is active. Terminal/history queries use
   ordinary TanStack Query caching and explicit invalidation.
@@ -265,7 +277,7 @@ Chinese guidance.
 
 ### 6. Tests Required
 
-1. Migration: version 1→2→3→4, direct version 3→4, fresh version 4, repeated initialization,
+1. Migration: version 1→2→3→4→5, direct version 4→5, fresh version 5, repeated initialization,
    forward-version rejection, foreign keys/indexes, active-row reconciliation, preservation of all
    Toutiao IDs/relations/timestamps, and same content ID isolation across platforms.
 2. Repository: run snapshots, stable history pagination, state transitions, transactional item
@@ -280,10 +292,12 @@ Chinese guidance.
 5. Borrowed Chrome: reuse one CDP/default context, task-page registration, no context-wide scripts,
    no close of browser/context/pre-existing pages, challenge-page lifecycle, cancellation, disconnect,
    and worker recycle.
-6. Platform adapters: retain all Toutiao and Weibo fixtures, plus Kuaishou exact signed request
-   parameters, task-local signer isolation, numeric pagination/session propagation, single attempt,
-   bounded pages, canonical URL construction, publisher masking, within-term deduplication,
-   cross-term re-emission, hard limit, and every recognized terminal outcome.
+6. Platform adapters: retain all Toutiao, Weibo and Kuaishou fixtures, plus Douyin exact request
+   parameters, scoped-cookie and single-key LocalStorage access, 15-result pagination/logid
+   propagation, single attempt, bounded pages, canonical URL construction, publisher masking,
+   within-term deduplication, cross-term re-emission, hard limit, and every recognized terminal
+   outcome. Kuaishou retains its exact signed request parameters, task-local signer isolation and
+   numeric pagination/session propagation.
 7. Frontend: runtime decoders, exact status/code pairs, start validation, active polling, cancel,
    history/deep link, new/repeated filters and counts, matched terms, safe original links, empty/error/
    login guidance, keyboard/focus/live-region behavior, mobile layout, and no fake data.

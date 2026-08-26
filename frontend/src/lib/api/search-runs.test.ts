@@ -66,6 +66,15 @@ const kuaishouResult: SearchResult = {
   content_url: 'https://www.kuaishou.com/short-video/3xabc123',
 }
 
+const douyinResult: SearchResult = {
+  ...result,
+  platform: 'dy',
+  platform_content_id: '7512345678901234567',
+  content_type: 'video',
+  title: '抖音公开信息',
+  content_url: 'https://www.douyin.com/video/7512345678901234567',
+}
+
 describe('search runs API boundary', () => {
   const fetchMock = vi.fn<typeof fetch>()
 
@@ -136,6 +145,24 @@ describe('search runs API boundary', () => {
     }
 
     await expect(startSearchRun(input)).resolves.toEqual(kuaishouRun)
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/search-runs',
+      expect.objectContaining({ body: JSON.stringify(input) }),
+    )
+  })
+
+  it('accepts the exact Douyin platform and sends it unchanged', async () => {
+    const douyinRun = { ...run, platform: 'dy' as const }
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify(douyinRun), { status: 202 }),
+    )
+    const input = {
+      monitoring_rule_id: 1,
+      platform: 'dy' as const,
+      max_results_per_term: 8,
+    }
+
+    await expect(startSearchRun(input)).resolves.toEqual(douyinRun)
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/v1/search-runs',
       expect.objectContaining({ body: JSON.stringify(input) }),
@@ -328,6 +355,55 @@ describe('search runs API boundary', () => {
       {
         ...kuaishouResult,
         content_url: 'https://evil.example/short-video/3xabc123',
+      },
+    ]) {
+      fetchMock.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            results: [invalid],
+            total: 1,
+            limit: 50,
+            offset: 0,
+          }),
+          { status: 200 },
+        ),
+      )
+      await expect(
+        fetchSearchRunResults(7, 'all', new AbortController().signal),
+      ).rejects.toMatchObject({ code: 'invalid_response' })
+    }
+  })
+
+  it('correlates Douyin result links with numeric content IDs', async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          results: [douyinResult],
+          total: 1,
+          limit: 50,
+          offset: 0,
+        }),
+        { status: 200 },
+      ),
+    )
+    await expect(
+      fetchSearchRunResults(7, 'all', new AbortController().signal),
+    ).resolves.toMatchObject({ results: [douyinResult] })
+
+    for (const invalid of [
+      { ...douyinResult, platform_content_id: 'not-numeric' },
+      {
+        ...douyinResult,
+        content_url: 'https://www.douyin.com/video/other-id',
+      },
+      {
+        ...douyinResult,
+        content_url:
+          'https://www.douyin.com/video/7512345678901234567?source=search',
+      },
+      {
+        ...douyinResult,
+        content_url: 'https://evil.example/video/7512345678901234567',
       },
     ]) {
       fetchMock.mockResolvedValueOnce(

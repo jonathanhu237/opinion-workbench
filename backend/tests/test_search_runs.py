@@ -14,6 +14,7 @@ from longtian_api.database import (
     _migrate_to_version_1,
     _migrate_to_version_2,
     _migrate_to_version_3,
+    _migrate_to_version_4,
 )
 from longtian_api.main import create_app
 from longtian_api.repositories.search_runs import (
@@ -214,15 +215,16 @@ class FakeSearchWorker:
         self.calls.append((request_id, platform, tuple(terms), max_results_per_term))
         await on_progress(0, len(terms))
         if self.emit_item:
+            content_id = "7512345678901234567" if platform == "dy" else "news-100"
             await on_item(
                 0,
                 SearchWorkerItem(
-                    content_id="news-100",
+                    content_id=content_id,
                     content_type=(
                         "article"
                         if platform == "toutiao"
                         else "video"
-                        if platform == "ks"
+                        if platform in {"ks", "dy"}
                         else "post"
                     ),
                     title="龙田街道公开信息",
@@ -236,7 +238,11 @@ class FakeSearchWorker:
                         else (
                             "https://www.kuaishou.com/short-video/news-100"
                             if platform == "ks"
-                            else "https://m.weibo.cn/detail/news-100"
+                            else (
+                                "https://www.douyin.com/video/7512345678901234567"
+                                if platform == "dy"
+                                else "https://m.weibo.cn/detail/news-100"
+                            )
                         )
                     ),
                     discovered_at=1_777_000_000_000,
@@ -416,6 +422,37 @@ def test_http_kuaishou_search_threads_platform_and_deduplicates_repeated_runs(
     assert [call[1] for call in worker.calls] == ["ks", "ks"]
 
 
+def test_http_douyin_search_threads_platform_and_deduplicates_repeated_runs(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "douyin-http.sqlite3"
+    worker = FakeSearchWorker()
+    with TestClient(_search_app(database_path, worker)) as client:
+        first_response = client.post(
+            "/api/v1/search-runs",
+            json={"monitoring_rule_id": 1, "platform": "dy"},
+        )
+        assert first_response.status_code == 202
+        first = _wait_for_terminal(client, first_response.json()["id"])
+        first_results = client.get(f"/api/v1/search-runs/{first['id']}/results").json()
+
+        assert first["platform"] == "dy"
+        assert first["status"] == "completed_with_results"
+        assert first_results["results"][0]["platform"] == "dy"
+        assert first_results["results"][0]["content_url"] == (
+            "https://www.douyin.com/video/7512345678901234567"
+        )
+
+        second_response = client.post(
+            "/api/v1/search-runs",
+            json={"monitoring_rule_id": 1, "platform": "dy"},
+        )
+        second = _wait_for_terminal(client, second_response.json()["id"])
+
+    assert (second["new_count"], second["repeated_count"]) == (0, 1)
+    assert [call[1] for call in worker.calls] == ["dy", "dy"]
+
+
 def test_http_rejects_unknown_search_platform_without_starting_worker(
     tmp_path: Path,
 ) -> None:
@@ -424,7 +461,7 @@ def test_http_rejects_unknown_search_platform_without_starting_worker(
     with TestClient(app) as client:
         response = client.post(
             "/api/v1/search-runs",
-            json={"monitoring_rule_id": 1, "platform": "dy"},
+            json={"monitoring_rule_id": 1, "platform": "xhs"},
         )
 
     assert response.status_code == 422
@@ -783,7 +820,7 @@ def test_version_two_migration_preserves_toutiao_and_isolates_weibo_identity(
 
     assert (completed.new_count, completed.repeated_count) == (1, 0)
     with database.connect() as migrated:
-        assert migrated.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert migrated.execute("PRAGMA user_version").fetchone()[0] == 5
         rows = migrated.execute(
             """
             SELECT platform, id FROM search_contents
@@ -818,7 +855,7 @@ def test_version_one_database_upgrades_without_reseeding_monitoring_rules(
     database.initialize()
 
     with database.connect() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
         assert (
             connection.execute(
                 "SELECT name FROM monitoring_rules WHERE id = 1"
@@ -916,7 +953,7 @@ def test_version_three_migration_preserves_rows_relations_and_sequences(
                 """
             ).fetchall()
         )
-        assert migrated.execute("PRAGMA user_version").fetchone()[0] == 4
+        assert migrated.execute("PRAGMA user_version").fetchone()[0] == 5
         assert migrated.execute("PRAGMA foreign_key_check").fetchall() == []
 
     assert after == before
@@ -959,4 +996,140 @@ def test_version_three_migration_preserves_rows_relations_and_sequences(
     assert [tuple(row) for row in rows] == [
         ("ks", "shared-100"),
         ("wb", "shared-100"),
+    ]
+
+
+def test_version_four_migration_preserves_rows_and_isolates_douyin_identity(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "version-four.sqlite3"
+    connection = sqlite3.connect(database_path, isolation_level=None)
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON")
+    try:
+        _migrate_to_version_1(connection)
+        _migrate_to_version_2(connection)
+        _migrate_to_version_3(connection)
+        _migrate_to_version_4(connection)
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute(
+            """
+            INSERT INTO search_runs (
+              id, monitoring_rule_id, platform, rule_name, max_results_per_term,
+              status, current_term_position, created_at, started_at, finished_at
+            ) VALUES (41, 1, 'ks', '快手旧任务', 7, 'completed_with_results',
+                      0, '2026-08-25T08:00:00+00:00',
+                      '2026-08-25T08:00:01+00:00',
+                      '2026-08-25T08:00:02+00:00')
+            """
+        )
+        connection.execute("INSERT INTO search_run_terms VALUES (41, 0, '龙田街道')")
+        connection.execute(
+            """
+            INSERT INTO search_contents (
+              id, platform, platform_content_id, content_type, title, snippet,
+              creator_hash, publisher_name, published_at_text, content_url,
+              first_seen_at, last_seen_at
+            ) VALUES (
+              99, 'ks', '7512345678901234567', 'video', '旧标题', '旧摘要',
+              '0123456789abcdef', '快***户', '2026-08-25 16:00',
+              'https://www.kuaishou.com/short-video/7512345678901234567',
+              '2026-08-25T08:00:01+00:00', '2026-08-25T08:00:01+00:00'
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO search_run_contents VALUES (
+              41, 99, 'new', '2026-08-25T08:00:01+00:00',
+              '2026-08-25T08:00:01+00:00'
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO search_run_content_terms VALUES (
+              41, 99, 0, '2026-08-25T08:00:01+00:00'
+            )
+            """
+        )
+        connection.execute(
+            "UPDATE sqlite_sequence SET seq = 75 WHERE name = 'search_runs'"
+        )
+        connection.execute(
+            "UPDATE sqlite_sequence SET seq = 150 WHERE name = 'search_contents'"
+        )
+        before = {
+            table: [tuple(row) for row in connection.execute(f"SELECT * FROM {table}")]
+            for table in (
+                "search_runs",
+                "search_run_terms",
+                "search_contents",
+                "search_run_contents",
+                "search_run_content_terms",
+            )
+        }
+        connection.execute("COMMIT")
+    finally:
+        connection.close()
+
+    database = Database(database_path)
+    database.initialize()
+    with database.connect() as migrated:
+        after = {
+            table: [tuple(row) for row in migrated.execute(f"SELECT * FROM {table}")]
+            for table in before
+        }
+        sequences = dict(
+            migrated.execute(
+                """
+                SELECT name, seq FROM sqlite_sequence
+                WHERE name IN ('search_runs', 'search_contents')
+                """
+            ).fetchall()
+        )
+        assert migrated.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert migrated.execute("PRAGMA foreign_key_check").fetchall() == []
+
+    assert after == before
+    assert sequences == {"search_contents": 150, "search_runs": 75}
+
+    repository = SearchRunRepository(database)
+    douyin = repository.create_run(
+        monitoring_rule_id=1,
+        platform="dy",
+        rule_name="抖音任务",
+        terms=("龙田街道",),
+        max_results_per_term=7,
+    )
+    repository.mark_running(douyin.id)
+    repository.observe_item(
+        run_id=douyin.id,
+        term_position=0,
+        item=SearchContentInput(
+            platform_content_id="7512345678901234567",
+            content_type="video",
+            title="抖音标题",
+            snippet="抖音正文",
+            creator_hash="0123456789abcdef",
+            publisher_name="抖***户",
+            published_at_text="2026-08-26 16:00",
+            content_url="https://www.douyin.com/video/7512345678901234567",
+            observed_at="2026-08-26T08:00:00+00:00",
+        ),
+    )
+    completed = repository.finish(douyin.id, "completed_with_results")
+
+    assert douyin.id == 76
+    assert (completed.new_count, completed.repeated_count) == (1, 0)
+    with database.connect() as migrated:
+        rows = migrated.execute(
+            """
+            SELECT platform, platform_content_id FROM search_contents
+            WHERE platform_content_id = '7512345678901234567' ORDER BY platform
+            """
+        ).fetchall()
+    assert [tuple(row) for row in rows] == [
+        ("dy", "7512345678901234567"),
+        ("ks", "7512345678901234567"),
     ]
