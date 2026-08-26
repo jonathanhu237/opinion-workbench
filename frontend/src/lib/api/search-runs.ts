@@ -18,7 +18,7 @@ const terminalStatuses = [
   'internal_error',
 ] as const
 const searchRunStatusSchema = z.enum([...activeStatuses, ...terminalStatuses])
-const searchPlatformSchema = z.enum(['toutiao', 'wb', 'ks', 'dy'])
+const searchPlatformSchema = z.enum(['toutiao', 'wb', 'ks', 'dy', 'xhs'])
 const isoDateSchema = z.string().datetime({ offset: true })
 const positiveSafeIntegerSchema = z
   .number()
@@ -114,6 +114,20 @@ const searchResultListSchema = z.strictObject({
   limit: z.number().int().min(1).max(50),
   offset: nonnegativeSafeIntegerSchema,
 })
+const searchResultOpenOutcomeSchema = z.enum([
+  'opened',
+  'content_not_found',
+  'content_unavailable',
+  'login_required',
+  'manual_challenge_required',
+  'platform_blocked_or_rate_limited',
+  'structure_changed',
+  'browser_unavailable',
+  'internal_error',
+])
+const searchResultOpenResponseSchema = z.strictObject({
+  outcome: searchResultOpenOutcomeSchema,
+})
 const errorEnvelopeSchema = z.strictObject({
   detail: z.strictObject({ code: z.string(), message: z.string() }),
 })
@@ -125,6 +139,12 @@ export type SearchRunDetail = z.infer<typeof searchRunDetailSchema>
 export type SearchRunListResponse = z.infer<typeof searchRunListSchema>
 export type SearchResult = z.infer<typeof searchResultSchema>
 export type SearchResultListResponse = z.infer<typeof searchResultListSchema>
+export type SearchResultOpenOutcome = z.infer<
+  typeof searchResultOpenOutcomeSchema
+>
+export type SearchResultOpenResponse = z.infer<
+  typeof searchResultOpenResponseSchema
+>
 export type SearchResultFilter = 'all' | 'new' | 'repeated'
 
 type ProductErrorCode =
@@ -135,6 +155,8 @@ type ProductErrorCode =
   | 'browser_operation_active'
   | 'search_run_not_found'
   | 'search_run_not_active'
+  | 'search_result_not_found'
+  | 'search_result_open_not_supported'
   | 'search_storage_unavailable'
 
 type SearchRunApiErrorCode =
@@ -165,6 +187,14 @@ const productErrorContracts: Record<
   search_run_not_active: {
     status: 409,
     message: '该采集任务已经结束，无法取消。',
+  },
+  search_result_not_found: {
+    status: 404,
+    message: '未在该采集任务中找到这条结果。',
+  },
+  search_result_open_not_supported: {
+    status: 409,
+    message: '该平台的结果不需要通过浏览器任务打开。',
   },
   search_storage_unavailable: {
     status: 503,
@@ -236,6 +266,15 @@ function isValidSearchContentUrl(
       value === `https://www.douyin.com/video/${platformContentId}` &&
       url.protocol === 'https:' &&
       hostname === 'www.douyin.com' &&
+      url.search === ''
+    )
+  }
+  if (platform === 'xhs') {
+    return (
+      /^[0-9a-f]{24}$/u.test(platformContentId) &&
+      value === `https://www.xiaohongshu.com/explore/${platformContentId}` &&
+      url.protocol === 'https:' &&
+      hostname === 'www.xiaohongshu.com' &&
       url.search === ''
     )
   }
@@ -375,4 +414,16 @@ export async function cancelSearchRun(runId: number, signal?: AbortSignal) {
     { method: 'POST', headers: { Accept: 'application/json' }, signal },
   )
   return parseResponse(response, 202, searchRunDetailSchema)
+}
+
+export async function openSearchRunResult(
+  runId: number,
+  resultId: number,
+  signal?: AbortSignal,
+) {
+  const response = await request(
+    `/search-runs/${encodeURIComponent(String(runId))}/results/${encodeURIComponent(String(resultId))}/open`,
+    { method: 'POST', headers: { Accept: 'application/json' }, signal },
+  )
+  return parseResponse(response, 200, searchResultOpenResponseSchema)
 }

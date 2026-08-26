@@ -15,12 +15,12 @@ This is a product orchestration contract, not a general crawler contract. The st
 contract in `browser-search-adapter-guidelines.md` continues to require a fresh context. Only this
 lifespan-owned product worker may borrow the already approved default Chrome context, and only with
 the ownership and serialization rules below. The exact supported search-platform set is
-`toutiao | wb | ks | dy`; extending it requires coordinated API, database, worker-protocol, adapter,
+`toutiao | wb | ks | dy | xhs`; extending it requires coordinated API, database, worker-protocol, adapter,
 frontend, and migration changes.
 
 ### 2. Signatures
 
-Database version 5 owns:
+Database version 6 owns:
 
 ```text
 search_runs(
@@ -59,6 +59,7 @@ POST /api/v1/search-runs
 GET  /api/v1/search-runs?limit=20&before_id=<optional-int64>
 GET  /api/v1/search-runs/{run_id}
 GET  /api/v1/search-runs/{run_id}/results?kind=all|new|repeated&limit=50&offset=0
+POST /api/v1/search-runs/{run_id}/results/{result_id}/open
 POST /api/v1/search-runs/{run_id}/cancel
 ```
 
@@ -69,7 +70,7 @@ Start input is exact and strict:
 ```
 
 - `monitoring_rule_id`: SQLite signed-int64 integer from 1 upward.
-- `platform`: exact literal `toutiao | wb | ks | dy`.
+- `platform`: exact literal `toutiao | wb | ks | dy | xhs`.
 - `max_results_per_term`: strict integer 1–50, default 10.
 - The selected enabled rule must contain 1–20 terms.
 
@@ -88,6 +89,8 @@ __MEDIACRAWLER_SEARCH_COMMAND__{"version":1,"type":"command","command":"search",
 __MEDIACRAWLER_SEARCH_EVENT__{"version":1,"type":"event","event":"progress","request_id":"<uuid4>","platform":"wb","phase":"term_started","term_position":0,"term_count":5}
 __MEDIACRAWLER_SEARCH_EVENT__{"version":1,"type":"event","event":"item","request_id":"<uuid4>","platform":"wb","term_position":0,"item":{...}}
 __MEDIACRAWLER_SEARCH_EVENT__{"version":1,"type":"event","event":"result","request_id":"<uuid4>","platform":"wb","outcome":"completed_with_results"}
+__MEDIACRAWLER_SEARCH_COMMAND__{"version":1,"type":"command","command":"open_result","request_id":"<uuid4>","platform":"xhs","term":"...","content_id":"<24-hex>"}
+__MEDIACRAWLER_SEARCH_EVENT__{"version":1,"type":"event","event":"open_result","request_id":"<uuid4>","platform":"xhs","outcome":"opened"}
 ```
 
 Search cancellation uses the search-command prefix with exact `command="cancel"` and matching
@@ -118,6 +121,10 @@ Search cancellation uses the search-command prefix with exact `command="cancel"`
   response. A valid event for the other supported platform is protocol drift and fails closed.
 - `POST /cancel` returns HTTP 202 only for the active run. Cancellation is idempotent inside the
   worker boundary but a second public request after terminal state returns `search_run_not_active`.
+- `POST /results/{result_id}/open` has no body. The repository must prove the result belongs to the
+  run and return only its platform, stable ID and matched terms in original term-position order.
+  Non-XHS results fail with `search_result_open_not_supported`; a missing relation fails with
+  `search_result_not_found`. The synchronous bounded response contains only one fixed open outcome.
 
 #### Persistence and deduplication
 
@@ -161,6 +168,41 @@ Search cancellation uses the search-command prefix with exact `command="cancel"`
   `ceil(max_results_per_term / 15)` pages. It does not call `DouYinCrawler.search`, generate
   `a_bogus`, install context-wide scripts, use a proxy or retry, write crawler stores, or request
   details, comments, profiles, covers or media.
+- Xiaohongshu creates one task-owned domestic official page, tolerates only the known home-page
+  navigation timeout while retaining an exact trusted origin, scopes Cookies to that origin, and
+  proves login through the signed `/api/sns/web/v1/user/selfinfo` boolean contract. It calls
+  `/api/sns/web/v1/search/notes` through a product-specific single-attempt client, uses one search ID
+  per term, requests 20 cards on one-based pages with default `general` sort and all note types, and
+  requests at most `ceil(max_results_per_term / 20)` pages. It accepts only lowercase 24-hex note
+  IDs, recognized note cards and known auxiliary query cards. It never reads LocalStorage, calls
+  `XiaoHongShuCrawler.search`, uses the retry/proxy client, persists `xsec_token` / `xsec_source`, or
+  requests details, comments, profiles, covers or media.
+- A Xiaohongshu `note` card with a valid lowercase 24-hex ID, a `note_card` object, a recognized
+  `normal` or `video` type, and an absent, null or blank-string `display_title` is recognized but not
+  persistable. Ignore only that card without fabricating a title or marking its ID seen. Known
+  `rec_query` / `hot_query` cards are also ignored as auxiliary. Missing/invalid IDs, missing cards,
+  unknown model/note types, non-null non-string title shapes and other malformed non-empty cards
+  remain `structure_changed`.
+- Opening one stored Xiaohongshu result uses exactly the first stored matched term and exactly one
+  first-page search request. It matches the exact stored ID and requires a bounded non-empty
+  `xsec_token`. The worker must not read or trust a response-provided `xsec_source`; it derives the
+  fixed search channel `pc_search` from one private operation-owned constant, constructs the official
+  token-bearing explore URL only in worker memory, and navigates the one task-owned page. It never
+  tries another term/page, retries, fetches details/comments/media, or emits/persists/logs the term,
+  token, source, URL, payload, response or raw error. Business error 300031 is
+  `content_unavailable`.
+- A successfully opened page is unregistered without closing so the visible tab is handed to the
+  user. Login/challenge evidence may remain visible and registered for the next narrow cleanup. All
+  other open failures close the task-owned page. Disconnect/cancellation preserve existing worker
+  and borrowed-browser cleanup semantics.
+- The accepted live gate must call the no-body endpoint for an existing stored XHS run/result and
+  receive only `opened`. After backend shutdown releases the CDP transport, the handed-off tab must
+  remain on an exact official explore path whose canonical/Open Graph paths agree and whose visible
+  note UI has no unavailable/challenge evidence. Verify the product SQLite schema, content URLs and
+  stored terms contain no xsec value; never retain the destination, term, token or raw page content
+  as acceptance evidence. The SPA may rewrite `__INITIAL_STATE__` after handoff, so the worker's
+  exact-ID proof is authoritative at navigation time while post-release checks use the stable
+  official path and rendered-page evidence.
 - A disconnected account check is not itself a search failure. The official public search page may
   be used without an authenticated Toutiao account; return `login_required` only when the search
   page itself presents a recognized mandatory login wall.
@@ -209,6 +251,10 @@ Search cancellation uses the search-command prefix with exact `command="cancel"`
   `https://www.douyin.com/video/<matching-numeric-platform-content-id>` is valid; hostname case
   variants, explicit ports, queries, fragments, credentials, non-numeric IDs and mismatched IDs are
   rejected.
+  Xiaohongshu is equally strict: only
+  `https://www.xiaohongshu.com/explore/<matching-lowercase-24-hex-platform-content-id>` is valid;
+  hostname case variants, explicit ports, queries, fragments, credentials, uppercase/non-hex IDs,
+  and mismatched IDs are rejected. Search-result tokens never cross the adapter boundary.
 - Normal completion and cancellation close the task-owned search page. Login/challenge outcomes may
   leave that one official page visible for manual action; it remains registered and is closed before
   the next task-owned operation or worker shutdown. Pre-existing pages are never cleanup targets.
@@ -218,12 +264,16 @@ Search cancellation uses the search-command prefix with exact `command="cancel"`
 - Add the real sidebar label `采集任务` and routes `/collection-runs` and
   `/collection-runs/:runId`; the sidebar item is active for both.
 - The start view uses enabled monitoring rules, a Shadcn platform Select containing exactly the
-  executable `今日头条`、`微博`、`快手` and `抖音` targets, and a labeled 1–50 number field with default 10. It does
+  executable `今日头条`、`微博`、`快手`、`抖音` and `小红书` targets, and a labeled 1–50 number field with default 10. It does
   not show unavailable platforms as executable controls or add a sort selector.
 - Poll once per second only while the selected/latest run is active. Terminal/history queries use
   ordinary TanStack Query caching and explicit invalidation.
-- The run detail displays real counts and labels every item `新增` or `历史内容再次命中`. Original
-  links open safely with `target="_blank"` and `rel="noreferrer"`.
+- The run detail displays real counts and labels every item `新增` or `历史内容再次命中`. Non-XHS
+  original links remain unchanged with `target="_blank"` and `rel="noreferrer"`. XHS uses the
+  existing Shadcn Button and the no-body open endpoint; one page-level mutation disables every XHS
+  open button, labels the active one `正在打开…`, and reports the result through nearby `aria-live`.
+  Only `opened` says `已在谷歌浏览器打开`; every other fixed outcome has actionable Chinese text,
+  while transport/protocol failures preserve the bounded technical product message.
 - Use the existing Shadcn/Base UI primitives and semantic tokens. Do not replace global colors or
   fonts, create fake telemetry, or use color as the only status signal.
 
@@ -248,10 +298,12 @@ Chinese guidance.
 | Another search/account operation active | HTTP 409 `browser_operation_active` | Existing operation continues |
 | Run missing | HTTP 404 `search_run_not_found` | No child action |
 | Cancel requested for terminal/non-active run | HTTP 409 `search_run_not_active` | Preserve terminal row |
+| Open result is not related to the run | HTTP 404 `search_result_not_found` | No browser operation |
+| Open requested for a non-XHS result | HTTP 409 `search_result_open_not_supported` | Preserve the existing direct-link contract |
 | Product SQLite unavailable | HTTP 503 `search_storage_unavailable` | Constant message, no path/SQL |
 | Unknown search platform or platform-dependent URL mismatch | HTTP 422 / worker protocol failure | No default substitution; fail closed |
 | Recognized results | `completed_with_results` | Persist items/matches and counts |
-| Recognized empty page for every term | `completed_empty` | Persist truthful zero-result run |
+| Recognized empty page, or only valid XHS untitled/auxiliary cards with coherent exhaustion, for every term | `completed_empty` | Persist truthful zero-result run without a fabricated title |
 | Account check is disconnected but public search is available | Continue search | Do not invent a login prerequisite |
 | Mandatory login wall on the search page | `login_required` | No false empty; point to account flow |
 | Official safety challenge | `manual_challenge_required` | No retry/bypass; keep official page visible |
@@ -262,6 +314,8 @@ Chinese guidance.
 | Operator cancellation | `cancelled` | Retain already persisted partial observations with terminal status |
 | Malformed/mismatched/oversized child frame | `internal_error` | Fail closed; discard raw frame |
 | Backend restarts with active rows | `internal_error` | Reconcile stale rows, do not resume |
+| XHS open target absent from the one approved first page | `content_not_found` | No alternate page or term |
+| XHS note unavailable / business error 300031 | `content_unavailable` | Close the owned page; do not expose xsec values |
 
 ### 5. Good / Base / Bad Cases
 
@@ -277,35 +331,48 @@ Chinese guidance.
 
 ### 6. Tests Required
 
-1. Migration: version 1→2→3→4→5, direct version 4→5, fresh version 5, repeated initialization,
+1. Migration: version 1→2→3→4→5→6, direct version 5→6, fresh version 6, repeated initialization,
    forward-version rejection, foreign keys/indexes, active-row reconciliation, preservation of all
    Toutiao IDs/relations/timestamps, and same content ID isolation across platforms.
 2. Repository: run snapshots, stable history pagination, state transitions, transactional item
    upsert, same-run cross-term provenance, cross-run new/repeated classification, monotonic times,
-   non-empty field preservation, counts, filters, and rollback on failure.
+   non-empty field preservation, counts, filters, rollback on failure, result/run ownership, and
+   matched-term ordering for the open projection.
 3. API/service: exact 202/200 payloads, rule enabled/size checks, 1–50 limit, int64 bounds, global
    operation conflicts, cancellation, all terminal mappings, timeout, shutdown, OpenAPI models, and
-   sanitized 404/409/422/503 responses.
+   sanitized 404/409/422/503 responses, exact no-body open, all open outcomes, contention, storage
+   failure, timeout, cancellation and shutdown with no orphan operation.
 4. Worker protocol: strict command/item/progress/result/cancel frames, duplicate-key/extra-field/
    size/UUID/platform rejection, structured term array, term-position correlation, stderr drain, and
-   no raw-frame logging.
+   no raw-frame logging, plus exact secret-free open command/result frames and cancellation recycle.
 5. Borrowed Chrome: reuse one CDP/default context, task-page registration, no context-wide scripts,
    no close of browser/context/pre-existing pages, challenge-page lifecycle, cancellation, disconnect,
    and worker recycle.
-6. Platform adapters: retain all Toutiao, Weibo and Kuaishou fixtures, plus Douyin exact request
-   parameters, scoped-cookie and single-key LocalStorage access, 15-result pagination/logid
-   propagation, single attempt, bounded pages, canonical URL construction, publisher masking,
-   within-term deduplication, cross-term re-emission, hard limit, and every recognized terminal
-   outcome. Kuaishou retains its exact signed request parameters, task-local signer isolation and
-   numeric pagination/session propagation.
+6. Platform adapters: retain all Toutiao, Weibo, Kuaishou and Douyin fixtures, plus Xiaohongshu
+   exact compact request/signing input, authoritative account proof, scoped Cookies, one search ID
+   per term, 20-result pagination, single attempt, bounded pages, auxiliary-card handling, canonical
+   query-free URL construction, publisher masking, within-term deduplication, cross-term re-emission,
+   hard limit and every recognized terminal outcome. Its fixtures include a sanitized live-equivalent
+   mix of safe, auxiliary and valid untitled cards, an all-untitled coherent empty result, and
+   malformed near-miss cards that remain `structure_changed`. Douyin retains its scoped-cookie and
+   single-key LocalStorage access, pagination/logid propagation and canonical URL contract.
+   Kuaishou retains its exact signed request parameters, task-local signer isolation and numeric
+   pagination/session propagation. XHS opening covers exact one-request/no-fallback behavior,
+   target/token validation, response-source non-interference, worker-owned fixed-source derivation,
+   URL navigation, 300031, final-page outcomes, page handoff and cleanup without retaining any
+   secret.
 7. Frontend: runtime decoders, exact status/code pairs, start validation, active polling, cancel,
    history/deep link, new/repeated filters and counts, matched terms, safe original links, empty/error/
-   login guidance, keyboard/focus/live-region behavior, mobile layout, and no fake data.
+   login guidance, unchanged non-XHS anchors, XHS Shadcn open buttons, exact no-body request, all
+   open outcomes, loading/disabled/live-region behavior, keyboard/focus, mobile layout, and no fake
+   data or secret-bearing state.
 8. Cross-layer and real browser: for each newly supported platform, one approved borrowed-browser
    search plus the exact repeated run, new/repeated classification, preserved first-seen and advanced
    last-seen times, account/search mutual exclusion, truthful login/challenge outcomes, restart
    persistence, pre-existing-tab sentinel, no credential leakage, and clean submodule/gitlink
-   delivery.
+   delivery. XHS additionally calls one stored result's no-body open endpoint, expects only `opened`,
+   releases the backend transport, proves the handed-off official tab remains visibly rendered, and
+   asserts zero xsec matches in product SQLite schema/content/term storage.
 
 ### 7. Wrong vs Correct
 

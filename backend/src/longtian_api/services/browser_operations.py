@@ -8,7 +8,7 @@ from uuid import UUID
 
 @dataclass(frozen=True, slots=True)
 class BrowserOperationOwner:
-    feature: Literal["platform_connection", "search_run"]
+    feature: Literal["platform_connection", "search_run", "search_result_open"]
     request_id: UUID
 
 

@@ -8,6 +8,8 @@ from uuid import UUID, uuid4
 from longtian_api.database import Database
 from longtian_api.repositories.search_runs import (
     SearchContentInput,
+    SearchResultNotFoundError,
+    SearchResultOpenTargetRecord,
     SearchResultRecord,
     SearchRunNotActiveError,
     SearchRunNotFoundError,
@@ -20,6 +22,7 @@ from longtian_api.schemas.monitoring_rules import MonitoringRule
 from longtian_api.schemas.search_runs import (
     SearchResult,
     SearchResultListResponse,
+    SearchResultOpenResponse,
     SearchRunCreate,
     SearchRunDetail,
     SearchRunErrorCode,
@@ -82,6 +85,10 @@ class SearchRunRepositoryProtocol(Protocol):
         offset: int,
     ) -> tuple[tuple[SearchResultRecord, ...], int]: ...
 
+    def get_result_open_target(
+        self, *, run_id: int, result_id: int
+    ) -> SearchResultOpenTargetRecord: ...
+
 
 class SearchRunError(Exception):
     """Expected product error translated by the HTTP route."""
@@ -108,6 +115,7 @@ class SearchRunService:
         database: Database | None = None,
         database_path: Path | None = None,
         search_timeout_seconds: float = 180.0,
+        open_timeout_seconds: float = 45.0,
     ) -> None:
         configured_sources = sum(
             source is not None for source in (repository, database, database_path)
@@ -123,10 +131,13 @@ class SearchRunService:
             database or Database(database_path)
         )
         self._search_timeout_seconds = search_timeout_seconds
+        self._open_timeout_seconds = open_timeout_seconds
         self._lock = asyncio.Lock()
         self._active_run_id: int | None = None
         self._active_request_id: UUID | None = None
         self._current_task: asyncio.Task[None] | None = None
+        self._active_open_task: asyncio.Task[object] | None = None
+        self._active_open_request_id: UUID | None = None
         self._shutdown_started = False
 
     def initialize(self) -> None:
@@ -220,6 +231,57 @@ class SearchRunService:
             offset=offset,
         )
 
+    async def open_result(
+        self, *, run_id: int, result_id: int
+    ) -> SearchResultOpenResponse:
+        try:
+            target = await asyncio.to_thread(
+                self._repository.get_result_open_target,
+                run_id=run_id,
+                result_id=result_id,
+            )
+        except SearchResultNotFoundError:
+            raise _result_not_found() from None
+        except SearchRunRepositoryUnavailableError:
+            raise _storage_unavailable() from None
+        if target.platform != "xhs":
+            raise _open_not_supported()
+
+        request_id = uuid4()
+        owner = BrowserOperationOwner("search_result_open", request_id)
+        current_task = asyncio.current_task()
+        if (
+            current_task is None
+        ):  # pragma: no cover - always called by an event loop task.
+            raise RuntimeError("open result requires an asyncio task")
+        async with self._lock:
+            if self._shutdown_started or (
+                self._active_open_task is not None and not self._active_open_task.done()
+            ):
+                raise _browser_operation_active()
+            if not await self._browser_operations.try_claim(owner):
+                raise _browser_operation_active()
+            self._active_open_task = current_task
+            self._active_open_request_id = request_id
+
+        try:
+            try:
+                async with asyncio.timeout(self._open_timeout_seconds):
+                    result = await self._worker.open_result(
+                        request_id=request_id,
+                        term=target.matched_terms[0],
+                        content_id=target.platform_content_id,
+                    )
+            except (AuthWorkerError, TimeoutError):
+                return SearchResultOpenResponse(outcome="internal_error")
+            return SearchResultOpenResponse(outcome=result.outcome)
+        finally:
+            await self._browser_operations.release(owner)
+            async with self._lock:
+                if self._active_open_request_id == request_id:
+                    self._active_open_task = None
+                    self._active_open_request_id = None
+
     async def cancel_run(self, run_id: int) -> SearchRunDetail:
         async with self._lock:
             task = self._current_task
@@ -239,11 +301,19 @@ class SearchRunService:
         async with self._lock:
             self._shutdown_started = True
             task = self._current_task
+            open_task = self._active_open_task
         if task is not None and not task.done():
             task.cancel()
         if task is not None:
             try:
                 await task
+            except asyncio.CancelledError:
+                pass
+        if open_task is not None and not open_task.done():
+            open_task.cancel()
+        if open_task is not None:
+            try:
+                await open_task
             except asyncio.CancelledError:
                 pass
 
@@ -445,6 +515,22 @@ def _not_active() -> SearchRunError:
         status_code=409,
         code="search_run_not_active",
         message="该采集任务已经结束，无法取消。",
+    )
+
+
+def _result_not_found() -> SearchRunError:
+    return SearchRunError(
+        status_code=404,
+        code="search_result_not_found",
+        message="未在该采集任务中找到这条结果。",
+    )
+
+
+def _open_not_supported() -> SearchRunError:
+    return SearchRunError(
+        status_code=409,
+        code="search_result_open_not_supported",
+        message="该平台的结果不需要通过浏览器任务打开。",
     )
 
 

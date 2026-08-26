@@ -5,6 +5,7 @@ import {
   fetchSearchRunResults,
   fetchSearchRuns,
   isActiveSearchRun,
+  openSearchRunResult,
   SearchRunApiError,
   startSearchRun,
   type SearchResult,
@@ -73,6 +74,17 @@ const douyinResult: SearchResult = {
   content_type: 'video',
   title: '抖音公开信息',
   content_url: 'https://www.douyin.com/video/7512345678901234567',
+}
+
+const xhsResult: SearchResult = {
+  ...result,
+  platform: 'xhs',
+  platform_content_id: '0123456789abcdef01234567',
+  content_type: 'image',
+  title: '小红书公开信息',
+  snippet: '小红书公开信息',
+  published_at_text: '',
+  content_url: 'https://www.xiaohongshu.com/explore/0123456789abcdef01234567',
 }
 
 describe('search runs API boundary', () => {
@@ -163,6 +175,24 @@ describe('search runs API boundary', () => {
     }
 
     await expect(startSearchRun(input)).resolves.toEqual(douyinRun)
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/search-runs',
+      expect.objectContaining({ body: JSON.stringify(input) }),
+    )
+  })
+
+  it('accepts the exact Xiaohongshu platform and sends it unchanged', async () => {
+    const xhsRun = { ...run, platform: 'xhs' as const }
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify(xhsRun), { status: 202 }),
+    )
+    const input = {
+      monitoring_rule_id: 1,
+      platform: 'xhs' as const,
+      max_results_per_term: 8,
+    }
+
+    await expect(startSearchRun(input)).resolves.toEqual(xhsRun)
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/v1/search-runs',
       expect.objectContaining({ body: JSON.stringify(input) }),
@@ -423,6 +453,55 @@ describe('search runs API boundary', () => {
     }
   })
 
+  it('correlates Xiaohongshu links with lowercase IDs and rejects xsec tokens', async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          results: [xhsResult],
+          total: 1,
+          limit: 50,
+          offset: 0,
+        }),
+        { status: 200 },
+      ),
+    )
+    await expect(
+      fetchSearchRunResults(7, 'all', new AbortController().signal),
+    ).resolves.toMatchObject({ results: [xhsResult] })
+
+    for (const invalid of [
+      { ...xhsResult, platform_content_id: 'ABCDEF0123456789ABCDEF01' },
+      {
+        ...xhsResult,
+        content_url: 'https://www.xiaohongshu.com/explore/other-id',
+      },
+      {
+        ...xhsResult,
+        content_url:
+          'https://www.xiaohongshu.com/explore/0123456789abcdef01234567?xsec_token=secret',
+      },
+      {
+        ...xhsResult,
+        content_url: 'https://evil.example/explore/0123456789abcdef01234567',
+      },
+    ]) {
+      fetchMock.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            results: [invalid],
+            total: 1,
+            limit: 50,
+            offset: 0,
+          }),
+          { status: 200 },
+        ),
+      )
+      await expect(
+        fetchSearchRunResults(7, 'all', new AbortController().signal),
+      ).rejects.toMatchObject({ code: 'invalid_response' })
+    }
+  })
+
   it('rejects count drift and unexpected response fields', async () => {
     fetchMock
       .mockResolvedValueOnce(
@@ -494,6 +573,61 @@ describe('search runs API boundary', () => {
     await expect(mismatched).rejects.toBeInstanceOf(SearchRunApiError)
     await expect(mismatched).rejects.toMatchObject({ code: 'invalid_response' })
     await expect(mismatched).rejects.not.toThrow(/credential-sentinel/u)
+  })
+
+  it.each([
+    'opened',
+    'content_not_found',
+    'content_unavailable',
+    'login_required',
+    'manual_challenge_required',
+    'platform_blocked_or_rate_limited',
+    'structure_changed',
+    'browser_unavailable',
+    'internal_error',
+  ] as const)(
+    'opens an XHS result with no body and decodes %s',
+    async (outcome) => {
+      fetchMock.mockResolvedValue(
+        new Response(JSON.stringify({ outcome }), { status: 200 }),
+      )
+
+      await expect(openSearchRunResult(7, 11)).resolves.toEqual({ outcome })
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/v1/search-runs/7/results/11/open',
+        {
+          method: 'POST',
+          headers: { Accept: 'application/json' },
+          signal: undefined,
+        },
+      )
+      const init = fetchMock.mock.calls[0]?.[1]
+      expect(init).not.toHaveProperty('body')
+      expect(init).not.toHaveProperty('Content-Type')
+    },
+  )
+
+  it('rejects secret-bearing or unknown open-result responses', async () => {
+    fetchMock
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            outcome: 'opened',
+            xsec_token: 'SENTINEL_XSEC_TOKEN',
+          }),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ outcome: 'cancelled' }), { status: 200 }),
+      )
+
+    const secret = openSearchRunResult(7, 11)
+    await expect(secret).rejects.toMatchObject({ code: 'invalid_response' })
+    await expect(secret).rejects.not.toThrow(/SENTINEL_XSEC_TOKEN/u)
+    await expect(openSearchRunResult(7, 11)).rejects.toMatchObject({
+      code: 'invalid_response',
+    })
   })
 
   it('polls only statuses explicitly marked active', () => {

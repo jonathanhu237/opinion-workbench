@@ -2,6 +2,7 @@ import douyinLogo from '@/assets/platforms/douyin.svg'
 import kuaishouLogo from '@/assets/platforms/kuaishou.svg'
 import toutiaoLogo from '@/assets/platforms/toutiao.svg'
 import weiboLogo from '@/assets/platforms/weibo.svg'
+import xiaohongshuLogo from '@/assets/platforms/xiaohongshu.svg'
 import type { SearchPlatform, SearchRunStatus } from '@/lib/api/search-runs'
 
 export const searchPlatformOrder = [
@@ -9,6 +10,7 @@ export const searchPlatformOrder = [
   'wb',
   'ks',
   'dy',
+  'xhs',
 ] as const satisfies readonly SearchPlatform[]
 
 export const searchPlatformPresenters = {
@@ -16,6 +18,7 @@ export const searchPlatformPresenters = {
   wb: { label: '微博', logoSrc: weiboLogo },
   ks: { label: '快手', logoSrc: kuaishouLogo },
   dy: { label: '抖音', logoSrc: douyinLogo },
+  xhs: { label: '小红书', logoSrc: xiaohongshuLogo },
 } satisfies Record<SearchPlatform, { label: string; logoSrc: string }>
 
 const statusLabels: Record<SearchRunStatus, string> = {

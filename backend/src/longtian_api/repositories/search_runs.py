@@ -78,6 +78,13 @@ class SearchResultRecord:
     matched_terms: tuple[str, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class SearchResultOpenTargetRecord:
+    platform: SearchPlatform
+    platform_content_id: str
+    matched_terms: tuple[str, ...]
+
+
 class SearchRunRepositoryError(Exception):
     """Base class for safe repository failure categories."""
 
@@ -88,6 +95,10 @@ class SearchRunNotFoundError(SearchRunRepositoryError):
 
 class SearchRunNotActiveError(SearchRunRepositoryError):
     """The requested run cannot accept a transition or observation."""
+
+
+class SearchResultNotFoundError(SearchRunRepositoryError):
+    """The requested global result does not belong to the requested run."""
 
 
 class SearchRunRepositoryUnavailableError(SearchRunRepositoryError):
@@ -447,6 +458,47 @@ class SearchRunRepository:
             finally:
                 connection.close()
 
+    def get_result_open_target(
+        self, *, run_id: int, result_id: int
+    ) -> SearchResultOpenTargetRecord:
+        with _translate_storage_errors():
+            connection = self._database.connect()
+            try:
+                row = connection.execute(
+                    """
+                    SELECT contents.platform, contents.platform_content_id
+                    FROM search_run_contents AS links
+                    JOIN search_contents AS contents
+                      ON contents.id = links.search_content_id
+                    WHERE links.run_id = ? AND contents.id = ?
+                    """,
+                    (run_id, result_id),
+                ).fetchone()
+                if row is None:
+                    raise SearchResultNotFoundError
+                term_rows = connection.execute(
+                    """
+                    SELECT terms.value
+                    FROM search_run_content_terms AS matches
+                    JOIN search_run_terms AS terms
+                      ON terms.run_id = matches.run_id
+                     AND terms.position = matches.term_position
+                    WHERE matches.run_id = ? AND matches.search_content_id = ?
+                    ORDER BY matches.term_position ASC
+                    """,
+                    (run_id, result_id),
+                ).fetchall()
+                matched_terms = tuple(str(term["value"]) for term in term_rows)
+                if not matched_terms:
+                    raise sqlite3.DatabaseError("Search result has no matched terms")
+                return SearchResultOpenTargetRecord(
+                    platform=cast(SearchPlatform, str(row["platform"])),
+                    platform_content_id=str(row["platform_content_id"]),
+                    matched_terms=matched_terms,
+                )
+            finally:
+                connection.close()
+
     @contextmanager
     def _write_connection(self) -> Iterator[sqlite3.Connection]:
         connection = self._database.connect()
@@ -566,7 +618,11 @@ def _raise_missing_or_inactive(connection: sqlite3.Connection, run_id: int) -> N
 def _translate_storage_errors() -> Iterator[None]:
     try:
         yield
-    except (SearchRunNotFoundError, SearchRunNotActiveError):
+    except (
+        SearchResultNotFoundError,
+        SearchRunNotFoundError,
+        SearchRunNotActiveError,
+    ):
         raise
     except (OSError, sqlite3.Error):
         raise SearchRunRepositoryUnavailableError from None

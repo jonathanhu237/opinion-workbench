@@ -99,6 +99,7 @@ class SearchProcess:
         malformed: bool = False,
         scenario: str = "normal",
         event_platform_override: str | None = None,
+        open_outcome: str = "opened",
     ) -> None:
         self.pid = 99001
         self.returncode: int | None = None
@@ -110,6 +111,7 @@ class SearchProcess:
         self.malformed = malformed
         self.scenario = scenario
         self.event_platform_override = event_platform_override
+        self.open_outcome = open_outcome
         self.finished = asyncio.Event()
 
     @staticmethod
@@ -119,8 +121,9 @@ class SearchProcess:
         content_type: str = "article",
         unsafe_url: bool = False,
     ):
+        content_id = "0123456789abcdef01234567" if platform == "xhs" else "100"
         return {
-            "content_id": "100",
+            "content_id": content_id,
             "content_type": content_type,
             "title": "龙田街道公开信息",
             "snippet": "公开摘要",
@@ -139,7 +142,12 @@ class SearchProcess:
                         else (
                             "https://www.douyin.com/video/100"
                             if platform == "dy"
-                            else "https://www.toutiao.com/article/100/"
+                            else (
+                                "https://www.xiaohongshu.com/explore/"
+                                "0123456789abcdef01234567"
+                                if platform == "xhs"
+                                else "https://www.toutiao.com/article/100/"
+                            )
                         )
                     )
                 )
@@ -285,6 +293,21 @@ class SearchProcess:
                         outcome="completed_with_results",
                     )
                 )
+        elif payload["command"] == "open_result":
+            if self.hanging:
+                return
+            request_id = str(payload["request_id"])
+            platform = self.event_platform_override or str(payload["platform"])
+            event = search_event(
+                "open_result",
+                request_id,
+                platform=platform,
+                outcome=self.open_outcome,
+            )
+            if self.scenario == "open_secret_field":
+                event = event.removesuffix(b"\n").removesuffix(b"}")
+                event += b',"xsec_token":"SENTINEL_XSEC_TOKEN"}\n'
+            self.stdout.feed(event)
         elif payload["command"] == "cancel":
             self.stdout.feed(
                 search_event(
@@ -512,6 +535,150 @@ def test_client_threads_douyin_platform_and_canonical_url() -> None:
     asyncio.run(mismatched_event())
 
 
+def test_client_threads_xhs_platform_and_query_free_canonical_url() -> None:
+    async def scenario() -> None:
+        process = SearchProcess()
+        client, _launcher, _terminator, _disconnects = build_client(process)
+        items: list[str] = []
+
+        async def on_item(_position: int, item: SearchWorkerItem) -> None:
+            items.append(item.content_url)
+
+        result = await client.search(
+            request_id=uuid4(),
+            platform="xhs",
+            terms=("龙田街道",),
+            max_results_per_term=10,
+            on_progress=lambda _position, _count: asyncio.sleep(0),
+            on_item=on_item,
+        )
+
+        assert result.outcome == "completed_with_results"
+        assert items == ["https://www.xiaohongshu.com/explore/0123456789abcdef01234567"]
+        assert process.commands[0][1]["platform"] == "xhs"
+        await client.shutdown()
+
+    async def mismatched_event() -> None:
+        process = SearchProcess(event_platform_override="dy")
+        client, _launcher, terminator, disconnects = build_client(process)
+
+        with pytest.raises(AuthWorkerError):
+            await client.search(
+                request_id=uuid4(),
+                platform="xhs",
+                terms=("龙田街道",),
+                max_results_per_term=10,
+                on_progress=lambda _position, _count: asyncio.sleep(0),
+                on_item=lambda _position, _item: asyncio.sleep(0),
+            )
+
+        assert terminator.calls == 1
+        assert len(disconnects) == 1
+
+    asyncio.run(scenario())
+    asyncio.run(mismatched_event())
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        "opened",
+        "content_not_found",
+        "content_unavailable",
+        "login_required",
+        "manual_challenge_required",
+        "platform_blocked_or_rate_limited",
+        "structure_changed",
+        "browser_unavailable",
+        "internal_error",
+    ],
+)
+def test_client_open_result_uses_exact_secret_free_frame_and_decodes_outcome(
+    outcome: str,
+) -> None:
+    async def scenario() -> None:
+        process = SearchProcess(open_outcome=outcome)
+        client, _launcher, _terminator, disconnects = build_client(process)
+        request_id = uuid4()
+
+        result = await client.open_result(
+            request_id=request_id,
+            term="龙田街道",
+            content_id="0123456789abcdef01234567",
+        )
+
+        assert result.outcome == outcome
+        prefix, command = process.commands[0]
+        assert prefix == SEARCH_COMMAND_PREFIX
+        assert command == {
+            "version": 1,
+            "type": "command",
+            "command": "open_result",
+            "request_id": str(request_id),
+            "platform": "xhs",
+            "term": "龙田街道",
+            "content_id": "0123456789abcdef01234567",
+        }
+        assert "xsec" not in json.dumps(command)
+        assert disconnects == []
+        await client.shutdown()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("scenario", "platform"),
+    [("open_secret_field", None), ("normal", "wb")],
+)
+def test_client_rejects_open_result_secret_fields_and_cross_platform_events(
+    scenario: str, platform: str | None
+) -> None:
+    async def run_scenario() -> None:
+        process = SearchProcess(
+            scenario=scenario,
+            event_platform_override=platform,
+        )
+        client, _launcher, terminator, disconnects = build_client(process)
+
+        with pytest.raises(AuthWorkerError):
+            await client.open_result(
+                request_id=uuid4(),
+                term="龙田街道",
+                content_id="0123456789abcdef01234567",
+            )
+
+        assert terminator.calls == 1
+        assert len(disconnects) == 1
+
+    asyncio.run(run_scenario())
+
+
+def test_client_open_cancellation_recycles_without_forbidden_cancel_outcome() -> None:
+    async def scenario() -> None:
+        process = SearchProcess(hanging=True)
+        client, _launcher, terminator, disconnects = build_client(process)
+        task = asyncio.create_task(
+            client.open_result(
+                request_id=uuid4(),
+                term="龙田街道",
+                content_id="0123456789abcdef01234567",
+            )
+        )
+        while not process.commands:
+            await asyncio.sleep(0)
+        task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert [command["command"] for _prefix, command in process.commands] == [
+            "open_result"
+        ]
+        assert terminator.calls == 1
+        assert disconnects == [None]
+
+    asyncio.run(scenario())
+
+
 def test_client_search_cancellation_uses_the_search_cancel_frame() -> None:
     async def scenario() -> None:
         process = SearchProcess(hanging=True)
@@ -651,6 +818,49 @@ def test_search_event_parser_rejects_noncanonical_douyin_url(
         term_position=0,
         item={
             **SearchProcess.item(platform="dy", content_type="video"),
+            "content_id": content_id,
+            "content_url": content_url,
+        },
+    )
+
+    with pytest.raises(AuthWorkerError):
+        _parse_event(frame)
+
+
+@pytest.mark.parametrize(
+    ("content_id", "content_url"),
+    [
+        (
+            "ABCDEF0123456789ABCDEF01",
+            "https://www.xiaohongshu.com/explore/ABCDEF0123456789ABCDEF01",
+        ),
+        (
+            "0123456789abcdef01234567",
+            "https://www.xiaohongshu.com/explore/other",
+        ),
+        (
+            "0123456789abcdef01234567",
+            "https://www.xiaohongshu.com/explore/"
+            "0123456789abcdef01234567?xsec_token=secret",
+        ),
+        (
+            "0123456789abcdef01234567",
+            "https://evil.example/explore/0123456789abcdef01234567",
+        ),
+    ],
+)
+def test_search_event_parser_rejects_noncanonical_xhs_url(
+    content_id: str,
+    content_url: str,
+) -> None:
+    request_id = str(uuid4())
+    frame = search_event(
+        "item",
+        request_id,
+        platform="xhs",
+        term_position=0,
+        item={
+            **SearchProcess.item(platform="xhs", content_type="image"),
             "content_id": content_id,
             "content_url": content_url,
         },

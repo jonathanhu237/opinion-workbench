@@ -15,10 +15,12 @@ from longtian_api.database import (
     _migrate_to_version_2,
     _migrate_to_version_3,
     _migrate_to_version_4,
+    _migrate_to_version_5,
 )
 from longtian_api.main import create_app
 from longtian_api.repositories.search_runs import (
     SearchContentInput,
+    SearchResultNotFoundError,
     SearchRunRepository,
     SearchRunRepositoryUnavailableError,
 )
@@ -28,6 +30,7 @@ from longtian_api.services.browser_operations import (
     BrowserOperationOwner,
 )
 from longtian_api.services.media_crawler_auth_worker import (
+    OpenResultWorkerResult,
     SearchWorkerItem,
     SearchWorkerResult,
 )
@@ -53,6 +56,54 @@ def _content(
         content_url="https://www.toutiao.com/article/100/",
         observed_at=observed_at,
     )
+
+
+def _xhs_content(*, observed_at: str) -> SearchContentInput:
+    content_id = "0123456789abcdef01234567"
+    return SearchContentInput(
+        platform_content_id=content_id,
+        content_type="image",
+        title="龙田街道公开信息",
+        snippet="公开页面摘要",
+        creator_hash="0123456789abcdef",
+        publisher_name="本***察",
+        published_at_text="",
+        content_url=f"https://www.xiaohongshu.com/explore/{content_id}",
+        observed_at=observed_at,
+    )
+
+
+def test_repository_open_target_proves_relation_and_original_term_order(
+    tmp_path: Path,
+) -> None:
+    repository = SearchRunRepository(Database(tmp_path / "open-target.sqlite3"))
+    repository.initialize()
+    run = repository.create_run(
+        monitoring_rule_id=1,
+        platform="xhs",
+        rule_name="重点区域",
+        terms=("第一个词", "第二个词", "第三个词"),
+        max_results_per_term=10,
+    )
+    repository.mark_running(run.id)
+    for position in (2, 0, 1):
+        repository.observe_item(
+            run_id=run.id,
+            term_position=position,
+            item=_xhs_content(observed_at=f"2026-08-26T08:0{position}:00+00:00"),
+        )
+    repository.finish(run.id, "completed_with_results")
+    results, _total = repository.list_results(
+        run_id=run.id, kind="all", limit=50, offset=0
+    )
+
+    target = repository.get_result_open_target(run_id=run.id, result_id=results[0].id)
+
+    assert target.platform == "xhs"
+    assert target.platform_content_id == "0123456789abcdef01234567"
+    assert target.matched_terms == ("第一个词", "第二个词", "第三个词")
+    with pytest.raises(SearchResultNotFoundError):
+        repository.get_result_open_target(run_id=run.id + 1, result_id=results[0].id)
 
 
 def test_repository_preserves_cross_term_and_cross_run_deduplication(
@@ -197,10 +248,13 @@ class FakeSearchWorker:
         *,
         outcome: str = "completed_with_results",
         emit_item: bool = True,
+        open_outcome: str = "opened",
     ) -> None:
         self.calls: list[tuple[UUID, str, tuple[str, ...], int]] = []
         self.outcome = outcome
         self.emit_item = emit_item
+        self.open_outcome = open_outcome
+        self.open_calls: list[tuple[UUID, str, str]] = []
 
     async def search(
         self,
@@ -215,7 +269,13 @@ class FakeSearchWorker:
         self.calls.append((request_id, platform, tuple(terms), max_results_per_term))
         await on_progress(0, len(terms))
         if self.emit_item:
-            content_id = "7512345678901234567" if platform == "dy" else "news-100"
+            content_id = (
+                "7512345678901234567"
+                if platform == "dy"
+                else "0123456789abcdef01234567"
+                if platform == "xhs"
+                else "news-100"
+            )
             await on_item(
                 0,
                 SearchWorkerItem(
@@ -225,6 +285,8 @@ class FakeSearchWorker:
                         if platform == "toutiao"
                         else "video"
                         if platform in {"ks", "dy"}
+                        else "image"
+                        if platform == "xhs"
                         else "post"
                     ),
                     title="龙田街道公开信息",
@@ -241,7 +303,12 @@ class FakeSearchWorker:
                             else (
                                 "https://www.douyin.com/video/7512345678901234567"
                                 if platform == "dy"
-                                else "https://m.weibo.cn/detail/news-100"
+                                else (
+                                    "https://www.xiaohongshu.com/explore/"
+                                    "0123456789abcdef01234567"
+                                    if platform == "xhs"
+                                    else "https://m.weibo.cn/detail/news-100"
+                                )
                             )
                         )
                     ),
@@ -249,6 +316,12 @@ class FakeSearchWorker:
                 ),
             )
         return SearchWorkerResult(self.outcome)  # type: ignore[arg-type]
+
+    async def open_result(
+        self, *, request_id: UUID, term: str, content_id: str
+    ) -> OpenResultWorkerResult:
+        self.open_calls.append((request_id, term, content_id))
+        return OpenResultWorkerResult(self.open_outcome)  # type: ignore[arg-type]
 
 
 class BlockingSearchWorker:
@@ -264,6 +337,45 @@ class BlockingSearchWorker:
             self.cancelled += 1
             raise
         raise AssertionError("blocking worker unexpectedly resumed")
+
+
+class BlockingOpenWorker(FakeSearchWorker):
+    def __init__(self) -> None:
+        super().__init__()
+        self.open_started = asyncio.Event()
+        self.open_cancelled = 0
+
+    async def open_result(self, **_kwargs: object) -> OpenResultWorkerResult:
+        self.open_started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            self.open_cancelled += 1
+            raise
+        raise AssertionError("blocking open unexpectedly resumed")
+
+
+def _seed_xhs_result(database_path: Path) -> tuple[int, int]:
+    repository = SearchRunRepository(Database(database_path))
+    repository.initialize()
+    run = repository.create_run(
+        monitoring_rule_id=1,
+        platform="xhs",
+        rule_name="重点区域",
+        terms=("龙田街道",),
+        max_results_per_term=10,
+    )
+    repository.mark_running(run.id)
+    repository.observe_item(
+        run_id=run.id,
+        term_position=0,
+        item=_xhs_content(observed_at="2026-08-26T08:00:00+00:00"),
+    )
+    repository.finish(run.id, "completed_with_results")
+    results, _total = repository.list_results(
+        run_id=run.id, kind="all", limit=50, offset=0
+    )
+    return run.id, results[0].id
 
 
 def _search_app(database_path: Path, worker: FakeSearchWorker):
@@ -453,6 +565,113 @@ def test_http_douyin_search_threads_platform_and_deduplicates_repeated_runs(
     assert [call[1] for call in worker.calls] == ["dy", "dy"]
 
 
+def test_http_xhs_search_threads_platform_and_deduplicates_repeated_runs(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "xhs-http.sqlite3"
+    worker = FakeSearchWorker()
+    with TestClient(_search_app(database_path, worker)) as client:
+        first_response = client.post(
+            "/api/v1/search-runs",
+            json={"monitoring_rule_id": 1, "platform": "xhs"},
+        )
+        assert first_response.status_code == 202
+        first = _wait_for_terminal(client, first_response.json()["id"])
+        first_results = client.get(f"/api/v1/search-runs/{first['id']}/results").json()
+
+        assert first["platform"] == "xhs"
+        assert first["status"] == "completed_with_results"
+        assert first_results["results"][0]["platform"] == "xhs"
+        assert first_results["results"][0]["content_url"] == (
+            "https://www.xiaohongshu.com/explore/0123456789abcdef01234567"
+        )
+
+        second_response = client.post(
+            "/api/v1/search-runs",
+            json={"monitoring_rule_id": 1, "platform": "xhs"},
+        )
+        second = _wait_for_terminal(client, second_response.json()["id"])
+
+    assert (second["new_count"], second["repeated_count"]) == (0, 1)
+    assert [call[1] for call in worker.calls] == ["xhs", "xhs"]
+
+
+@pytest.mark.parametrize(
+    "open_outcome",
+    [
+        "opened",
+        "content_not_found",
+        "content_unavailable",
+        "login_required",
+        "manual_challenge_required",
+        "platform_blocked_or_rate_limited",
+        "structure_changed",
+        "browser_unavailable",
+        "internal_error",
+    ],
+)
+def test_http_xhs_open_returns_only_fixed_outcome_and_first_stored_term(
+    tmp_path: Path, open_outcome: str
+) -> None:
+    worker = FakeSearchWorker(open_outcome=open_outcome)
+    with TestClient(
+        _search_app(tmp_path / f"open-{open_outcome}.sqlite3", worker)
+    ) as client:
+        started = client.post(
+            "/api/v1/search-runs",
+            json={"monitoring_rule_id": 1, "platform": "xhs"},
+        )
+        run = _wait_for_terminal(client, started.json()["id"])
+        result = client.get(f"/api/v1/search-runs/{run['id']}/results").json()[
+            "results"
+        ][0]
+
+        response = client.post(
+            f"/api/v1/search-runs/{run['id']}/results/{result['id']}/open"
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {"outcome": open_outcome}
+    assert worker.open_calls[0][1:] == (
+        "龙田街道",
+        "0123456789abcdef01234567",
+    )
+    serialized = response.text
+    assert "龙田街道" not in serialized
+    assert "xsec" not in serialized
+    assert "xiaohongshu.com" not in serialized
+
+
+def test_http_open_rejects_unrelated_and_non_xhs_results(tmp_path: Path) -> None:
+    worker = FakeSearchWorker()
+    with TestClient(_search_app(tmp_path / "open-errors.sqlite3", worker)) as client:
+        started = client.post(
+            "/api/v1/search-runs",
+            json={"monitoring_rule_id": 1, "platform": "toutiao"},
+        )
+        run = _wait_for_terminal(client, started.json()["id"])
+        result_id = client.get(f"/api/v1/search-runs/{run['id']}/results").json()[
+            "results"
+        ][0]["id"]
+
+        unrelated = client.post(
+            f"/api/v1/search-runs/{run['id'] + 1}/results/{result_id}/open"
+        )
+        unsupported = client.post(
+            f"/api/v1/search-runs/{run['id']}/results/{result_id}/open"
+        )
+        operation = client.get("/openapi.json").json()["paths"][
+            "/api/v1/search-runs/{run_id}/results/{result_id}/open"
+        ]["post"]
+
+    assert unrelated.status_code == 404
+    assert unrelated.json()["detail"]["code"] == "search_result_not_found"
+    assert unsupported.status_code == 409
+    assert unsupported.json()["detail"]["code"] == ("search_result_open_not_supported")
+    assert worker.open_calls == []
+    assert "requestBody" not in operation
+
+
 def test_http_rejects_unknown_search_platform_without_starting_worker(
     tmp_path: Path,
 ) -> None:
@@ -461,7 +680,7 @@ def test_http_rejects_unknown_search_platform_without_starting_worker(
     with TestClient(app) as client:
         response = client.post(
             "/api/v1/search-runs",
-            json={"monitoring_rule_id": 1, "platform": "xhs"},
+            json={"monitoring_rule_id": 1, "platform": "bili"},
         )
 
     assert response.status_code == 422
@@ -649,6 +868,101 @@ def test_timeout_is_durable_and_releases_browser_admission(tmp_path: Path) -> No
     asyncio.run(scenario())
 
 
+def test_open_timeout_is_bounded_and_releases_browser_admission(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        database_path = tmp_path / "open-timeout.sqlite3"
+        run_id, result_id = _seed_xhs_result(database_path)
+        monitoring_rules = MonitoringRuleService(database_path=database_path)
+        coordinator = BrowserOperationCoordinator()
+        worker = BlockingOpenWorker()
+        service = SearchRunService(
+            monitoring_rules=monitoring_rules,
+            worker=worker,  # type: ignore[arg-type]
+            browser_operations=coordinator,
+            database_path=database_path,
+            open_timeout_seconds=0.01,
+        )
+        service.initialize()
+
+        response = await service.open_result(run_id=run_id, result_id=result_id)
+
+        assert response.outcome == "internal_error"
+        assert worker.open_cancelled == 1
+        next_owner = BrowserOperationOwner("platform_connection", uuid4())
+        assert await coordinator.try_claim(next_owner)
+        await coordinator.release(next_owner)
+        await service.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_open_obeys_global_contention_and_shutdown_cancels_no_orphan(
+    tmp_path: Path,
+) -> None:
+    async def scenario() -> None:
+        database_path = tmp_path / "open-shutdown.sqlite3"
+        run_id, result_id = _seed_xhs_result(database_path)
+        monitoring_rules = MonitoringRuleService(database_path=database_path)
+        coordinator = BrowserOperationCoordinator()
+        worker = BlockingOpenWorker()
+        service = SearchRunService(
+            monitoring_rules=monitoring_rules,
+            worker=worker,  # type: ignore[arg-type]
+            browser_operations=coordinator,
+            database_path=database_path,
+        )
+        service.initialize()
+        competing = BrowserOperationOwner("platform_connection", uuid4())
+        assert await coordinator.try_claim(competing)
+        with pytest.raises(SearchRunError) as conflict:
+            await service.open_result(run_id=run_id, result_id=result_id)
+        assert conflict.value.code == "browser_operation_active"
+        await coordinator.release(competing)
+
+        open_task = asyncio.create_task(
+            service.open_result(run_id=run_id, result_id=result_id)
+        )
+        await worker.open_started.wait()
+        await service.shutdown()
+
+        with pytest.raises(asyncio.CancelledError):
+            await open_task
+        assert worker.open_cancelled == 1
+        next_owner = BrowserOperationOwner("platform_connection", uuid4())
+        assert await coordinator.try_claim(next_owner)
+        await coordinator.release(next_owner)
+
+    asyncio.run(scenario())
+
+
+def test_open_storage_failure_is_a_sanitized_503() -> None:
+    class UnavailableOpenRepository:
+        def initialize(self) -> None:
+            pass
+
+        def get_result_open_target(self, **_kwargs: object) -> object:
+            raise SearchRunRepositoryUnavailableError
+
+    async def scenario() -> None:
+        service = SearchRunService(
+            monitoring_rules=MonitoringRuleService(),
+            worker=FakeSearchWorker(),  # type: ignore[arg-type]
+            browser_operations=BrowserOperationCoordinator(),
+            repository=UnavailableOpenRepository(),  # type: ignore[arg-type]
+        )
+
+        with pytest.raises(SearchRunError) as unavailable:
+            await service.open_result(run_id=1, result_id=1)
+
+        assert unavailable.value.status_code == 503
+        assert unavailable.value.code == "search_storage_unavailable"
+        assert "SQLite" not in unavailable.value.message
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize(
     ("worker_outcome", "expected_status"),
     [
@@ -820,7 +1134,9 @@ def test_version_two_migration_preserves_toutiao_and_isolates_weibo_identity(
 
     assert (completed.new_count, completed.repeated_count) == (1, 0)
     with database.connect() as migrated:
-        assert migrated.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert migrated.execute("PRAGMA user_version").fetchone()[0] == (
+            CURRENT_DATABASE_VERSION
+        )
         rows = migrated.execute(
             """
             SELECT platform, id FROM search_contents
@@ -855,7 +1171,9 @@ def test_version_one_database_upgrades_without_reseeding_monitoring_rules(
     database.initialize()
 
     with database.connect() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == (
+            CURRENT_DATABASE_VERSION
+        )
         assert (
             connection.execute(
                 "SELECT name FROM monitoring_rules WHERE id = 1"
@@ -953,7 +1271,9 @@ def test_version_three_migration_preserves_rows_relations_and_sequences(
                 """
             ).fetchall()
         )
-        assert migrated.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert migrated.execute("PRAGMA user_version").fetchone()[0] == (
+            CURRENT_DATABASE_VERSION
+        )
         assert migrated.execute("PRAGMA foreign_key_check").fetchall() == []
 
     assert after == before
@@ -1088,7 +1408,9 @@ def test_version_four_migration_preserves_rows_and_isolates_douyin_identity(
                 """
             ).fetchall()
         )
-        assert migrated.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert migrated.execute("PRAGMA user_version").fetchone()[0] == (
+            CURRENT_DATABASE_VERSION
+        )
         assert migrated.execute("PRAGMA foreign_key_check").fetchall() == []
 
     assert after == before
@@ -1132,4 +1454,144 @@ def test_version_four_migration_preserves_rows_and_isolates_douyin_identity(
     assert [tuple(row) for row in rows] == [
         ("dy", "7512345678901234567"),
         ("ks", "7512345678901234567"),
+    ]
+
+
+def test_version_five_migration_preserves_rows_sequences_and_adds_xhs(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "version-five.sqlite3"
+    connection = sqlite3.connect(database_path, isolation_level=None)
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON")
+    try:
+        _migrate_to_version_1(connection)
+        _migrate_to_version_2(connection)
+        _migrate_to_version_3(connection)
+        _migrate_to_version_4(connection)
+        _migrate_to_version_5(connection)
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute(
+            """
+            INSERT INTO search_runs (
+              id, monitoring_rule_id, platform, rule_name, max_results_per_term,
+              status, current_term_position, created_at, started_at, finished_at
+            ) VALUES (41, 1, 'dy', '抖音旧任务', 7, 'completed_with_results',
+                      0, '2026-08-25T08:00:00+00:00',
+                      '2026-08-25T08:00:01+00:00',
+                      '2026-08-25T08:00:02+00:00')
+            """
+        )
+        connection.execute("INSERT INTO search_run_terms VALUES (41, 0, '龙田街道')")
+        connection.execute(
+            """
+            INSERT INTO search_contents (
+              id, platform, platform_content_id, content_type, title, snippet,
+              creator_hash, publisher_name, published_at_text, content_url,
+              first_seen_at, last_seen_at
+            ) VALUES (
+              99, 'dy', '0123456789abcdef01234567', 'video', '旧标题', '旧摘要',
+              '0123456789abcdef', '抖***户', '2026-08-25 16:00',
+              'https://www.douyin.com/video/0123456789abcdef01234567',
+              '2026-08-25T08:00:01+00:00', '2026-08-25T08:00:01+00:00'
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO search_run_contents VALUES (
+              41, 99, 'new', '2026-08-25T08:00:01+00:00',
+              '2026-08-25T08:00:01+00:00'
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO search_run_content_terms VALUES (
+              41, 99, 0, '2026-08-25T08:00:01+00:00'
+            )
+            """
+        )
+        connection.execute(
+            "UPDATE sqlite_sequence SET seq = 75 WHERE name = 'search_runs'"
+        )
+        connection.execute(
+            "UPDATE sqlite_sequence SET seq = 150 WHERE name = 'search_contents'"
+        )
+        before = {
+            table: [tuple(row) for row in connection.execute(f"SELECT * FROM {table}")]
+            for table in (
+                "search_runs",
+                "search_run_terms",
+                "search_contents",
+                "search_run_contents",
+                "search_run_content_terms",
+            )
+        }
+        connection.execute("COMMIT")
+    finally:
+        connection.close()
+
+    database = Database(database_path)
+    database.initialize()
+    with database.connect() as migrated:
+        after = {
+            table: [tuple(row) for row in migrated.execute(f"SELECT * FROM {table}")]
+            for table in before
+        }
+        sequences = dict(
+            migrated.execute(
+                """
+                SELECT name, seq FROM sqlite_sequence
+                WHERE name IN ('search_runs', 'search_contents')
+                """
+            ).fetchall()
+        )
+        assert migrated.execute("PRAGMA user_version").fetchone()[0] == 6
+        assert migrated.execute("PRAGMA foreign_key_check").fetchall() == []
+
+    assert after == before
+    assert sequences == {"search_contents": 150, "search_runs": 75}
+
+    repository = SearchRunRepository(database)
+    xhs = repository.create_run(
+        monitoring_rule_id=1,
+        platform="xhs",
+        rule_name="小红书任务",
+        terms=("龙田街道",),
+        max_results_per_term=7,
+    )
+    repository.mark_running(xhs.id)
+    repository.observe_item(
+        run_id=xhs.id,
+        term_position=0,
+        item=SearchContentInput(
+            platform_content_id="0123456789abcdef01234567",
+            content_type="image",
+            title="小红书标题",
+            snippet="小红书标题",
+            creator_hash="0123456789abcdef",
+            publisher_name="小***户",
+            published_at_text="",
+            content_url=(
+                "https://www.xiaohongshu.com/explore/0123456789abcdef01234567"
+            ),
+            observed_at="2026-08-26T08:00:00+00:00",
+        ),
+    )
+    completed = repository.finish(xhs.id, "completed_with_results")
+
+    assert xhs.id == 76
+    assert (completed.new_count, completed.repeated_count) == (1, 0)
+    with database.connect() as migrated:
+        rows = migrated.execute(
+            """
+            SELECT platform, platform_content_id FROM search_contents
+            WHERE platform_content_id = '0123456789abcdef01234567'
+            ORDER BY platform
+            """
+        ).fetchall()
+    assert [tuple(row) for row in rows] == [
+        ("dy", "0123456789abcdef01234567"),
+        ("xhs", "0123456789abcdef01234567"),
     ]

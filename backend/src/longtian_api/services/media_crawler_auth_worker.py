@@ -55,6 +55,17 @@ SearchOutcome = Literal[
     "cancelled",
     "internal_error",
 ]
+OpenResultOutcome = Literal[
+    "opened",
+    "content_not_found",
+    "content_unavailable",
+    "login_required",
+    "manual_challenge_required",
+    "platform_blocked_or_rate_limited",
+    "structure_changed",
+    "browser_unavailable",
+    "internal_error",
+]
 
 _WORKER_COMMAND = (
     "uv",
@@ -146,12 +157,19 @@ class SearchWorkerResult:
     outcome: SearchOutcome
 
 
+@dataclass(frozen=True, slots=True)
+class OpenResultWorkerResult:
+    outcome: OpenResultOutcome
+
+
 @dataclass(slots=True)
 class _ActiveRequest:
     request_id: UUID
     platform: AuthPlatformId
-    kind: Literal["auth", "search"]
-    result: asyncio.Future[AuthWorkerResult | SearchWorkerResult]
+    kind: Literal["auth", "search", "open_result"]
+    result: asyncio.Future[
+        AuthWorkerResult | SearchWorkerResult | OpenResultWorkerResult
+    ]
     search_term_count: int = 0
     search_max_results_per_term: int = 0
     search_current_term_position: int = -1
@@ -338,6 +356,76 @@ class PersistentAuthWorkerClient:
                 return result
             except asyncio.CancelledError:
                 await asyncio.shield(self._cancel_request(generation, request))
+                raise
+            finally:
+                if self._active is request:
+                    self._active = None
+
+    async def open_result(
+        self,
+        *,
+        request_id: UUID,
+        term: str,
+        content_id: str,
+    ) -> OpenResultWorkerResult:
+        """Resolve and open one stored XHS result through the strict worker."""
+
+        if self._request_lock.locked():
+            raise AuthWorkerBusyError
+        if (
+            type(term) is not str
+            or term != term.strip()
+            or not term
+            or len(term) > 200
+            or re.fullmatch(r"[0-9a-f]{24}", content_id) is None
+        ):
+            raise AuthWorkerError
+
+        async with self._request_lock:
+            if self._closed:
+                raise AuthWorkerError
+            self._completed_request_id = None
+            try:
+                generation = await self._ensure_worker()
+            except asyncio.CancelledError:
+                generation = self._generation
+                await asyncio.shield(
+                    self._recycle_generation(generation, invalidate=True)
+                )
+                raise
+            loop = asyncio.get_running_loop()
+            request = _ActiveRequest(
+                request_id=request_id,
+                platform="xhs",
+                kind="open_result",
+                result=loop.create_future(),
+            )
+            if self._active is not None:
+                raise AuthWorkerBusyError
+            self._active = request
+            try:
+                await self._write_command(
+                    generation,
+                    {
+                        "version": 1,
+                        "type": "command",
+                        "command": "open_result",
+                        "request_id": str(request_id),
+                        "platform": "xhs",
+                        "term": term,
+                        "content_id": content_id,
+                    },
+                    prefix=SEARCH_COMMAND_PREFIX,
+                    max_bytes=MAX_SEARCH_COMMAND_BYTES,
+                )
+                result = await asyncio.shield(request.result)
+                if not isinstance(result, OpenResultWorkerResult):
+                    raise AuthWorkerError
+                return result
+            except asyncio.CancelledError:
+                await asyncio.shield(
+                    self._recycle_generation(generation, invalidate=True)
+                )
                 raise
             finally:
                 if self._active is request:
@@ -631,6 +719,17 @@ class PersistentAuthWorkerClient:
             active.result.set_result(SearchWorkerResult(outcome))
             return
 
+        if active.kind == "open_result":
+            if protocol != "search" or event_name != "open_result":
+                raise AuthWorkerError
+            if active.result.done():
+                raise AuthWorkerError
+            self._active = None
+            active.result.set_result(
+                OpenResultWorkerResult(cast(OpenResultOutcome, event["outcome"]))
+            )
+            return
+
         if protocol != "auth":
             raise AuthWorkerError
 
@@ -893,6 +992,20 @@ def _parse_search_event(line: bytes) -> dict[str, object]:
             "browser_unavailable",
             "browser_disconnected",
             "cancelled",
+            "internal_error",
+        }:
+            raise AuthWorkerError
+    elif event == "open_result":
+        _require_exact_fields(raw, base | {"outcome"})
+        if platform != "xhs" or raw["outcome"] not in {
+            "opened",
+            "content_not_found",
+            "content_unavailable",
+            "login_required",
+            "manual_challenge_required",
+            "platform_blocked_or_rate_limited",
+            "structure_changed",
+            "browser_unavailable",
             "internal_error",
         }:
             raise AuthWorkerError

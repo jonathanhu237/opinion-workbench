@@ -7,8 +7,9 @@ import { RouterProvider } from 'react-router/dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import douyinLogo from '@/assets/platforms/douyin.svg'
-import weiboLogo from '@/assets/platforms/weibo.svg'
 import kuaishouLogo from '@/assets/platforms/kuaishou.svg'
+import weiboLogo from '@/assets/platforms/weibo.svg'
+import xiaohongshuLogo from '@/assets/platforms/xiaohongshu.svg'
 import {
   fetchMonitoringRules,
   type MonitoringRule,
@@ -18,6 +19,7 @@ import {
   fetchSearchRun,
   fetchSearchRunResults,
   fetchSearchRuns,
+  openSearchRunResult,
   SEARCH_RUNS_QUERY_KEY,
   SearchRunApiError,
   startSearchRun,
@@ -42,6 +44,7 @@ vi.mock('@/lib/api/search-runs', async (importOriginal) => {
     fetchSearchRunResults: vi.fn(),
     startSearchRun: vi.fn(),
     cancelSearchRun: vi.fn(),
+    openSearchRunResult: vi.fn(),
   }
 })
 
@@ -101,6 +104,7 @@ const mockedFetchRun = vi.mocked(fetchSearchRun)
 const mockedFetchResults = vi.mocked(fetchSearchRunResults)
 const mockedStartRun = vi.mocked(startSearchRun)
 const mockedCancelRun = vi.mocked(cancelSearchRun)
+const mockedOpenResult = vi.mocked(openSearchRunResult)
 
 function renderRoute(initialEntry = '/collection-runs') {
   const queryClient = new QueryClient({
@@ -136,6 +140,7 @@ describe('collection runs routes', () => {
     mockedFetchResults.mockReset()
     mockedStartRun.mockReset()
     mockedCancelRun.mockReset()
+    mockedOpenResult.mockReset()
     mockedFetchRules.mockResolvedValue({ rules: [rule] })
     mockedFetchRuns.mockResolvedValue({
       runs: [run()],
@@ -161,6 +166,7 @@ describe('collection runs routes', () => {
       }),
     )
     mockedCancelRun.mockResolvedValue(run({ status: 'cancelled' }))
+    mockedOpenResult.mockResolvedValue({ outcome: 'opened' })
   })
 
   it('starts a Toutiao run from an enabled rule and deep-links to it', async () => {
@@ -210,6 +216,7 @@ describe('collection runs routes', () => {
       '微博',
       '快手',
       '抖音',
+      '小红书',
     ])
     await user.keyboard('{ArrowDown}{Enter}')
     expect(platformSelect).toHaveTextContent('微博')
@@ -271,6 +278,32 @@ describe('collection runs routes', () => {
       expect(mockedStartRun).toHaveBeenCalledWith({
         monitoring_rule_id: 1,
         platform: 'dy',
+        max_results_per_term: 10,
+      }),
+    )
+  })
+
+  it('switches to Xiaohongshu with the existing Shadcn platform selector', async () => {
+    const user = userEvent.setup()
+    mockedStartRun.mockResolvedValue(
+      run({ id: 12, platform: 'xhs', status: 'queued' }),
+    )
+    renderRoute()
+    await screen.findByText(rule.name)
+
+    await user.click(screen.getByRole('combobox', { name: '监控规则' }))
+    await user.click(await screen.findByRole('option', { name: /龙田街道/u }))
+    await user.click(screen.getByRole('combobox', { name: '采集平台' }))
+    await user.click(await screen.findByRole('option', { name: '小红书' }))
+    expect(
+      screen.getByRole('combobox', { name: '采集平台' }),
+    ).toHaveTextContent('小红书')
+    await user.click(screen.getByRole('button', { name: '开始采集' }))
+
+    await waitFor(() =>
+      expect(mockedStartRun).toHaveBeenCalledWith({
+        monitoring_rule_id: 1,
+        platform: 'xhs',
         max_results_per_term: 10,
       }),
     )
@@ -548,6 +581,133 @@ describe('collection runs routes', () => {
       'href',
       'https://www.douyin.com/video/7512345678901234567',
     )
+  })
+
+  it('renders the Xiaohongshu identity and opens through the product action', async () => {
+    mockedFetchRuns.mockResolvedValue({
+      runs: [run({ platform: 'xhs' })],
+      next_before_id: null,
+    })
+    const list = renderRoute()
+
+    const historyPlatform = await screen.findByText(/小红书 · 2 个搜索词/u)
+    expect(historyPlatform.parentElement?.querySelector('img')).toHaveAttribute(
+      'src',
+      xiaohongshuLogo,
+    )
+    list.unmount()
+
+    mockedFetchRun.mockResolvedValue(run({ platform: 'xhs' }))
+    mockedFetchResults.mockResolvedValue({
+      results: [
+        result({
+          platform: 'xhs',
+          platform_content_id: '0123456789abcdef01234567',
+          content_type: 'image',
+          snippet: '小红书公开信息',
+          published_at_text: '',
+          content_url:
+            'https://www.xiaohongshu.com/explore/0123456789abcdef01234567',
+        }),
+      ],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    })
+    renderRoute('/collection-runs/7')
+
+    const detailPlatform = await screen.findByText('小红书 · 规则快照')
+    expect(detailPlatform.querySelector('img')).toHaveAttribute(
+      'src',
+      xiaohongshuLogo,
+    )
+    expect(screen.queryByRole('link', { name: '打开原文' })).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: '打开原文' }))
+    await waitFor(() => expect(mockedOpenResult).toHaveBeenCalledWith(7, 11))
+    expect(await screen.findByText('已在谷歌浏览器打开')).toBeVisible()
+  })
+
+  it('owns one XHS open mutation and disables every XHS button while pending', async () => {
+    mockedFetchRun.mockResolvedValue(run({ platform: 'xhs' }))
+    mockedFetchResults.mockResolvedValue({
+      results: [
+        result({
+          id: 11,
+          platform: 'xhs',
+          platform_content_id: '0123456789abcdef01234567',
+          content_url:
+            'https://www.xiaohongshu.com/explore/0123456789abcdef01234567',
+        }),
+        result({
+          id: 12,
+          platform: 'xhs',
+          platform_content_id: 'abcdef0123456789abcdef01',
+          content_url:
+            'https://www.xiaohongshu.com/explore/abcdef0123456789abcdef01',
+        }),
+      ],
+      total: 2,
+      limit: 50,
+      offset: 0,
+    })
+    let resolveOpen: ((value: { outcome: 'opened' }) => void) | undefined
+    mockedOpenResult.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveOpen = resolve
+        }),
+    )
+    renderRoute('/collection-runs/7')
+    const user = userEvent.setup()
+    const buttons = await screen.findAllByRole('button', {
+      name: '打开原文',
+    })
+
+    await user.click(buttons[0])
+
+    const activeButton = screen.getByRole('button', { name: '正在打开…' })
+    expect(activeButton).toBeDisabled()
+    expect(activeButton).toHaveAttribute('aria-busy', 'true')
+    expect(screen.getByRole('button', { name: '打开原文' })).toBeDisabled()
+    expect(mockedOpenResult).toHaveBeenCalledTimes(1)
+    resolveOpen?.({ outcome: 'opened' })
+    expect(await screen.findByText('已在谷歌浏览器打开')).toBeVisible()
+  })
+
+  it('shows actionable XHS outcomes and preserves technical API errors', async () => {
+    mockedFetchRun.mockResolvedValue(run({ platform: 'xhs' }))
+    mockedFetchResults.mockResolvedValue({
+      results: [
+        result({
+          platform: 'xhs',
+          platform_content_id: '0123456789abcdef01234567',
+          content_url:
+            'https://www.xiaohongshu.com/explore/0123456789abcdef01234567',
+        }),
+      ],
+      total: 1,
+      limit: 50,
+      offset: 0,
+    })
+    mockedOpenResult
+      .mockResolvedValueOnce({ outcome: 'login_required' })
+      .mockRejectedValueOnce(
+        new SearchRunApiError(
+          '无法连接本机后端服务，请确认服务已经启动。',
+          'service_unavailable',
+        ),
+      )
+    renderRoute('/collection-runs/7')
+    const user = userEvent.setup()
+
+    await user.click(await screen.findByRole('button', { name: '打开原文' }))
+    expect(
+      await screen.findByText('请先在当前谷歌浏览器中登录小红书，然后重试。'),
+    ).toBeVisible()
+    await user.click(screen.getByRole('button', { name: '打开原文' }))
+    expect(
+      await screen.findByText('无法连接本机后端服务，请确认服务已经启动。'),
+    ).toBeVisible()
   })
 
   it('performs one final result refresh when an active task finishes', async () => {

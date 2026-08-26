@@ -25,6 +25,17 @@ SearchRunStatus = Literal[
     "internal_error",
 ]
 SearchResultKind = Literal["new", "repeated"]
+SearchResultOpenOutcome = Literal[
+    "opened",
+    "content_not_found",
+    "content_unavailable",
+    "login_required",
+    "manual_challenge_required",
+    "platform_blocked_or_rate_limited",
+    "structure_changed",
+    "browser_unavailable",
+    "internal_error",
+]
 SearchRunErrorCode = Literal[
     "invalid_request",
     "monitoring_rule_not_found",
@@ -33,6 +44,8 @@ SearchRunErrorCode = Literal[
     "browser_operation_active",
     "search_run_not_found",
     "search_run_not_active",
+    "search_result_not_found",
+    "search_result_open_not_supported",
     "search_storage_unavailable",
 ]
 
@@ -120,6 +133,12 @@ class SearchResultListResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class SearchResultOpenResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    outcome: SearchResultOpenOutcome
 
 
 class SearchRunErrorDetail(BaseModel):

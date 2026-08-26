@@ -1,1 +1,9 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/product-search-guidelines.md", "reason": "Extend durable runs, strict protocol, borrowed-browser ownership, exact URL and deduplication contracts to Xiaohongshu."}
+{"file": ".trellis/spec/backend/platform-connection-guidelines.md", "reason": "Preserve the persistent worker, authoritative Xiaohongshu account proof, manual challenge boundary and owned-page cleanup."}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Implement SQLite version 6 transactionally while preserving all existing platform data and relationships."}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Keep cookies, signatures, xsec values, responses, exceptions and terms out of public errors and logs."}
+{"file": ".trellis/spec/frontend/state-management.md", "reason": "Extend existing TanStack Query and URL-owned run state without duplicating server state."}
+{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "Use the existing Shadcn Select, reviewed Xiaohongshu logo, accessibility and responsive conventions."}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "Extend exact runtime platform and token-free link validation without casts."}
+{"file": ".trellis/spec/infra/submodule-guidelines.md", "reason": "Commit and push the MediaCrawler derivative before moving the reproducible parent gitlink."}
+{"file": ".trellis/tasks/08-26-xiaohongshu-search-adapter/research/current-xhs-search-contract.md", "reason": "Use the audited single-attempt signed search boundary and exclude generic retry, stores, detail, comments, media and xsec persistence."}

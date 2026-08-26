@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, ExternalLink, LoaderCircle, Square } from 'lucide-react'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router'
 
 import { Badge } from '@/components/ui/badge'
@@ -12,10 +12,12 @@ import { useSearchRun, useSearchRunResults } from '@/hooks/use-search-runs'
 import {
   cancelSearchRun,
   isActiveSearchRun,
+  openSearchRunResult,
   SEARCH_RUNS_QUERY_KEY,
   SearchRunApiError,
   type SearchResult,
   type SearchResultFilter,
+  type SearchResultOpenOutcome,
 } from '@/lib/api/search-runs'
 import {
   formatLocalDate,
@@ -31,6 +33,24 @@ function cancelErrorMessage(error: unknown) {
   return error instanceof SearchRunApiError
     ? error.message
     : '取消任务失败，请重新尝试。'
+}
+
+const openOutcomeMessages: Record<SearchResultOpenOutcome, string> = {
+  opened: '已在谷歌浏览器打开',
+  content_not_found: '当前搜索中没有找到这条内容，请重新采集后再试。',
+  content_unavailable: '这条内容暂时无法查看，可能已被删除或设为不可见。',
+  login_required: '请先在当前谷歌浏览器中登录小红书，然后重试。',
+  manual_challenge_required: '请在谷歌浏览器中完成小红书安全验证，然后重试。',
+  platform_blocked_or_rate_limited: '小红书暂时限制了访问，请稍后再试。',
+  structure_changed: '小红书页面发生变化，暂时无法打开这条内容。',
+  browser_unavailable: '无法连接谷歌浏览器，请确认远程调试已开启。',
+  internal_error: '打开失败，请稍后重试。',
+}
+
+function openErrorMessage(error: unknown) {
+  return error instanceof SearchRunApiError
+    ? error.message
+    : '打开原文时发生未知错误，请稍后重试。'
 }
 
 function parseRunId(value: string | undefined) {
@@ -49,8 +69,21 @@ function parseOffset(value: string | null) {
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : 0
 }
 
-function ResultRecord({ result }: { result: SearchResult }) {
+function ResultRecord({
+  result,
+  openPending,
+  activeOpenResultId,
+  openFeedback,
+  onOpen,
+}: {
+  result: SearchResult
+  openPending: boolean
+  activeOpenResultId: number | null
+  openFeedback: string | null
+  onOpen: (resultId: number) => void
+}) {
   const isNew = result.kind === 'new'
+  const isActiveOpen = openPending && activeOpenResultId === result.id
 
   return (
     <article
@@ -70,18 +103,40 @@ function ResultRecord({ result }: { result: SearchResult }) {
             </p>
           )}
         </div>
-        <a
-          href={result.content_url}
-          target="_blank"
-          rel="noreferrer"
-          className={cn(
-            buttonVariants({ variant: 'outline', size: 'sm' }),
-            'min-h-11 shrink-0 sm:min-h-8',
-          )}
-        >
-          打开原文
-          <ExternalLink aria-hidden />
-        </a>
+        {result.platform === 'xhs' ? (
+          <div className="shrink-0">
+            <Button
+              variant="outline"
+              size="sm"
+              className="min-h-11 w-full sm:min-h-8"
+              disabled={openPending}
+              aria-busy={isActiveOpen}
+              onClick={() => onOpen(result.id)}
+            >
+              {isActiveOpen ? '正在打开…' : '打开原文'}
+              <ExternalLink aria-hidden />
+            </Button>
+            <p
+              className="mt-1 max-w-64 text-sm text-muted-foreground"
+              aria-live="polite"
+            >
+              {openFeedback}
+            </p>
+          </div>
+        ) : (
+          <a
+            href={result.content_url}
+            target="_blank"
+            rel="noreferrer"
+            className={cn(
+              buttonVariants({ variant: 'outline', size: 'sm' }),
+              'min-h-11 shrink-0 sm:min-h-8',
+            )}
+          >
+            打开原文
+            <ExternalLink aria-hidden />
+          </a>
+        )}
       </div>
 
       <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-3">
@@ -121,6 +176,10 @@ export function CollectionRunDetail() {
   const active = runQuery.data ? isActiveSearchRun(runQuery.data.status) : false
   const resultsQuery = useSearchRunResults(runId, filter, active, offset)
   const previousRunState = useRef({ runId, active })
+  const [openFeedback, setOpenFeedback] = useState<{
+    resultId: number
+    message: string
+  } | null>(null)
   useEffect(() => {
     const previous = previousRunState.current
     previousRunState.current = { runId, active }
@@ -141,6 +200,25 @@ export function CollectionRunDetail() {
       await queryClient.invalidateQueries({ queryKey: SEARCH_RUNS_QUERY_KEY })
     },
   })
+  const openMutation = useMutation({
+    mutationFn: (resultId: number) => openSearchRunResult(runId ?? 0, resultId),
+    onMutate: (resultId) => {
+      setOpenFeedback(null)
+      return { resultId }
+    },
+    onSuccess: (response, resultId) => {
+      setOpenFeedback({
+        resultId,
+        message: openOutcomeMessages[response.outcome],
+      })
+    },
+    onError: (error, resultId) => {
+      setOpenFeedback({ resultId, message: openErrorMessage(error) })
+    },
+  })
+  const activeOpenResultId = openMutation.isPending
+    ? openMutation.variables
+    : null
 
   const changePage = (nextOffset: number) => {
     const next = new URLSearchParams(searchParams)
@@ -376,7 +454,18 @@ export function CollectionRunDetail() {
               </div>
             ) : (
               visibleResults.map((result) => (
-                <ResultRecord key={result.id} result={result} />
+                <ResultRecord
+                  key={result.id}
+                  result={result}
+                  openPending={openMutation.isPending}
+                  activeOpenResultId={activeOpenResultId}
+                  openFeedback={
+                    openFeedback?.resultId === result.id
+                      ? openFeedback.message
+                      : null
+                  }
+                  onOpen={(resultId) => openMutation.mutate(resultId)}
+                />
               ))
             )}
           </CardContent>

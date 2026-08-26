@@ -1,1 +1,8 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
+{"file": ".trellis/spec/backend/product-search-guidelines.md", "reason": "Verify state, platform correlation, bounded requests, outcomes, privacy and real-browser acceptance across all five platforms."}
+{"file": ".trellis/spec/backend/platform-connection-guidelines.md", "reason": "Check persistent-worker reuse, scoped Xiaohongshu state, manual challenge handling, ownership and account-check regressions."}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Verify migration preservation, transactions, foreign keys, indexes and cross-platform identity."}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Audit API, logs and evidence for cookie, signature, xsec, response, credential and exception leakage."}
+{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Run the full frontend gates and loopback browser smoke requirements."}
+{"file": ".trellis/spec/frontend/type-safety.md", "reason": "Check runtime decoding and exact query-free Xiaohongshu original-link correlation."}
+{"file": ".trellis/spec/infra/submodule-guidelines.md", "reason": "Verify clean reachable derivative revision, gitlink mode, recursive initialization and fresh clone."}
+{"file": ".trellis/tasks/08-26-xiaohongshu-search-adapter/research/current-xhs-search-contract.md", "reason": "Verify implementation stays inside the audited single-attempt, no-extra-collection and no-xsec-persistence boundary."}
