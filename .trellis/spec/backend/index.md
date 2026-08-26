@@ -23,6 +23,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Browser Authentication State](./auth-state-guidelines.md) | Local credential persistence, safe fallback, and secret-safe logging | Active |
 | [Visible Browser Search Adapter](./browser-search-adapter-guidelines.md) | Search-only browser lifecycle, DOM/link contracts, storage, and live validation | Active |
 | [Platform Connection](./platform-connection-guidelines.md) | Authentication-only subprocess protocol, product state, and borrowed-Chrome ownership | Active |
+| [Product Search](./product-search-guidelines.md) | Borrowed-Chrome collection runs, product SQLite deduplication, API/worker contracts, and validation | Active |
 
 ---
 
