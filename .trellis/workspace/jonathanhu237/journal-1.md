@@ -383,3 +383,40 @@ Added durable Douyin keyword collection through the approved persistent Google C
 ### Next Steps
 
 - Plan and approve Xiaohongshu product search as the remaining JD platform.
+
+
+## Session 18: 完成小红书搜索适配
+
+**Date**: 2026-08-26
+**Task**: 完成小红书搜索适配
+**Branch**: `main`
+
+### Summary
+
+完成小红书搜索、结果去重入库与真实浏览器打开链路，并补齐前后端、派生 MediaCrawler、验收证据和开发规范。
+
+### Main Changes
+
+- 新增小红书平台搜索适配与前后端搜索运行支持
+- 收紧结果打开参数边界，由可信操作类型生成 pc_search 来源
+- 完成真实浏览器打开验收并归档 Trellis 任务
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d6e9e93` | (see git log) |
+
+### Testing
+
+- [OK] 本地后端相关测试 195 项通过，MediaCrawler 维护测试 533 项通过
+- [OK] 前端格式、静态检查、类型检查、97 项测试及构建通过
+- [OK] Centaurus 跨环境验证通过；真实小红书结果成功打开并渲染
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 继续讨论并实施下一项产品链路

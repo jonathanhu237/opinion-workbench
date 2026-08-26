@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 17
+- **Total Sessions**: 18
 - **Last Active**: 2026-08-26
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~385 | Active |
+| `journal-1.md` | ~422 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 18 | 2026-08-26 | 完成小红书搜索适配 | `d6e9e93` | `main` |
 | 17 | 2026-08-26 | Add Douyin product search | `b963eba`, `714721c` | `main` |
 | 16 | 2026-08-26 | 完成快手搜索适配 | `30fa4bc` | `main` |
 | 15 | 2026-08-26 | 微博搜索适配 | `60ecff9` | `main` |
