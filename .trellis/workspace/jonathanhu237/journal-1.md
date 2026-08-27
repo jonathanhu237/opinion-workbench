@@ -441,3 +441,40 @@ Added durable Douyin keyword collection through the approved persistent Google C
 ### Status
 
 [OK] **Completed**
+
+
+## Session 20: AI configuration and monitoring query composition
+
+**Date**: 2026-08-27
+**Task**: AI configuration and monitoring query composition
+**Branch**: `main`
+
+### Summary
+
+Delivered the reviewed AI settings and monitoring object/issue query composition on main; committed separate multimodal planning docs and archived only the completed rule-combinations task after user authorization to commit and push.
+
+### Main Changes
+
+- Added local protected AI credentials, provider configuration and explicit text connection testing; no secret readback.
+- Added ordered monitoring-object and optional issue groups, derived query preview, additive v9 migration and compatible run/batch snapshots.
+- Preserved existing Shadcn design and execution limits; future media enrichment and manual AI summary remain planned, not implemented.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `501e460` | (see git log) |
+| `c5e57a3` | (see git log) |
+
+### Testing
+
+- [OK] Centaurus: backend Ruff format/lint and 353 pytest tests passed; frontend format/lint/typecheck, 164 tests and production build passed.
+- [OK] Independent review and isolated desktop/mobile browser acceptance passed; QA resources cleaned up without touching user credentials, browser accounts or runtime data.
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- Media enrichment and manual multimodal summary remain separate planned tasks; no implementation started in this delivery.
