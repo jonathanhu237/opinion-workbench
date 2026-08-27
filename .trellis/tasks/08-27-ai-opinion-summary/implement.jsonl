@@ -1,0 +1,11 @@
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"SQLite transaction, versioning and isolated test contracts."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Strict public errors and secret-safe diagnostics."}
+{"file":".trellis/spec/backend/ai-configuration-guidelines.md","reason":"Reuse the checked model client, configuration lease and secret boundary."}
+{"file":".trellis/spec/backend/platform-connection-guidelines.md","reason":"Preserve borrowed browser ownership during summary input enrichment."}
+{"file":".trellis/spec/frontend/directory-structure.md","reason":"Route, shell and API ownership."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Reuse current shadcn Base UI components and theme."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Forms, non-secret server state and explicit action ownership."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Strict response validation and HTTP status/code pairs."}
+{"file":".trellis/tasks/08-27-multimodal-opinion-analysis/research/current-input-boundary.md","reason":"Immutable source context and repeat-content/cache evidence."}
+{"file":".trellis/tasks/08-27-multimodal-opinion-analysis/research/model-transport-contract.md","reason":"Bounded explicit model transport, media envelope and validated outputs."}
+{"file":".trellis/tasks/08-27-platform-media-enrichment/design.md","reason":"Use the checked internal media contract; no duplicate browser/download implementation."}
