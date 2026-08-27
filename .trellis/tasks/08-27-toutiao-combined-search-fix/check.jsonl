@@ -3,3 +3,4 @@
 {"file":".trellis/spec/backend/error-handling.md","reason":"Safe errors and no diagnostic leaks"}
 {"file":".trellis/spec/infra/submodule-guidelines.md","reason":"Do not update parent to dirty or unreachable derivative"}
 {"file":".trellis/tasks/08-27-toutiao-combined-search-fix/research/live-preflight.md","reason":"Review against actual evidence, not an invented historical root cause"}
+{"file":".trellis/tasks/08-27-toutiao-combined-search-fix/research/run47-followup-plan.md","reason":"Current run47 repair boundary and fresh verification; earlier repair/delivery is historical"}

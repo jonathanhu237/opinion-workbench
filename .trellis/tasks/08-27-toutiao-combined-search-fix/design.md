@@ -1,5 +1,23 @@
 # Toutiao Combined Search Repair Design
 
+## Later run-47 investigation
+
+The original readiness design below remains implemented. For the newly requested repair, follow
+`research/run47-followup-plan.md`: identify the rendered-page/normalization predicate first,
+then record the smallest demonstrated change. Do not assume a timeout increase or selector
+expansion is justified. Preserve current search-v2/manual-recovery contracts and dirty work.
+
+The new owned-page observation has now demonstrated a mature external-only main result column:
+nine safe external title headers, main pagination, no loading/challenge/login, and zero recognized
+Toutiao candidates. The follow-up plan defines a strict external-only completion exception at the
+last readiness read. This supersedes only the older blanket external-only failure below; unknown
+or unproven zero-candidate states must still fail. Test red before modifying production code.
+
+The user subsequently authorized commit and push for this follow-up. Stage the two-file repair
+without the three unrelated search-v2 callback test additions, and only the three Toutiao hunks
+from the shared product-search spec. Validate that exact clean candidate against committed v1,
+not just the mixed development workspace. See `research/run47-delivery.md`.
+
 ## Boundary and Evidence
 
 The failure label is ambiguous. The unmodified current product run 43 succeeded with two items;

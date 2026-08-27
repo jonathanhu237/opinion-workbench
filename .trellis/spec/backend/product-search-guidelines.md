@@ -221,7 +221,14 @@ Search cancellation uses the search-command prefix with exact `command="cancel"`
   Check the trusted official page origin before and after every read. Recognized results/empty
   states terminate immediately, as do login/challenge, malformed states, unsafe navigation and
   HTTP 403/429. Zero containers with candidates or an empty marker is inconsistent, not a pending
-  or successful state. Pending-budget exhaustion remains `structure_changed`, never empty success.
+  or successful state. Unknown pending-budget exhaustion remains `structure_changed`.
+  Internal `external_only_complete: bool` may prove a mature external-only page: one visible main,
+  zero candidates, known human-title headers, one visible pagination and no visible loading. Apply
+  the exact safe-wrapper/title/related-heading predicates in `browser-search-adapter-guidelines.md`;
+  unknown, unsafe, direct-external or sidebar evidence is insufficient. Accept this proof only on
+  the final (21st) read, so later official results win. Never visit or persist external targets.
+  A missing/non-boolean flag or zero-main/true-flag is malformed. Existing candidate, explicit-empty
+  and safety precedence, navigation and wait limits remain unchanged.
   Cancellation propagates through waits/reads and retains task-owned-page cleanup.
 - The Weibo adapter fixes search type `61`, visits only the allowlisted mobile origin, requests at
   most `ceil(max_results_per_term / 10)` pages per term, and accepts only recognized card type 9
@@ -317,7 +324,7 @@ Chinese guidance.
 | Product SQLite unavailable | HTTP 503 `search_storage_unavailable` | Constant message, no path/SQL |
 | Unknown search platform or platform-dependent URL mismatch | HTTP 422 / worker protocol failure | No default substitution; fail closed |
 | Recognized results | `completed_with_results` | Persist items/matches and counts |
-| Recognized empty page, or only valid XHS untitled/auxiliary cards with coherent exhaustion, for every term | `completed_empty` | Persist truthful zero-result run without a fabricated title |
+| Recognized empty page, strictly proven Toutiao external-only completion at the last read, or only valid XHS untitled/auxiliary cards with coherent exhaustion, for every term | `completed_empty` | Persist truthful zero-result run without a fabricated title or external item |
 | Account check is disconnected but public search is available | Continue search | Do not invent a login prerequisite |
 | Mandatory login wall on the search page | `login_required` | No false empty; point to account flow |
 | Official safety challenge | `manual_challenge_required` | No retry/bypass; keep official page visible |
@@ -378,7 +385,10 @@ Chinese guidance.
    Toutiao readiness coverage includes delayed main-container/result rendering with the real DOM
    script in an offline routed browser fixture, first/last permitted success, exact exhaustion,
    immediate terminal/malformed outcomes, origin checks before/after each read, cancellation and
-   borrowed-tab preservation. Run parser/full-suite browser cases with an available Chromium;
+   borrowed-tab preservation. External-only fixtures must prove strict title/pagination/safe-wrapper
+   evidence, loading/unknown/sidebar/duplicate-main near misses, final-read-only completion and
+   late official-result precedence. Never replace unknown zero candidates with empty success.
+   Run parser/full-suite browser cases with an available Chromium;
    `TEST_CHROMIUM_EXECUTABLE` is a test-only executable override, not production browser discovery.
    Synthetic delayed-render failure proves the readiness defect, not an uncaptured historical
    production failure's root cause.

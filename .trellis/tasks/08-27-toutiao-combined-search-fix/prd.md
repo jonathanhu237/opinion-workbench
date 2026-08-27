@@ -5,6 +5,15 @@
 Diagnose and fix the Toutiao combined-query failure so a bounded public first-page search can
 return recognized results or a truthful empty result, without weakening safety or data boundaries.
 
+## Current follow-up
+
+The user requested investigation and repair of the later run-47 failure on 2026-08-28. The
+previous repair and delivery below are historical. Current scope, fresh validation limits and
+ownership are in `research/run47-followup-plan.md`. Git delivery was deferred during implementation;
+the user's subsequent `好的，请你 commit 并 push 吧。` now explicitly authorizes the scoped
+two-repository delivery described in `research/run47-delivery.md`. A full-batch retry and archival
+remain out of scope. Reuse this task without replacing its earlier evidence.
+
 ## Background and Approval
 
 - Prior acceptance: baseline run 29 succeeded; combined run 34 (`龙田街道 投诉`) ended in

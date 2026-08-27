@@ -1,5 +1,23 @@
 # Execution Plan
 
+## Active run-47 follow-up
+
+The user now requests fixing the later failure. Use `research/run47-followup-plan.md` for the
+fresh evidence/test/live budget; all checked items and Git authorization below describe the
+earlier completed repair. Main coordinates one-term browser diagnostics; the implementer first
+reports the source seam without product edits, then implements only an evidenced local fix.
+Staging/commit/push were deferred during implementation and are now explicitly requested by the
+user; follow `research/run47-delivery.md` for this scoped delivery. Do not archive, change formal
+rules, include unrelated dirty work or continue the whole old batch.
+
+- [x] Observe the exact failed query and reproduce the existing zero-candidate/non-empty predicate.
+- [x] Identify external-only mature results as a demonstrated, distinct unsupported state.
+- [x] Add synthetic regression and prove red on unchanged source at Centaurus.
+- [x] Implement the strict last-read external-only exception and run remote regression gates.
+- [x] Independently review the scoped source/spec changes.
+- [x] Back up and verify one bounded real product query, then remove only its temporary rule.
+- [x] Record actual outcomes, preserved history and remaining limitations without Git delivery.
+
 ## Approval and Ownership
 
 - [x] User explicitly approved creation and implementation without another approval turn.

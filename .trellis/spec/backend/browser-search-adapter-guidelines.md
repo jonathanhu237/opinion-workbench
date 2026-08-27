@@ -83,7 +83,20 @@ SQLite adds `add_ts` and `last_modify_ts` and upserts by `content_id`.
   20 additional 250 ms waits (21 snapshots total), with trusted-origin checks before and after every
   read. This is bounded page-readiness observation, not navigation/search retry or a wall-clock
   deadline. Malformed/ambiguous states, login/challenge and unsafe navigation stop immediately;
-  pending-budget exhaustion is a structure error, never empty success. Cancellation propagates.
+  unknown pending-budget exhaustion is a structure error, never empty success. Cancellation propagates.
+- Toutiao's internal `external_only_complete` boolean distinguishes a proven mature external-only
+  result page from unknown zero candidates. Require one visible main column, zero candidates,
+  one or more visible `.cs-header` elements with exactly one non-auxiliary visible title anchor
+  each, one visible main `.cs-pagination`, and no visible main/descendant loading/`aria-busy=true`
+  marker. Each title must begin at an official `so`/`sou` search-jump URL and unwrap offline in at
+  most two layers to an ordinary external HTTP(S) URL without credentials or a non-default port.
+  Missing/unknown/official/unsafe titles and direct external links cannot prove this state. Exclude
+  only the known anchorless `.cs-header-with-fb` heading whose compact text is exactly `相关搜索`;
+  unknown anchorless headers still veto. Sidebar evidence and related-search links outside headers
+  do not count. Accept an empty collection only
+  on the last existing readiness read; later official candidates take priority. Return no external
+  record and make no request to its destination. A missing/non-boolean flag or zero-main/true-flag
+  is malformed. This changes no public protocol, target allowlist, navigation or wait budget.
 - Extract only visible candidate anchors plus a bounded nearby card container. Optional snippet/publisher/time extraction must prove that the selected container is at most 2,000 visible characters. Do not capture raw HTML or page-wide text as a result record.
 
 #### URLs and data
@@ -114,6 +127,7 @@ SQLite adds `add_ts` and `last_modify_ts` and upserts by `content_id`.
 | HTTP 403/429 or mandatory login wall during search | Stop without refresh, retry, or fallback |
 | Results present | Normalize, allowlist, deduplicate, apply the hard limit, and store |
 | Recognized empty state | Return an empty result list successfully |
+| Strict Toutiao external-only completion on the last readiness read | Return zero collected Toutiao items; never follow or store external links |
 | Coherent Toutiao pending DOM with neither result nor empty state | Reread within the fixed readiness budget; exhaustion raises a structure-change error |
 | Malformed/ambiguous DOM or unsafe page origin | Raise a structure-change error immediately |
 | Redirect exceeds maximum depth, target is external, scheme is invalid, or port is non-default | Reject the result without network follow-up |
@@ -137,7 +151,9 @@ SQLite adds `add_ts` and `last_modify_ts` and upserts by `content_id`.
 7. DOM fixtures: normal result, missing optional fields, bounded ancestor, recognized empty page, mandatory login, challenge, and structure drift.
    For Toutiao, include real offline delayed-render fixtures (with explicit UTF-8 encoding), exact
    21-read/20-additional-wait exhaustion, early success, immediate safety/malformed stops,
-   pre/post-read origin checks and cancellation with owned-page-only cleanup. Browser fixtures must
+   pre/post-read origin checks and cancellation with owned-page-only cleanup. Include strict
+   external-only DOM evidence, malformed/unsafe/loading/sidebar near misses, last-read completion
+   and late official candidates winning over provisional external-only observations. Browser fixtures must
    actually run with a detected executable or the validated test-only `TEST_CHROMIUM_EXECUTABLE`.
 8. URL table: one/two redirect layers, excess nesting, current/legacy paths, external host, credentials, invalid scheme, default/non-default ports, fragments, and tracking keys.
 9. Privacy: model construction masks publisher labels and contains no forbidden identity or authentication fields.
