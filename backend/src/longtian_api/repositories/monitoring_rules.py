@@ -15,7 +15,8 @@ class MonitoringRuleRecord:
 
     id: int
     name: str
-    terms: tuple[str, ...]
+    monitoring_objects: tuple[str, ...]
+    issue_keywords: tuple[str, ...]
     enabled: bool
 
 
@@ -25,7 +26,8 @@ class PreparedMonitoringRule:
 
     name: str
     normalized_name: str
-    terms: tuple[tuple[str, str], ...]
+    monitoring_objects: tuple[tuple[str, str], ...]
+    issue_keywords: tuple[tuple[str, str], ...]
     enabled: bool
 
 
@@ -45,6 +47,22 @@ class MonitoringRuleRepositoryUnavailableError(MonitoringRuleRepositoryError):
     """SQLite could not complete an operation safely."""
 
 
+# One query gives both groups a consistent read snapshot without a Cartesian join.
+_RULE_SELECT = """
+    SELECT rules.id, rules.name, rules.enabled,
+           terms.value, terms.position, terms.term_group
+    FROM monitoring_rules AS rules
+    LEFT JOIN (
+      SELECT rule_id, value, position, 'object' AS term_group
+      FROM monitoring_rule_terms
+      UNION ALL
+      SELECT rule_id, value, position, 'issue' AS term_group
+      FROM monitoring_rule_issue_terms
+    ) AS terms ON terms.rule_id = rules.id
+"""
+_RULE_ORDER = " ORDER BY rules.id ASC, terms.term_group ASC, terms.position ASC"
+
+
 class MonitoringRuleRepository:
     """Own monitoring-rule SQL, transactions, and deterministic assembly."""
 
@@ -59,35 +77,10 @@ class MonitoringRuleRepository:
             connection = self._database.connect()
             try:
                 if enabled is None:
-                    rows = connection.execute(
-                        """
-                        SELECT
-                          rules.id,
-                          rules.name,
-                          rules.enabled,
-                          terms.value,
-                          terms.position
-                        FROM monitoring_rules AS rules
-                        LEFT JOIN monitoring_rule_terms AS terms
-                          ON terms.rule_id = rules.id
-                        ORDER BY rules.id ASC, terms.position ASC
-                        """
-                    ).fetchall()
+                    rows = connection.execute(_RULE_SELECT + _RULE_ORDER).fetchall()
                 else:
                     rows = connection.execute(
-                        """
-                        SELECT
-                          rules.id,
-                          rules.name,
-                          rules.enabled,
-                          terms.value,
-                          terms.position
-                        FROM monitoring_rules AS rules
-                        LEFT JOIN monitoring_rule_terms AS terms
-                          ON terms.rule_id = rules.id
-                        WHERE rules.enabled = ?
-                        ORDER BY rules.id ASC, terms.position ASC
-                        """,
+                        _RULE_SELECT + " WHERE rules.enabled = ?" + _RULE_ORDER,
                         (int(enabled),),
                     ).fetchall()
                 return _assemble_records(rows)
@@ -116,7 +109,7 @@ class MonitoringRuleRepository:
             rule_id = cursor.lastrowid
             if rule_id is None:
                 raise sqlite3.DatabaseError("SQLite did not return an inserted rule ID")
-            _insert_terms(connection, rule_id, rule.terms)
+            _insert_terms(connection, rule_id, rule)
             return _read_record(connection, rule_id)
 
     def replace(
@@ -145,7 +138,10 @@ class MonitoringRuleRepository:
             connection.execute(
                 "DELETE FROM monitoring_rule_terms WHERE rule_id = ?", (rule_id,)
             )
-            _insert_terms(connection, rule_id, rule.terms)
+            connection.execute(
+                "DELETE FROM monitoring_rule_issue_terms WHERE rule_id = ?", (rule_id,)
+            )
+            _insert_terms(connection, rule_id, rule)
             return _read_record(connection, rule_id)
 
     def delete(self, rule_id: int) -> None:
@@ -214,7 +210,7 @@ def _rule_exists(connection: sqlite3.Connection, rule_id: int) -> bool:
 def _insert_terms(
     connection: sqlite3.Connection,
     rule_id: int,
-    terms: Sequence[tuple[str, str]],
+    rule: PreparedMonitoringRule,
 ) -> None:
     connection.executemany(
         """
@@ -224,26 +220,27 @@ def _insert_terms(
         """,
         (
             (rule_id, value, normalized_value, position)
-            for position, (value, normalized_value) in enumerate(terms)
+            for position, (value, normalized_value) in enumerate(
+                rule.monitoring_objects
+            )
+        ),
+    )
+    connection.executemany(
+        """
+        INSERT INTO monitoring_rule_issue_terms (
+          rule_id, value, normalized_value, position
+        ) VALUES (?, ?, ?, ?)
+        """,
+        (
+            (rule_id, value, normalized_value, position)
+            for position, (value, normalized_value) in enumerate(rule.issue_keywords)
         ),
     )
 
 
 def _read_record(connection: sqlite3.Connection, rule_id: int) -> MonitoringRuleRecord:
     rows = connection.execute(
-        """
-        SELECT
-          rules.id,
-          rules.name,
-          rules.enabled,
-          terms.value,
-          terms.position
-        FROM monitoring_rules AS rules
-        LEFT JOIN monitoring_rule_terms AS terms
-          ON terms.rule_id = rules.id
-        WHERE rules.id = ?
-        ORDER BY terms.position ASC
-        """,
+        _RULE_SELECT + " WHERE rules.id = ?" + _RULE_ORDER,
         (rule_id,),
     ).fetchall()
     records = _assemble_records(rows)
@@ -253,24 +250,26 @@ def _read_record(connection: sqlite3.Connection, rule_id: int) -> MonitoringRule
 
 
 def _assemble_records(rows: Sequence[sqlite3.Row]) -> tuple[MonitoringRuleRecord, ...]:
-    collected: dict[int, tuple[str, bool, list[str]]] = {}
+    collected: dict[int, tuple[str, bool, list[str], list[str]]] = {}
     for row in rows:
         rule_id = int(row["id"])
         if rule_id not in collected:
-            collected[rule_id] = (str(row["name"]), bool(row["enabled"]), [])
+            collected[rule_id] = (str(row["name"]), bool(row["enabled"]), [], [])
         term = row["value"]
         if term is not None:
-            collected[rule_id][2].append(str(term))
+            group_index = 2 if row["term_group"] == "object" else 3
+            collected[rule_id][group_index].append(str(term))
 
     records: list[MonitoringRuleRecord] = []
-    for rule_id, (name, enabled, terms) in collected.items():
-        if not terms:
+    for rule_id, (name, enabled, objects, issues) in collected.items():
+        if not objects:
             raise sqlite3.DatabaseError("Monitoring rule has no terms")
         records.append(
             MonitoringRuleRecord(
                 id=rule_id,
                 name=name,
-                terms=tuple(terms),
+                monitoring_objects=tuple(objects),
+                issue_keywords=tuple(issues),
                 enabled=enabled,
             )
         )

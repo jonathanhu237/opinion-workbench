@@ -4,6 +4,7 @@ from typing import Annotated
 
 from fastapi import Depends, Request
 
+from longtian_api.services.ai_settings import AISettingsService
 from longtian_api.services.monitoring_rules import MonitoringRuleService
 from longtian_api.services.platform_connections import PlatformConnectionService
 from longtian_api.services.search_batches import SearchBatchService
@@ -46,3 +47,11 @@ def get_search_batch_service(request: Request) -> SearchBatchService:
 
 
 SearchBatchServiceDep = Annotated[SearchBatchService, Depends(get_search_batch_service)]
+
+
+def get_ai_settings_service(request: Request) -> AISettingsService:
+    """Retrieve the single owner of configuration and AI-operation admission."""
+    return request.app.state.ai_settings_service
+
+
+AISettingsServiceDep = Annotated[AISettingsService, Depends(get_ai_settings_service)]

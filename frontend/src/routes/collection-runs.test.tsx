@@ -63,6 +63,8 @@ vi.mock('@/lib/api/search-runs', async (importOriginal) => {
 const rule: MonitoringRule = {
   id: 1,
   name: '龙田街道及四个社区',
+  monitoring_objects: ['龙田街道', '竹坑社区'],
+  issue_keywords: [],
   terms: ['龙田街道', '竹坑社区'],
   enabled: true,
 }
@@ -253,6 +255,62 @@ describe('multi-platform collection routes', () => {
       }),
     )
   })
+
+  it.each([
+    { objectCount: 2, issueCount: 10, effectiveCount: 20 },
+    { objectCount: 3, issueCount: 7, effectiveCount: 21 },
+  ])(
+    'counts $effectiveCount composed queries for the selector and execution limit',
+    async ({ objectCount, issueCount, effectiveCount }) => {
+      const user = userEvent.setup()
+      const objects = Array.from(
+        { length: objectCount },
+        (_, index) => `对象${index}`,
+      )
+      const issues = Array.from(
+        { length: issueCount },
+        (_, index) => `问题${index}`,
+      )
+      const composedRule: MonitoringRule = {
+        ...rule,
+        name: '组合数量边界',
+        monitoring_objects: objects,
+        issue_keywords: issues,
+        terms: objects.flatMap((object) =>
+          issues.map((issue) => `${object} ${issue}`),
+        ),
+      }
+      mockedFetchRules.mockResolvedValue({ rules: [composedRule] })
+      const { router } = renderRoute()
+
+      await user.click(
+        await screen.findByRole('combobox', { name: '监控规则' }),
+      )
+      await user.click(
+        await screen.findByRole('option', {
+          name: `组合数量边界（${effectiveCount} 个词）`,
+        }),
+      )
+      expect(mockedStartBatch).not.toHaveBeenCalled()
+      await user.click(screen.getByRole('button', { name: '开始采集' }))
+
+      if (effectiveCount === 20) {
+        await waitFor(() =>
+          expect(mockedStartBatch).toHaveBeenCalledExactlyOnceWith({
+            monitoring_rule_id: composedRule.id,
+            platforms: ['toutiao', 'wb', 'ks', 'dy', 'xhs'],
+            max_results_per_term: 10,
+          }),
+        )
+      } else {
+        expect(
+          await screen.findByText('这条规则超过 20 个搜索词，请拆分后再采集。'),
+        ).toBeVisible()
+        expect(mockedStartBatch).not.toHaveBeenCalled()
+        expect(router.state.location.pathname).toBe('/collection-runs')
+      }
+    },
+  )
 
   it('shows a nearby validation error when no platform is selected', async () => {
     const user = userEvent.setup()

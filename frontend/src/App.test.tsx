@@ -12,6 +12,7 @@ import kuaishouLogo from './assets/platforms/kuaishou.svg'
 import toutiaoLogo from './assets/platforms/toutiao.svg'
 import weiboLogo from './assets/platforms/weibo.svg'
 import xiaohongshuLogo from './assets/platforms/xiaohongshu.svg'
+import { fetchAISettings } from './lib/api/ai-settings'
 import {
   fetchHealth,
   HEALTH_SERVICE,
@@ -37,6 +38,11 @@ vi.mock('./lib/api/health', async (importOriginal) => {
     ...actual,
     fetchHealth: vi.fn(),
   }
+})
+
+vi.mock('./lib/api/ai-settings', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./lib/api/ai-settings')>()
+  return { ...actual, fetchAISettings: vi.fn() }
 })
 
 vi.mock('./lib/api/platform-connections', async (importOriginal) => {
@@ -78,6 +84,14 @@ const monitoringRulesResponse: MonitoringRulesResponse = {
     {
       id: 1,
       name: '龙田街道及四个社区',
+      monitoring_objects: [
+        '龙田街道',
+        '龙田社区',
+        '老坑社区',
+        '竹坑社区',
+        '南布社区',
+      ],
+      issue_keywords: [],
       terms: ['龙田街道', '龙田社区', '老坑社区', '竹坑社区', '南布社区'],
       enabled: true,
     },
@@ -134,6 +148,7 @@ function catalog(
 }
 
 const mockedFetchHealth = vi.mocked(fetchHealth)
+const mockedFetchAISettings = vi.mocked(fetchAISettings)
 const mockedFetchPlatformConnections = vi.mocked(fetchPlatformConnections)
 const mockedStartAttempt = vi.mocked(startPlatformConnectionAttempt)
 const mockedFetchMonitoringRules = vi.mocked(fetchMonitoringRules)
@@ -179,6 +194,12 @@ describe('Longtian public opinion application', () => {
     })
     window.matchMedia = defaultMatchMedia
     mockedFetchHealth.mockReset()
+    mockedFetchAISettings.mockReset().mockResolvedValue({
+      base_url: null,
+      model: null,
+      has_api_key: false,
+      revision: 0,
+    })
     mockedFetchPlatformConnections.mockReset()
     mockedStartAttempt.mockReset()
     mockedFetchMonitoringRules.mockReset()
@@ -208,7 +229,7 @@ describe('Longtian public opinion application', () => {
     expect(mockedFetchMonitoringRules).not.toHaveBeenCalled()
   })
 
-  it('keeps only the four real navigation destinations and marks them exactly', async () => {
+  it('keeps only the five real navigation destinations and marks them exactly', async () => {
     const user = userEvent.setup()
     const { router } = renderRoute()
 
@@ -218,12 +239,13 @@ describe('Longtian public opinion application', () => {
     ).toBeInTheDocument()
     const navigation = screen.getByRole('navigation', { name: '主导航' })
     const links = within(navigation).getAllByRole('link')
-    expect(links).toHaveLength(4)
+    expect(links).toHaveLength(5)
     expect(links.map((link) => link.textContent)).toEqual([
       '工作台',
       '平台账号',
       '监控规则',
       '采集任务',
+      'AI 配置',
     ])
     const workbenchLink = within(navigation).getByRole('link', {
       name: '工作台',
@@ -295,6 +317,18 @@ describe('Longtian public opinion application', () => {
     ).toHaveAttribute('aria-current', 'page')
     expect(screen.getByRole('main')).toHaveAccessibleName('采集任务')
     expect(screen.getByRole('main')).toHaveFocus()
+
+    await user.click(within(navigation).getByRole('link', { name: 'AI 配置' }))
+    expect(await screen.findByLabelText('API Key')).toBeVisible()
+    expect(router.state.location.pathname).toBe('/ai-settings')
+    expect(
+      screen.getByRole('heading', { name: 'AI 配置', level: 1 }),
+    ).toBeVisible()
+    expect(
+      within(navigation).getByRole('link', { name: 'AI 配置' }),
+    ).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByRole('main')).toHaveAccessibleName('AI 配置')
+    expect(screen.getByRole('main')).toHaveFocus()
   })
 
   it('offers a keyboard skip link to the named main content region', () => {
@@ -343,12 +377,13 @@ describe('Longtian public opinion application', () => {
       name: '主导航',
     })
     const links = within(navigation).getAllByRole('link')
-    expect(links).toHaveLength(4)
+    expect(links).toHaveLength(5)
     expect(links.map((link) => link.textContent)).toEqual([
       '工作台',
       '平台账号',
       '监控规则',
       '采集任务',
+      'AI 配置',
     ])
     expect(within(dialog).getAllByRole('separator')).toHaveLength(1)
     expect(within(dialog).queryByText('单机值守模式')).toBeNull()

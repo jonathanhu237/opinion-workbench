@@ -25,8 +25,10 @@ from longtian_api.services.search_runs import SearchRunService
 
 DEFAULT_RULE = {
     "id": 1,
-    "name": DEFAULT_RULE_NAME,
     "terms": list(DEFAULT_RULE_TERMS),
+    "name": DEFAULT_RULE_NAME,
+    "issue_keywords": [],
+    "monitoring_objects": list(DEFAULT_RULE_TERMS),
     "enabled": True,
 }
 INVALID_REQUEST = {"detail": {"code": "invalid_request", "message": "请求内容不正确。"}}
@@ -109,13 +111,19 @@ def test_crud_filtering_order_and_persistence_across_restart(tmp_path: Path) -> 
     with TestClient(_create_test_app(database_path)) as client:
         created = client.post(
             "/api/v1/monitoring-rules",
-            json={"name": "  重点地点  ", "terms": ["  坪山大道  ", "学校"]},
+            json={
+                "name": "  重点地点  ",
+                "issue_keywords": [],
+                "monitoring_objects": ["  坪山大道  ", "学校"],
+            },
         )
         assert created.status_code == 201
         assert created.json() == {
             "id": 2,
-            "name": "重点地点",
             "terms": ["坪山大道", "学校"],
+            "name": "重点地点",
+            "issue_keywords": [],
+            "monitoring_objects": ["坪山大道", "学校"],
             "enabled": True,
         }
 
@@ -123,15 +131,18 @@ def test_crud_filtering_order_and_persistence_across_restart(tmp_path: Path) -> 
             "/api/v1/monitoring-rules/2",
             json={
                 "name": "重点事件",
-                "terms": ["噪音扰民", "交通事故"],
+                "issue_keywords": [],
+                "monitoring_objects": ["噪音扰民", "交通事故"],
                 "enabled": False,
             },
         )
         assert replaced.status_code == 200
         assert replaced.json() == {
             "id": 2,
-            "name": "重点事件",
             "terms": ["噪音扰民", "交通事故"],
+            "name": "重点事件",
+            "issue_keywords": [],
+            "monitoring_objects": ["噪音扰民", "交通事故"],
             "enabled": False,
         }
 
@@ -162,28 +173,57 @@ def test_crud_filtering_order_and_persistence_across_restart(tmp_path: Path) -> 
     ("payload", "message"),
     [
         (
-            {"name": "   ", "terms": ["龙田街道"], "enabled": True},
+            {
+                "name": "   ",
+                "issue_keywords": [],
+                "monitoring_objects": ["龙田街道"],
+                "enabled": True,
+            },
             "请输入规则名称。",
         ),
         (
-            {"name": "规则", "terms": [], "enabled": True},
-            "请至少输入一个搜索词。",
+            {
+                "name": "规则",
+                "issue_keywords": [],
+                "monitoring_objects": [],
+                "enabled": True,
+            },
+            "请至少输入一个监控对象。",
         ),
         (
-            {"name": "规则", "terms": ["   "], "enabled": True},
-            "搜索词不能为空。",
+            {
+                "name": "规则",
+                "issue_keywords": [],
+                "monitoring_objects": ["   "],
+                "enabled": True,
+            },
+            "监控对象不能为空。",
         ),
         (
-            {"name": "名" * 81, "terms": ["词"], "enabled": True},
+            {
+                "name": "名" * 81,
+                "issue_keywords": [],
+                "monitoring_objects": ["词"],
+                "enabled": True,
+            },
             "规则名称不能超过 80 个字符。",
         ),
         (
-            {"name": "规则", "terms": ["词" * 101], "enabled": True},
-            "搜索词不能超过 100 个字符。",
+            {
+                "name": "规则",
+                "issue_keywords": [],
+                "monitoring_objects": ["词" * 101],
+                "enabled": True,
+            },
+            "监控对象不能超过 100 个字符。",
         ),
         (
-            {"name": "规则", "terms": [str(index) for index in range(101)]},
-            "每条监控规则最多包含 100 个搜索词。",
+            {
+                "name": "规则",
+                "issue_keywords": [],
+                "monitoring_objects": [str(index) for index in range(101)],
+            },
+            "每条监控规则最多包含 100 个监控对象。",
         ),
     ],
 )
@@ -205,14 +245,18 @@ def test_normalized_duplicate_terms_are_rejected_without_silent_deduplication(
     with TestClient(_create_test_app(tmp_path / "rules.sqlite3")) as client:
         response = client.post(
             "/api/v1/monitoring-rules",
-            json={"name": "字母规则", "terms": ["Ａ", " a "]},
+            json={
+                "name": "字母规则",
+                "issue_keywords": [],
+                "monitoring_objects": ["Ａ", " a "],
+            },
         )
 
     assert response.status_code == 422
     assert response.json() == {
         "detail": {
             "code": "duplicate_monitoring_rule_term",
-            "message": "同一条监控规则中不能包含重复关键词。",
+            "message": "监控对象不能重复，请检查后重试。",
         }
     }
 
@@ -224,14 +268,22 @@ def test_normalized_name_conflicts_on_create_and_update_are_atomic(
     with TestClient(_create_test_app(database_path)) as client:
         first = client.post(
             "/api/v1/monitoring-rules",
-            json={"name": " Ａbc ", "terms": ["第一个"]},
+            json={
+                "name": " Ａbc ",
+                "issue_keywords": [],
+                "monitoring_objects": ["第一个"],
+            },
         )
         assert first.status_code == 201
         assert first.json()["name"] == "Ａbc"
 
         conflict = client.post(
             "/api/v1/monitoring-rules",
-            json={"name": "abc", "terms": ["第二个"]},
+            json={
+                "name": "abc",
+                "issue_keywords": [],
+                "monitoring_objects": ["第二个"],
+            },
         )
         assert conflict.status_code == 409
         assert conflict.json() == {
@@ -243,11 +295,20 @@ def test_normalized_name_conflicts_on_create_and_update_are_atomic(
 
         other = client.post(
             "/api/v1/monitoring-rules",
-            json={"name": "另一条", "terms": ["原始关键词"]},
+            json={
+                "name": "另一条",
+                "issue_keywords": [],
+                "monitoring_objects": ["原始关键词"],
+            },
         ).json()
         update_conflict = client.put(
             f"/api/v1/monitoring-rules/{other['id']}",
-            json={"name": "ABC", "terms": ["替换关键词"], "enabled": False},
+            json={
+                "name": "ABC",
+                "issue_keywords": [],
+                "monitoring_objects": ["替换关键词"],
+                "enabled": False,
+            },
         )
         assert update_conflict.status_code == 409
         unchanged = client.get("/api/v1/monitoring-rules").json()["rules"][-1]
@@ -260,22 +321,42 @@ def test_normalized_name_conflicts_on_create_and_update_are_atomic(
         (
             "post",
             "/api/v1/monitoring-rules",
-            {"json": {"name": "规则", "terms": ["词"], "extra": "x"}},
+            {
+                "json": {
+                    "name": "规则",
+                    "issue_keywords": [],
+                    "monitoring_objects": ["词"],
+                    "extra": "x",
+                }
+            },
         ),
         (
             "post",
             "/api/v1/monitoring-rules",
-            {"json": {"name": 1, "terms": ["词"]}},
+            {"json": {"name": 1, "issue_keywords": [], "monitoring_objects": ["词"]}},
         ),
         (
             "post",
             "/api/v1/monitoring-rules",
-            {"json": {"name": "规则", "terms": "词"}},
+            {
+                "json": {
+                    "name": "规则",
+                    "issue_keywords": [],
+                    "monitoring_objects": "词",
+                }
+            },
         ),
         (
             "post",
             "/api/v1/monitoring-rules",
-            {"json": {"name": "规则", "terms": ["词"], "enabled": 1}},
+            {
+                "json": {
+                    "name": "规则",
+                    "issue_keywords": [],
+                    "monitoring_objects": ["词"],
+                    "enabled": 1,
+                }
+            },
         ),
         (
             "post",
@@ -285,7 +366,14 @@ def test_normalized_name_conflicts_on_create_and_update_are_atomic(
         (
             "put",
             "/api/v1/monitoring-rules/0",
-            {"json": {"name": "规则", "terms": ["词"], "enabled": True}},
+            {
+                "json": {
+                    "name": "规则",
+                    "issue_keywords": [],
+                    "monitoring_objects": ["词"],
+                    "enabled": True,
+                }
+            },
         ),
         (
             "delete",
@@ -321,7 +409,8 @@ def test_missing_rule_has_stable_404(
     if method == "put":
         request_options["json"] = {
             "name": "规则",
-            "terms": ["关键词"],
+            "issue_keywords": [],
+            "monitoring_objects": ["关键词"],
             "enabled": True,
         }
     with TestClient(_create_test_app(tmp_path / "rules.sqlite3")) as client:
@@ -359,7 +448,8 @@ def test_failed_term_replacement_rolls_back_entire_rule_and_sanitizes_storage_er
             "/api/v1/monitoring-rules/1",
             json={
                 "name": "不应保存的名称",
-                "terms": ["用户输入-sentinel"],
+                "issue_keywords": [],
+                "monitoring_objects": ["用户输入-sentinel"],
                 "enabled": False,
             },
         )
@@ -434,7 +524,9 @@ def test_enabled_service_boundary_preserves_term_order(tmp_path: Path) -> None:
     service = MonitoringRuleService(database_path=database_path)
     service.initialize()
     service.create_rule(
-        MonitoringRuleCreate(name="已停用规则", terms=["第二", "第一"], enabled=False)
+        MonitoringRuleCreate(
+            name="已停用规则", monitoring_objects=["第二", "第一"], enabled=False
+        )
     )
 
     enabled = service.list_enabled()
@@ -475,12 +567,21 @@ def test_openapi_documents_monitoring_rule_contracts(tmp_path: Path) -> None:
             ] == {"$ref": "#/components/schemas/MonitoringRuleErrorResponse"}
 
 
-def test_rule_crud_never_launches_the_platform_worker(tmp_path: Path) -> None:
+def test_rule_crud_never_launches_the_platform_worker(
+    tmp_path: Path, monkeypatch
+) -> None:
     launch_calls: list[tuple[tuple[str, ...], Path]] = []
 
     async def fail_if_launched(command: tuple[str, ...], cwd: Path):
         launch_calls.append((command, cwd))
         raise AssertionError("Monitoring rules must not launch a browser worker")
+
+    async def fail_if_model_called(*_args, **_kwargs):
+        raise AssertionError("Monitoring rules must not call a model")
+
+    monkeypatch.setattr(
+        "longtian_api.services.ai_client.AIClient.complete_text", fail_if_model_called
+    )
 
     platform_service = PlatformConnectionService(process_launcher=fail_if_launched)
     with TestClient(
@@ -493,9 +594,32 @@ def test_rule_crud_never_launches_the_platform_worker(tmp_path: Path) -> None:
         assert (
             client.post(
                 "/api/v1/monitoring-rules",
-                json={"name": "独立规则", "terms": ["独立关键词"]},
+                json={
+                    "name": "独立规则",
+                    "issue_keywords": ["问题"],
+                    "monitoring_objects": ["独立关键词"],
+                },
             ).status_code
             == 201
         )
+        assert (
+            client.put(
+                "/api/v1/monitoring-rules/2",
+                json={
+                    "name": "保存规则",
+                    "monitoring_objects": ["甲", "乙"],
+                    "issue_keywords": ["问题一", "问题二"],
+                    "enabled": False,
+                },
+            ).status_code
+            == 200
+        )
+        assert client.get("/api/v1/monitoring-rules").json()["rules"][-1]["terms"] == [
+            "甲 问题一",
+            "甲 问题二",
+            "乙 问题一",
+            "乙 问题二",
+        ]
+        assert client.delete("/api/v1/monitoring-rules/2").status_code == 204
 
     assert launch_calls == []

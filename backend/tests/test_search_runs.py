@@ -407,6 +407,73 @@ def _wait_for_terminal(client: TestClient, run_id: int) -> dict[str, object]:
     raise AssertionError("search run did not become terminal")
 
 
+def test_composed_run_terms_are_frozen_and_deduplication_is_unchanged(
+    tmp_path: Path,
+) -> None:
+    worker = FakeSearchWorker()
+    payload = {
+        "name": "组合规则",
+        "monitoring_objects": ["甲", "乙"],
+        "issue_keywords": ["噪音", "积水"],
+        "enabled": True,
+    }
+    terms = ["甲 噪音", "甲 积水", "乙 噪音", "乙 积水"]
+    with TestClient(_search_app(tmp_path / "composed.sqlite3", worker)) as client:
+        rule = client.post("/api/v1/monitoring-rules", json=payload).json()
+        first_response = client.post(
+            "/api/v1/search-runs",
+            json={"monitoring_rule_id": rule["id"], "platform": "wb"},
+        )
+        assert first_response.status_code == 202
+        first = _wait_for_terminal(client, first_response.json()["id"])
+        assert first["terms"] == terms
+        assert first["new_count"] == 1
+        assert worker.calls[0][2] == tuple(terms)
+        assert (
+            client.put(
+                f"/api/v1/monitoring-rules/{rule['id']}",
+                json={
+                    **payload,
+                    "monitoring_objects": ["新 完整短语"],
+                    "issue_keywords": [],
+                },
+            ).status_code
+            == 200
+        )
+        second_response = client.post(
+            "/api/v1/search-runs",
+            json={"monitoring_rule_id": rule["id"], "platform": "wb"},
+        )
+        second = _wait_for_terminal(client, second_response.json()["id"])
+        assert second["terms"] == ["新 完整短语"]
+        assert second["repeated_count"] == 1
+        assert client.get(f"/api/v1/search-runs/{first['id']}").json()["terms"] == terms
+        assert client.get(f"/api/v1/search-runs/{first['id']}/results").json()[
+            "results"
+        ][0]["matched_terms"] == [terms[0]]
+
+
+def test_single_run_accepts_twenty_generated_queries(tmp_path: Path) -> None:
+    worker = FakeSearchWorker(outcome="completed_empty", emit_item=False)
+    with TestClient(_search_app(tmp_path / "composed-limit.sqlite3", worker)) as client:
+        rule = client.post(
+            "/api/v1/monitoring-rules",
+            json={
+                "name": "二十个组合",
+                "monitoring_objects": ["甲", "乙"],
+                "issue_keywords": [str(index) for index in range(10)],
+            },
+        ).json()
+        response = client.post(
+            "/api/v1/search-runs",
+            json={"monitoring_rule_id": rule["id"], "platform": "wb"},
+        )
+        assert response.status_code == 202
+        result = _wait_for_terminal(client, response.json()["id"])
+        assert result["term_count"] == 20
+        assert worker.calls[0][2] == tuple(rule["terms"])
+
+
 def test_http_search_vertical_slice_is_non_blocking_durable_and_deduplicated(
     tmp_path: Path,
 ) -> None:
@@ -712,7 +779,8 @@ def test_http_search_validation_and_error_contracts(tmp_path: Path) -> None:
             "/api/v1/monitoring-rules/1",
             json={
                 "name": "已停用",
-                "terms": ["龙田街道"],
+                "monitoring_objects": ["龙田街道"],
+                "issue_keywords": [],
                 "enabled": False,
             },
         )
@@ -728,7 +796,8 @@ def test_http_search_validation_and_error_contracts(tmp_path: Path) -> None:
             "/api/v1/monitoring-rules/1",
             json={
                 "name": "搜索词过多",
-                "terms": [f"搜索词{index}" for index in range(21)],
+                "monitoring_objects": [f"搜索词{index}" for index in range(7)],
+                "issue_keywords": ["问题一", "问题二", "问题三"],
                 "enabled": True,
             },
         )
@@ -1157,6 +1226,8 @@ def test_version_one_database_upgrades_without_reseeding_monitoring_rules(
     with database.connect() as connection:
         connection.execute("BEGIN IMMEDIATE")
         for table in (
+            "monitoring_rule_issue_terms",
+            "ai_settings",
             "search_batch_attempts",
             "search_batch_items",
             "search_batch_terms",

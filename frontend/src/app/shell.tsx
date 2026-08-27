@@ -2,6 +2,7 @@ import {
   CircleUserRound,
   ClipboardList,
   ListChecks,
+  Settings2,
   SlidersHorizontal,
 } from 'lucide-react'
 import { useEffect, useReducer, useRef } from 'react'
@@ -45,6 +46,7 @@ const pageTitles: Record<string, string> = {
   '/platform-accounts': '平台账号',
   '/monitoring-rules': '监控规则',
   '/collection-runs': '采集任务',
+  '/ai-settings': 'AI 配置',
 }
 
 function healthReducer(_state: HealthState, action: HealthAction): HealthState {
@@ -113,6 +115,12 @@ function PrimaryNavigation() {
       isActive:
         location.pathname.startsWith('/collection-runs') ||
         location.pathname.startsWith('/collection-batches'),
+    },
+    {
+      label: 'AI 配置',
+      to: '/ai-settings',
+      icon: Settings2,
+      isActive: location.pathname === '/ai-settings',
     },
   ] as const
 

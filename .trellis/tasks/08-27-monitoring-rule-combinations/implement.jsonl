@@ -1,0 +1,10 @@
+{"file":".trellis/spec/backend/monitoring-rules-guidelines.md","reason":"Existing storage, validation, CRUD and consumer invariants."}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Additive migration, transactions and test isolation."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Strict sanitized public errors and HTTP/code pairs."}
+{"file":".trellis/spec/backend/product-search-guidelines.md","reason":"Effective-query limit, immutable run scope and deduplication."}
+{"file":".trellis/spec/backend/batch-search-guidelines.md","reason":"Frozen batch scope and child execution must remain unchanged."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Reuse shadcn Base UI forms/dialogs, accessibility and theme."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"RHF, non-secret caching, explicit mutations and pending state."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Update strict API decoders, payloads and error validation together."}
+{"file":".trellis/tasks/08-27-monitoring-rule-combinations/research/current-rule-boundary.md","reason":"Source-backed ownership and full-replacement toggle regression."}
+{"file":".trellis/tasks/08-27-multimodal-opinion-analysis/prd.md","reason":"Parent R5/R10/R13 and accepted empty-issue behavior."}

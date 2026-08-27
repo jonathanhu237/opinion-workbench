@@ -2,7 +2,7 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { Pencil, Plus, Trash2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { Controller, useForm } from 'react-hook-form'
+import { Controller, useForm, useWatch } from 'react-hook-form'
 import { z } from 'zod'
 
 import {
@@ -49,32 +49,26 @@ import {
   type MonitoringRulesResponse,
 } from '@/lib/api/monitoring-rules'
 
-const MAX_RULE_NAME_LENGTH = 80
-const MAX_TERM_LENGTH = 100
-const MAX_TERMS_PER_RULE = 100
-
-function codePointLength(value: string) {
-  return Array.from(value).length
-}
-
-export function termsFromTextarea(value: string) {
-  return value
-    .split(/\r?\n/u)
-    .map((term) => term.trim())
-    .filter((term) => term.length > 0)
-}
-
-function normalizeForDuplicateCheck(value: string) {
-  return value.trim().normalize('NFKC').toLocaleLowerCase('zh-CN')
-}
+import {
+  codePointLength,
+  composeMonitoringTerms,
+  MAX_EXECUTABLE_TERMS,
+  MAX_RULE_NAME_LENGTH,
+  MAX_TERM_LENGTH,
+  MAX_TERMS_PER_RULE,
+  normalizeForDuplicateCheck,
+  termsFromTextarea,
+  trimRuleValue,
+} from '@/lib/monitoring-rule-composition'
 
 const ruleEditorSchema = z
   .object({
     name: z.string(),
-    termsText: z.string(),
+    monitoringObjectsText: z.string(),
+    issueKeywordsText: z.string(),
   })
   .superRefine((values, context) => {
-    const name = values.name.trim()
+    const name = trimRuleValue(values.name)
     if (name.length === 0) {
       context.addIssue({
         code: 'custom',
@@ -89,37 +83,68 @@ const ruleEditorSchema = z
       })
     }
 
-    const terms = termsFromTextarea(values.termsText)
-    if (terms.length === 0) {
+    const objects = termsFromTextarea(values.monitoringObjectsText)
+    const issues = termsFromTextarea(values.issueKeywordsText)
+    if (objects.length === 0) {
       context.addIssue({
         code: 'custom',
-        path: ['termsText'],
-        message: '请至少输入一个搜索词。',
+        path: ['monitoringObjectsText'],
+        message: '请至少输入一个监控对象。',
       })
       return
     }
-    if (terms.length > MAX_TERMS_PER_RULE) {
+    for (const [path, label, terms] of [
+      ['monitoringObjectsText', '监控对象', objects],
+      ['issueKeywordsText', '舆情关键词', issues],
+    ] as const) {
+      if (terms.length > MAX_TERMS_PER_RULE) {
+        context.addIssue({
+          code: 'custom',
+          path: [path],
+          message: `${label}最多包含 ${MAX_TERMS_PER_RULE} 项。`,
+        })
+      }
+      if (terms.some((term) => codePointLength(term) > MAX_TERM_LENGTH)) {
+        context.addIssue({
+          code: 'custom',
+          path: [path],
+          message: `每个${label}不能超过 ${MAX_TERM_LENGTH} 个字符。`,
+        })
+      }
+      const normalized = terms.map(normalizeForDuplicateCheck)
+      if (new Set(normalized).size !== normalized.length) {
+        context.addIssue({
+          code: 'custom',
+          path: [path],
+          message: `${label}不能重复，请检查后重试。`,
+        })
+      }
+    }
+    const generated = composeMonitoringTerms(objects, issues)
+    const combinationPath =
+      issues.length > 0 ? 'issueKeywordsText' : 'monitoringObjectsText'
+    if (generated.count > MAX_TERMS_PER_RULE) {
       context.addIssue({
         code: 'custom',
-        path: ['termsText'],
-        message: `每条规则最多包含 ${MAX_TERMS_PER_RULE} 个搜索词。`,
+        path: [combinationPath],
+        message: `每条规则最多生成 ${MAX_TERMS_PER_RULE} 个搜索词，请减少监控对象或舆情关键词。`,
       })
     }
-
-    if (terms.some((term) => codePointLength(term) > MAX_TERM_LENGTH)) {
+    if (
+      generated.terms.some((term) => codePointLength(term) > MAX_TERM_LENGTH)
+    ) {
       context.addIssue({
         code: 'custom',
-        path: ['termsText'],
-        message: `每个搜索词不能超过 ${MAX_TERM_LENGTH} 个字符。`,
+        path: [combinationPath],
+        message: `生成的搜索词不能超过 ${MAX_TERM_LENGTH} 个字符，请缩短监控对象或舆情关键词。`,
       })
     }
-
-    const normalizedTerms = terms.map(normalizeForDuplicateCheck)
-    if (new Set(normalizedTerms).size !== normalizedTerms.length) {
+    const normalized = generated.terms.map(normalizeForDuplicateCheck)
+    if (new Set(normalized).size !== normalized.length) {
       context.addIssue({
         code: 'custom',
-        path: ['termsText'],
-        message: '同一条规则中不能包含重复搜索词。',
+        path: [combinationPath],
+        message: '生成的搜索词不能重复，请调整监控对象或舆情关键词。',
       })
     }
   })
@@ -170,9 +195,18 @@ function RuleEditorDialog({ editor, onClose, onSaved }: RuleEditorDialogProps) {
     mode: 'onBlur',
     defaultValues: {
       name: editingRule?.name ?? '',
-      termsText: editingRule?.terms.join('\n') ?? '',
+      monitoringObjectsText: editingRule?.monitoring_objects.join('\n') ?? '',
+      issueKeywordsText: editingRule?.issue_keywords.join('\n') ?? '',
     },
   })
+  const [objectsText, issuesText] = useWatch({
+    control: form.control,
+    name: ['monitoringObjectsText', 'issueKeywordsText'],
+  })
+  const preview = composeMonitoringTerms(
+    termsFromTextarea(objectsText),
+    termsFromTextarea(issuesText),
+  )
   const saveMutation = useMutation({
     mutationFn: (payload: MonitoringRulePayload) =>
       editingRule === null
@@ -183,8 +217,9 @@ function RuleEditorDialog({ editor, onClose, onSaved }: RuleEditorDialogProps) {
   const submit = form.handleSubmit(async (values) => {
     form.clearErrors('root.server')
     const payload: MonitoringRulePayload = {
-      name: values.name.trim(),
-      terms: termsFromTextarea(values.termsText),
+      name: trimRuleValue(values.name),
+      monitoring_objects: termsFromTextarea(values.monitoringObjectsText),
+      issue_keywords: termsFromTextarea(values.issueKeywordsText),
       enabled: editingRule?.enabled ?? true,
     }
 
@@ -217,11 +252,17 @@ function RuleEditorDialog({ editor, onClose, onSaved }: RuleEditorDialogProps) {
         error.code === 'duplicate_monitoring_rule_term'
       ) {
         form.setError(
-          'termsText',
+          'monitoringObjectsText',
           { type: 'server', message: error.message },
           { shouldFocus: false },
         )
-        queueMicrotask(() => form.setFocus('termsText'))
+        if (payload.issue_keywords.length > 0) {
+          form.setError('issueKeywordsText', {
+            type: 'server',
+            message: error.message,
+          })
+        }
+        queueMicrotask(() => form.setFocus('monitoringObjectsText'))
         return
       }
 
@@ -231,7 +272,8 @@ function RuleEditorDialog({ editor, onClose, onSaved }: RuleEditorDialogProps) {
       })
     }
   })
-  const pending = saveMutation.isPending || form.formState.isSubmitting
+  // Keep inputs focusable during resolver validation so RHF can focus errors.
+  const pending = saveMutation.isPending
 
   return (
     <Dialog
@@ -252,7 +294,7 @@ function RuleEditorDialog({ editor, onClose, onSaved }: RuleEditorDialogProps) {
             {editingRule === null ? '新建监控规则' : '编辑监控规则'}
           </DialogTitle>
           <DialogDescription id="rule-editor-description">
-            设置需要持续关注的搜索词。
+            分别填写监控对象和舆情关键词，保存前查看生成的搜索词。
           </DialogDescription>
         </DialogHeader>
 
@@ -283,35 +325,112 @@ function RuleEditorDialog({ editor, onClose, onSaved }: RuleEditorDialogProps) {
             />
 
             <Controller
-              name="termsText"
+              name="monitoringObjectsText"
               control={form.control}
               render={({ field, fieldState }) => (
                 <Field data-invalid={fieldState.invalid}>
-                  <FieldLabel htmlFor="rule-terms">搜索词</FieldLabel>
+                  <FieldLabel htmlFor="rule-objects">监控对象</FieldLabel>
                   <Textarea
                     {...field}
-                    id="rule-terms"
-                    rows={7}
-                    className="min-h-36 resize-y"
+                    id="rule-objects"
+                    rows={4}
+                    className="min-h-24 resize-y"
                     placeholder={'龙田街道\n龙田社区\n老坑社区'}
                     aria-invalid={fieldState.invalid}
                     aria-describedby={
                       fieldState.error
-                        ? 'rule-terms-description rule-terms-error'
-                        : 'rule-terms-description'
+                        ? 'rule-objects-description rule-objects-error'
+                        : 'rule-objects-description'
                     }
                     disabled={pending}
                   />
-                  <FieldDescription id="rule-terms-description">
-                    每行输入一个搜索词，粘贴多行可批量添加。系统会分别搜索这些词。
+                  <FieldDescription id="rule-objects-description">
+                    每行一个，至少填写一项。名称或完整短语中的空格会保留。
                   </FieldDescription>
                   <FieldError
-                    id="rule-terms-error"
+                    id="rule-objects-error"
                     errors={[fieldState.error]}
                   />
                 </Field>
               )}
             />
+
+            <Controller
+              name="issueKeywordsText"
+              control={form.control}
+              render={({ field, fieldState }) => (
+                <Field data-invalid={fieldState.invalid}>
+                  <FieldLabel htmlFor="rule-issues">
+                    舆情关键词（选填）
+                  </FieldLabel>
+                  <Textarea
+                    {...field}
+                    id="rule-issues"
+                    rows={3}
+                    className="min-h-20 resize-y"
+                    placeholder={'噪音扰民\n道路积水'}
+                    aria-invalid={fieldState.invalid}
+                    aria-describedby={
+                      fieldState.error
+                        ? 'rule-issues-description rule-issues-error'
+                        : 'rule-issues-description'
+                    }
+                    disabled={pending}
+                  />
+                  <FieldDescription id="rule-issues-description">
+                    每行一个，留空时只搜索监控对象；填写后与每个监控对象逐一组合。
+                  </FieldDescription>
+                  <FieldError
+                    id="rule-issues-error"
+                    errors={[fieldState.error]}
+                  />
+                </Field>
+              )}
+            />
+
+            <section
+              className="min-w-0 space-y-2"
+              aria-labelledby="rule-preview-title"
+            >
+              <h3 id="rule-preview-title" className="text-sm font-medium">
+                生成的搜索词 · 共 {preview.count} 个
+              </h3>
+              <p className="text-xs leading-5 text-muted-foreground">
+                按下列顺序分别搜索。组合表达搜索意图，不保证平台严格同时匹配。
+              </p>
+              {preview.count > MAX_TERMS_PER_RULE ? (
+                <p className="text-sm text-destructive">
+                  超过 {MAX_TERMS_PER_RULE}{' '}
+                  个，无法保存。请减少输入后查看完整预览。
+                </p>
+              ) : preview.count === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  填写监控对象后可查看预览。
+                </p>
+              ) : (
+                <div
+                  role="region"
+                  aria-label="生成的搜索词预览"
+                  tabIndex={0}
+                  className="max-h-48 overflow-y-auto rounded-md border border-border bg-muted/30 p-3 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                >
+                  <ol className="list-inside list-decimal space-y-1 text-sm leading-6">
+                    {preview.terms.map((term, index) => (
+                      <li key={index} className="break-all whitespace-pre-wrap">
+                        {term}
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              )}
+              {preview.count > MAX_EXECUTABLE_TERMS &&
+                preview.count <= MAX_TERMS_PER_RULE && (
+                  <p className="rounded-md border border-warning/20 bg-warning/8 p-3 text-sm leading-6 text-foreground">
+                    可保存，但每个平台一次最多采集 {MAX_EXECUTABLE_TERMS}{' '}
+                    个搜索词。请拆分规则后再采集。
+                  </p>
+                )}
+            </section>
 
             {form.formState.errors.root?.server?.message && (
               <p role="alert" className="text-sm text-destructive">
@@ -335,7 +454,7 @@ function RuleEditorDialog({ editor, onClose, onSaved }: RuleEditorDialogProps) {
             type="submit"
             form="rule-editor-form"
             className="min-h-11 sm:min-h-8"
-            disabled={pending}
+            disabled={pending || form.formState.isSubmitting}
           >
             {pending ? '保存中…' : '保存'}
           </Button>
@@ -358,7 +477,8 @@ function RuleRow({ rule, onEdit, onDelete, onStatusChanged }: RuleRowProps) {
     mutationFn: (enabled: boolean) =>
       updateMonitoringRule(rule.id, {
         name: rule.name,
-        terms: rule.terms,
+        monitoring_objects: rule.monitoring_objects,
+        issue_keywords: rule.issue_keywords,
         enabled,
       }),
     onSuccess: (savedRule) => {
@@ -386,17 +506,37 @@ function RuleRow({ rule, onEdit, onDelete, onStatusChanged }: RuleRowProps) {
             <h3 className="text-base leading-6 font-semibold break-words text-foreground">
               {rule.name}
             </h3>
-            <div className="mt-3 flex min-w-0 flex-wrap gap-2">
-              {rule.terms.map((term) => (
-                <Badge
-                  key={term}
-                  variant="outline"
-                  className="h-auto max-w-full min-w-0 border-border bg-background px-2.5 py-1 leading-5 font-normal break-all whitespace-normal text-foreground"
-                >
-                  {term}
-                </Badge>
-              ))}
-            </div>
+            <p className="mt-2 text-sm text-muted-foreground">
+              共 {rule.terms.length} 个搜索词
+            </p>
+            {[
+              { label: '监控对象', terms: rule.monitoring_objects },
+              { label: '舆情关键词', terms: rule.issue_keywords },
+            ].map((group) => (
+              <div key={group.label} className="mt-3 space-y-2">
+                <p className="text-xs text-muted-foreground">
+                  {group.label}
+                  {group.terms.length === 0 ? '：未设置，仅搜索监控对象' : ''}
+                </p>
+                <div className="flex min-w-0 flex-wrap gap-2">
+                  {group.terms.map((term) => (
+                    <Badge
+                      key={term}
+                      variant="outline"
+                      className="h-auto max-w-full min-w-0 border-border bg-background px-2.5 py-1 leading-5 font-normal break-all whitespace-normal text-foreground"
+                    >
+                      {term}
+                    </Badge>
+                  ))}
+                </div>
+              </div>
+            ))}
+            {rule.terms.length > MAX_EXECUTABLE_TERMS && (
+              <p className="mt-3 text-sm text-muted-foreground">
+                超过每个平台 {MAX_EXECUTABLE_TERMS}{' '}
+                个搜索词的采集上限，请拆分规则后再采集。
+              </p>
+            )}
           </div>
 
           <div className="flex min-h-11 shrink-0 items-center gap-3 sm:min-h-8">
@@ -524,7 +664,7 @@ export function MonitoringRules() {
             监控规则
           </h2>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-            设置需要持续关注的搜索词。每个搜索词会分别用于搜索。
+            设置监控对象和可选舆情关键词，预览组合后分别搜索。
           </p>
         </div>
         <Button
@@ -582,7 +722,7 @@ export function MonitoringRules() {
                   还没有监控规则
                 </p>
                 <p className="mt-2 text-sm text-muted-foreground">
-                  新建一条规则，添加需要持续关注的搜索词。
+                  新建一条规则，添加需要持续关注的监控对象。
                 </p>
                 <Button
                   type="button"

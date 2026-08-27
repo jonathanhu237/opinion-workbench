@@ -20,6 +20,18 @@ export const appRoutes: RouteObject[] = [
         element: <PlatformAccounts />,
       },
       {
+        path: 'ai-settings',
+        hydrateFallbackElement: (
+          <p role="status" className="text-sm text-muted-foreground">
+            正在加载 AI 配置…
+          </p>
+        ),
+        lazy: async () => {
+          const { AISettings } = await import('@/routes/ai-settings')
+          return { Component: AISettings }
+        },
+      },
+      {
         path: 'monitoring-rules',
         hydrateFallbackElement: (
           <p role="status" className="text-sm text-muted-foreground">

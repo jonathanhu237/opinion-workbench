@@ -35,6 +35,7 @@ class PlannedSearchWorker:
     def __init__(self, outcomes: dict[str, list[str]]) -> None:
         self.outcomes = outcomes
         self.calls: list[str] = []
+        self.term_calls: list[tuple[str, ...]] = []
         self.counts: defaultdict[str, int] = defaultdict(int)
 
     async def search(
@@ -49,6 +50,7 @@ class PlannedSearchWorker:
     ) -> SearchWorkerResult:
         del request_id, max_results_per_term, on_item
         self.calls.append(platform)
+        self.term_calls.append(tuple(terms))
         await on_progress(0, len(terms))
         index = self.counts[platform]
         self.counts[platform] += 1
@@ -169,6 +171,8 @@ def test_version_six_upgrade_preserves_existing_runs_and_is_idempotent(
     runs.finish(existing.id, "completed_empty")
     with database.connect() as connection:
         for table in (
+            "monitoring_rule_issue_terms",
+            "ai_settings",
             "search_batch_attempts",
             "search_batch_items",
             "search_batch_terms",
@@ -182,7 +186,10 @@ def test_version_six_upgrade_preserves_existing_runs_and_is_idempotent(
 
     assert SearchRunRepository(database).get(existing.id).platform == "xhs"
     with database.connect() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 7
+        assert (
+            connection.execute("PRAGMA user_version").fetchone()[0]
+            == CURRENT_DATABASE_VERSION
+        )
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         assert (
             connection.execute("SELECT COUNT(*) FROM search_batches").fetchone()[0] == 0
@@ -301,6 +308,95 @@ def test_http_batch_orders_platforms_and_hides_attempts_from_primary_history(
         assert batch["terminal_item_count"] == 3
         assert client.get("/api/v1/search-runs?scope=standalone").json()["runs"] == []
         assert len(client.get("/api/v1/search-runs").json()["runs"]) == 3
+
+
+def test_composed_batch_snapshot_survives_rule_edits_and_deletion(
+    tmp_path: Path,
+) -> None:
+    worker = PlannedSearchWorker(
+        {"wb": ["manual_challenge_required", "completed_empty"]}
+    )
+    payload = {
+        "name": "组合批次",
+        "monitoring_objects": ["甲", "乙"],
+        "issue_keywords": ["噪音", "积水"],
+        "enabled": True,
+    }
+    terms = ["甲 噪音", "甲 积水", "乙 噪音", "乙 积水"]
+    with TestClient(_app(tmp_path / "composed-batch.sqlite3", worker)) as client:
+        rule = client.post("/api/v1/monitoring-rules", json=payload).json()
+        response = client.post(
+            "/api/v1/search-batches",
+            json={
+                "monitoring_rule_id": rule["id"],
+                "platforms": ["wb", "xhs"],
+                "max_results_per_term": 1,
+            },
+        )
+        assert response.status_code == 202
+        batch_id = response.json()["id"]
+        paused = _wait_for_batch(client, batch_id, {"paused_for_manual_action"})
+        assert paused["terms"] == terms
+        assert (
+            client.put(
+                f"/api/v1/monitoring-rules/{rule['id']}",
+                json={
+                    **payload,
+                    "monitoring_objects": ["修改后对象"],
+                    "issue_keywords": ["新问题"],
+                },
+            ).status_code
+            == 200
+        )
+        assert (
+            client.post(f"/api/v1/search-batches/{batch_id}/continue").status_code
+            == 202
+        )
+        completed = _wait_for_batch(client, batch_id, {"completed"})
+        assert completed["terms"] == terms
+        assert worker.calls == ["wb", "wb", "xhs"]
+        assert worker.term_calls == [tuple(terms)] * 3
+        runs = client.get("/api/v1/search-runs").json()["runs"]
+        assert len(runs) == 3
+        assert (
+            client.delete(f"/api/v1/monitoring-rules/{rule['id']}").status_code == 204
+        )
+        for run in runs:
+            detail = client.get(f"/api/v1/search-runs/{run['id']}").json()
+            assert detail["terms"] == terms
+            assert detail["rule_name"] == "组合批次"
+            assert detail["monitoring_rule_id"] is None
+        assert client.get(f"/api/v1/search-batches/{batch_id}").json()["terms"] == terms
+
+
+@pytest.mark.parametrize(
+    ("object_count", "issue_count", "status"), [(5, 4, 202), (7, 3, 422)]
+)
+def test_batch_admission_counts_effective_queries(
+    tmp_path: Path, object_count: int, issue_count: int, status: int
+) -> None:
+    worker = PlannedSearchWorker({})
+    with TestClient(_app(tmp_path / "batch-limit.sqlite3", worker)) as client:
+        rule = client.post(
+            "/api/v1/monitoring-rules",
+            json={
+                "name": "组合数量",
+                "monitoring_objects": [f"对象{index}" for index in range(object_count)],
+                "issue_keywords": [f"问题{index}" for index in range(issue_count)],
+            },
+        ).json()
+        response = client.post(
+            "/api/v1/search-batches",
+            json={"monitoring_rule_id": rule["id"], "platforms": ["wb"]},
+        )
+        assert response.status_code == status
+        if status == 202:
+            _wait_for_batch(client, response.json()["id"], {"completed"})
+            assert len(worker.term_calls[0]) == 20
+        else:
+            assert response.json()["detail"]["code"] == "too_many_search_terms"
+            assert worker.calls == []
+            assert client.get("/api/v1/search-batches").json()["batches"] == []
 
 
 def test_manual_challenge_pauses_and_continue_creates_a_new_attempt(
@@ -513,7 +609,8 @@ def test_batch_start_translates_rule_errors_without_creating_work(
             f"/api/v1/monitoring-rules/{current['id']}",
             json={
                 "name": current["name"],
-                "terms": current["terms"],
+                "monitoring_objects": current["monitoring_objects"],
+                "issue_keywords": current["issue_keywords"],
                 "enabled": False,
             },
         )

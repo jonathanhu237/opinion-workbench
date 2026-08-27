@@ -1,0 +1,8 @@
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"SQLite transaction, versioning and isolated test contracts."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Strict public errors and secret-safe diagnostics."}
+{"file":".trellis/spec/backend/ai-configuration-guidelines.md","reason":"Implemented AI settings, credential, lease and transport contract; verify against source and tests."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Secret-bearing forms bypass retained mutation variables and clear transient keys."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Full frozen frontend and browser acceptance gates."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Validate status/code contracts."}
+{"file":".trellis/tasks/08-27-multimodal-opinion-analysis/research/ai-configuration-boundary.md","reason":"No keys in public/browser persistence."}
+{"file":".trellis/tasks/08-27-multimodal-opinion-analysis/research/model-transport-contract.md","reason":"Bounded explicit model transport, media envelope and validated outputs."}

@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 MonitoringRuleErrorCode = Literal[
     "invalid_request",
@@ -20,7 +20,8 @@ class MonitoringRuleCreate(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     name: str
-    terms: list[str]
+    monitoring_objects: list[str]
+    issue_keywords: list[str] = Field(default_factory=list)
     enabled: bool = True
 
 
@@ -30,17 +31,20 @@ class MonitoringRuleReplace(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     name: str
-    terms: list[str]
+    monitoring_objects: list[str]
+    issue_keywords: list[str]
     enabled: bool
 
 
 class MonitoringRule(BaseModel):
     """Stable public projection without persistence internals."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     id: int
     name: str
+    monitoring_objects: tuple[str, ...]
+    issue_keywords: tuple[str, ...]
     terms: tuple[str, ...]
     enabled: bool
 

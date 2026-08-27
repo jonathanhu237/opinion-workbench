@@ -1,32 +1,54 @@
 import { z } from 'zod'
 
 import { getApiBaseUrl } from '@/lib/api/client'
+import {
+  codePointLength,
+  composeMonitoringTerms,
+  MAX_RULE_NAME_LENGTH,
+  MAX_TERM_LENGTH,
+  MAX_TERMS_PER_RULE,
+  trimRuleValue,
+} from '@/lib/monitoring-rule-composition'
 
 export const MONITORING_RULES_QUERY_KEY = ['monitoring-rules'] as const
-
-function codePointLength(value: string) {
-  return Array.from(value).length
-}
 
 const ruleNameSchema = z
   .string()
   .refine(
-    (value) => codePointLength(value) >= 1 && codePointLength(value) <= 80,
+    (value) =>
+      value === trimRuleValue(value) &&
+      codePointLength(value) >= 1 &&
+      codePointLength(value) <= MAX_RULE_NAME_LENGTH,
   )
 const ruleTermSchema = z
   .string()
   .refine(
-    (value) => codePointLength(value) >= 1 && codePointLength(value) <= 100,
+    (value) =>
+      value === trimRuleValue(value) &&
+      codePointLength(value) >= 1 &&
+      codePointLength(value) <= MAX_TERM_LENGTH,
   )
 
 const monitoringRuleSchema = z
   .object({
     id: z.number().int().positive(),
     name: ruleNameSchema,
-    terms: z.array(ruleTermSchema).min(1).max(100),
+    monitoring_objects: z.array(ruleTermSchema).min(1).max(MAX_TERMS_PER_RULE),
+    issue_keywords: z.array(ruleTermSchema).max(MAX_TERMS_PER_RULE),
+    terms: z.array(ruleTermSchema).min(1).max(MAX_TERMS_PER_RULE),
     enabled: z.boolean(),
   })
   .strict()
+  .refine((rule) => {
+    const generated = composeMonitoringTerms(
+      rule.monitoring_objects,
+      rule.issue_keywords,
+    )
+    return (
+      generated.count === rule.terms.length &&
+      generated.terms.every((term, index) => term === rule.terms[index])
+    )
+  })
 
 const monitoringRulesResponseSchema = z
   .object({
@@ -52,7 +74,8 @@ export type MonitoringRulesResponse = z.infer<
 
 export type MonitoringRulePayload = {
   name: string
-  terms: string[]
+  monitoring_objects: string[]
+  issue_keywords: string[]
   enabled: boolean
 }
 
@@ -94,7 +117,7 @@ const productErrorContracts = {
   },
   duplicate_monitoring_rule_term: {
     status: 422,
-    message: '同一条监控规则中不能包含重复搜索词。',
+    message: '监控对象、舆情关键词或生成的搜索词存在重复，请检查。',
   },
   monitoring_rule_name_conflict: {
     status: 409,

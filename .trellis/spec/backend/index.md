@@ -17,7 +17,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Directory Structure](./directory-structure.md) | Module organization and file layout | To fill |
 | [Database Guidelines](./database-guidelines.md) | Local SQLite ownership, queries, transactions, migrations, and tests | Active |
 | [Error Handling](./error-handling.md) | Stable product errors, validation, storage sanitization, and tests | Active |
-| [Monitoring Rules](./monitoring-rules-guidelines.md) | SQLite schema, service/API contracts, validation, and future collector boundary | Active |
+| [Monitoring Rules](./monitoring-rules-guidelines.md) | Ordered object/issue groups, query composition, v9 migration, API and collector contracts | Active |
 | [Quality Guidelines](./quality-guidelines.md) | Code standards, forbidden patterns | To fill |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logging, log levels | To fill |
 | [Browser Authentication State](./auth-state-guidelines.md) | Local credential persistence, safe fallback, and secret-safe logging | Active |
@@ -25,6 +25,7 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Platform Connection](./platform-connection-guidelines.md) | Authentication-only subprocess protocol, product state, and borrowed-Chrome ownership | Active |
 | [Product Search](./product-search-guidelines.md) | Borrowed-Chrome collection runs, product SQLite deduplication, API/worker contracts, and validation | Active |
 | [Batch Search](./batch-search-guidelines.md) | Durable multi-platform batches, serial ownership, attempts, recovery, and UI/API contracts | Active |
+| [AI Configuration](./ai-configuration-guidelines.md) | Single-model settings, protected credentials, exclusive operations, text testing, and secret-safe UI/API contracts | Active |
 
 ---
 

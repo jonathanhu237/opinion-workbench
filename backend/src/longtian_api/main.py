@@ -7,6 +7,8 @@ from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from longtian_api.api.router import api_router
+from longtian_api.database import Database
+from longtian_api.services.ai_settings import AISettingsService
 from longtian_api.services.monitoring_rules import MonitoringRuleService
 from longtian_api.services.platform_connections import PlatformConnectionService
 from longtian_api.services.search_batches import SearchBatchService
@@ -26,6 +28,8 @@ def create_app(
         [], MonitoringRuleService
     ] = MonitoringRuleService,
     search_run_service_factory: SearchRunServiceFactory | None = None,
+    ai_settings_service_factory: Callable[[Database], AISettingsService] | None = None,
+    ai_frontend_origins: tuple[str, ...] = (),
 ) -> FastAPI:
     """Create the product API and lifespan-owned local services."""
 
@@ -66,18 +70,30 @@ def create_app(
                 database=batch_database,
             )
             await run_in_threadpool(search_batch_service.initialize)
+            ai_settings_service = (
+                ai_settings_service_factory(batch_database)
+                if ai_settings_service_factory is not None
+                else AISettingsService(batch_database)
+            )
+            await run_in_threadpool(ai_settings_service.initialize)
             application.state.platform_connection_service = platform_service
             application.state.monitoring_rule_service = monitoring_rule_service
             application.state.search_run_service = search_run_service
             application.state.search_batch_service = search_batch_service
+            application.state.ai_settings_service = ai_settings_service
             await search_batch_service.resume_after_startup()
             yield
         finally:
-            if "search_batch_service" in locals():
-                await search_batch_service.shutdown()
-            if "search_run_service" in locals():
-                await search_run_service.shutdown()
-            await platform_service.shutdown()
+            try:
+                if "ai_settings_service" in locals():
+                    await ai_settings_service.shutdown()
+            finally:
+                # An AI client close failure must not skip existing cleanup.
+                if "search_batch_service" in locals():
+                    await search_batch_service.shutdown()
+                if "search_run_service" in locals():
+                    await search_run_service.shutdown()
+                await platform_service.shutdown()
 
     application = FastAPI(
         title="Longtian Public Opinion API",
@@ -88,6 +104,7 @@ def create_app(
         RequestValidationError,
         _request_validation_error_handler,
     )
+    application.state.ai_frontend_origins = ai_frontend_origins
     application.include_router(api_router)
     return application
 

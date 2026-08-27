@@ -4,7 +4,7 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
-CURRENT_DATABASE_VERSION = 7
+CURRENT_DATABASE_VERSION = 9
 DEFAULT_RULE_NAME = "龙田街道及四个社区"
 DEFAULT_RULE_TERMS = (
     "龙田街道",
@@ -73,6 +73,12 @@ class Database:
                 version = 6
             if version < 7:
                 _migrate_to_version_7(connection)
+                version = 7
+            if version < 8:
+                _migrate_to_version_8(connection)
+                version = 8
+            if version < 9:
+                _migrate_to_version_9(connection)
         finally:
             connection.close()
 
@@ -82,6 +88,69 @@ def _read_user_version(connection: sqlite3.Connection) -> int:
     if row is None:
         raise sqlite3.DatabaseError("SQLite did not return user_version")
     return int(row[0])
+
+
+def _migrate_to_version_9(connection: sqlite3.Connection) -> None:
+    """Preserve existing complete phrases as objects; issues start empty."""
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        version = _read_user_version(connection)
+        if version >= 9:
+            connection.execute("COMMIT")
+            return
+        if version != 8:
+            raise DatabaseVersionError("Unsupported database migration source version.")
+        # Match object storage: SQLite length() stops at NUL, so the shared
+        # service validator owns Unicode-codepoint length limits for both groups.
+        connection.execute(
+            """
+            CREATE TABLE monitoring_rule_issue_terms (
+              id               INTEGER PRIMARY KEY AUTOINCREMENT,
+              rule_id          INTEGER NOT NULL
+                               REFERENCES monitoring_rules(id) ON DELETE CASCADE,
+              value            TEXT NOT NULL,
+              normalized_value TEXT NOT NULL,
+              position         INTEGER NOT NULL CHECK (position BETWEEN 0 AND 99),
+              UNIQUE (rule_id, normalized_value),
+              UNIQUE (rule_id, position)
+            )
+            """
+        )
+        connection.execute("PRAGMA user_version = 9")
+        connection.execute("COMMIT")
+    except BaseException:
+        if connection.in_transaction:
+            connection.execute("ROLLBACK")
+        raise
+
+
+def _migrate_to_version_8(connection: sqlite3.Connection) -> None:
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        version = _read_user_version(connection)
+        if version >= 8:
+            connection.execute("COMMIT")
+            return
+        if version != 7:
+            raise DatabaseVersionError("Unsupported database migration source version.")
+        connection.execute(
+            """
+            CREATE TABLE ai_settings (
+              id         INTEGER PRIMARY KEY CHECK (id = 1),
+              base_url   TEXT NOT NULL CHECK (length(base_url) BETWEEN 1 AND 2048),
+              model      TEXT NOT NULL CHECK (length(model) BETWEEN 1 AND 200),
+              secret_ref TEXT NOT NULL CHECK (length(secret_ref) = 36),
+              revision   INTEGER NOT NULL CHECK (revision > 0),
+              updated_at TEXT NOT NULL
+            )
+            """
+        )
+        connection.execute("PRAGMA user_version = 8")
+        connection.execute("COMMIT")
+    except BaseException:
+        if connection.in_transaction:
+            connection.execute("ROLLBACK")
+        raise
 
 
 def _migrate_to_version_1(connection: sqlite3.Connection) -> None:

@@ -12,6 +12,14 @@ import {
 const rule: MonitoringRule = {
   id: 1,
   name: '龙田街道及四个社区',
+  monitoring_objects: [
+    '龙田街道',
+    '龙田社区',
+    '老坑社区',
+    '竹坑社区',
+    '南布社区',
+  ],
+  issue_keywords: [],
   terms: ['龙田街道', '龙田社区', '老坑社区', '竹坑社区', '南布社区'],
   enabled: true,
 }
@@ -59,6 +67,63 @@ describe('monitoring rules API boundary', () => {
     await expect(result).rejects.not.toThrow(/credential-sentinel/)
   })
 
+  it.each([
+    { ...rule, monitoring_objects: undefined },
+    { ...rule, issue_keywords: undefined },
+    { ...rule, issue_keywords: null },
+    {
+      ...rule,
+      monitoring_objects: ['甲', '乙'],
+      issue_keywords: ['噪音', '积水'],
+      terms: ['甲 噪音', '乙 噪音', '甲 积水', '乙 积水'],
+    },
+    { ...rule, issue_keywords: ['噪音'] },
+    { ...rule, monitoring_objects: [] },
+    { ...rule, monitoring_objects: [' '.repeat(3)], terms: [' '.repeat(3)] },
+  ])(
+    'rejects missing groups and inconsistent derived-query projections',
+    async (invalidRule) => {
+      fetchMock.mockResolvedValue(
+        new Response(JSON.stringify({ rules: [invalidRule] }), { status: 200 }),
+      )
+      await expect(
+        fetchMonitoringRules(new AbortController().signal),
+      ).rejects.toMatchObject({ code: 'invalid_response' })
+    },
+  )
+
+  it('decodes composed Unicode phrases with codepoint length limits', async () => {
+    const object = '𠮷'.repeat(98)
+    const composed = {
+      ...rule,
+      monitoring_objects: [object],
+      issue_keywords: ['水'],
+      terms: [`${object} 水`],
+    }
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ rules: [composed] }), { status: 200 }),
+    )
+    await expect(
+      fetchMonitoringRules(new AbortController().signal),
+    ).resolves.toEqual({ rules: [composed] })
+  })
+
+  it('preserves legacy BOM names and complete phrases accepted by Python strip', async () => {
+    const legacy = {
+      ...rule,
+      name: '\ufeff名称\ufeff',
+      monitoring_objects: ['\ufeff完整短语'],
+      issue_keywords: [],
+      terms: ['\ufeff完整短语'],
+    }
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ rules: [legacy] }), { status: 200 }),
+    )
+    await expect(
+      fetchMonitoringRules(new AbortController().signal),
+    ).resolves.toEqual({ rules: [legacy] })
+  })
+
   it('maps known product errors to bounded Chinese guidance', async () => {
     fetchMock.mockResolvedValue(
       new Response(
@@ -75,7 +140,8 @@ describe('monitoring rules API boundary', () => {
     await expect(
       createMonitoringRule({
         name: rule.name,
-        terms: rule.terms,
+        monitoring_objects: rule.monitoring_objects,
+        issue_keywords: rule.issue_keywords,
         enabled: true,
       }),
     ).rejects.toMatchObject({
@@ -101,7 +167,8 @@ describe('monitoring rules API boundary', () => {
     await expect(
       createMonitoringRule({
         name: rule.name,
-        terms: rule.terms,
+        monitoring_objects: rule.monitoring_objects,
+        issue_keywords: rule.issue_keywords,
         enabled: true,
       }),
     ).rejects.toMatchObject({
@@ -124,7 +191,8 @@ describe('monitoring rules API boundary', () => {
       )
     const payload = {
       name: createdRule.name,
-      terms: ['施工', '围挡'],
+      monitoring_objects: ['施工', '围挡'],
+      issue_keywords: [],
       enabled: true,
     }
 

@@ -42,6 +42,31 @@ Valid future candidates might include a cross-route upload queue or an unsaved m
 - URL-addressable filters remain in React Router even when they also participate in a query key.
 - Network policy, API base URL, and response validation belong in `lib/api/`, not in generic providers.
 
+### Secret-bearing forms
+
+The AI configuration form is a deliberate exception to using TanStack mutations for every write.
+Submit the typed API key via a direct API function so it never becomes retained mutation variables.
+RHF owns only the transient input; clear it after a submitted attempt, including failures. Do not
+persist credentials in browser storage, cached errors or form drafts. Cache only the validated
+non-secret settings projection. See [AI Configuration](../backend/ai-configuration-guidelines.md)
+for the API, saved-revision testing and endpoint-change contracts.
+
+### Monitoring-rule composition
+
+RHF owns the two editable textarea groups (`monitoring_objects`, optional `issue_keywords`). Derive
+the ordered query preview locally from watched form values; do not keep a second mutable preview
+state or request a preview endpoint. Edit and every full PUT (including enable/disable) retain the
+original groups. The server's read-only `terms` projection is for collectors and effective counts,
+not for reconstructing input groups. Update or invalidate the shared rule query after mutations. See
+[Monitoring Rules](../backend/monitoring-rules-guidelines.md) for query limits and strict payloads.
+
+Do not disable error-target inputs during RHF's local validation merely because `isSubmitting` is
+true: resolver completion can try to focus a still-disabled input. In this editor, inputs and dialog
+mutation locking use `saveMutation.isPending`; the submit button additionally uses `isSubmitting`
+to block repeated submissions. Test both first-invalid-field focus and disabled controls during an
+actual pending save. Verify focus with ordinary mouse/keyboard events, not only a synthetic
+automation click that may refocus its own target after the application's handler finishes.
+
 ### Sequencing exclusive browser operations
 
 Platform authentication uses one browser operation at a time. A page-level batch action must keep
