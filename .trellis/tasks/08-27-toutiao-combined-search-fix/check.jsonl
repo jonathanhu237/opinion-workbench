@@ -1,0 +1,5 @@
+{"file":".trellis/spec/backend/product-search-guidelines.md","reason":"No weakening of borrowed Chrome, outcomes, results or privacy"}
+{"file":".trellis/spec/backend/browser-search-adapter-guidelines.md","reason":"One navigation and bounded DOM-only readiness; strict main/URL scoping"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Safe errors and no diagnostic leaks"}
+{"file":".trellis/spec/infra/submodule-guidelines.md","reason":"Do not update parent to dirty or unreachable derivative"}
+{"file":".trellis/tasks/08-27-toutiao-combined-search-fix/research/live-preflight.md","reason":"Review against actual evidence, not an invented historical root cause"}

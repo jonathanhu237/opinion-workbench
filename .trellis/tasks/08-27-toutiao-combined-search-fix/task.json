@@ -1,0 +1,31 @@
+{
+  "id": "toutiao-combined-search-fix",
+  "name": "toutiao-combined-search-fix",
+  "title": "头条组合搜索修复",
+  "description": "修复已复现的头条页面延迟渲染误判，实测组合、重复及基础查询，保持安全边界、去重和历史兼容；历史 run 34 根因仍未证实。",
+  "status": "review",
+  "dev_type": "backend",
+  "scope": "toutiao-search-readiness",
+  "package": null,
+  "priority": "P2",
+  "creator": "jonathanhu237",
+  "assignee": "jonathanhu237",
+  "createdAt": "2026-08-27",
+  "completedAt": null,
+  "branch": null,
+  "base_branch": "main",
+  "worktree_path": null,
+  "commit": null,
+  "pr_url": null,
+  "subtasks": [],
+  "children": [],
+  "parent": null,
+  "relatedFiles": [
+    "third_party/MediaCrawler/media_platform/toutiao/client.py",
+    "third_party/MediaCrawler/tests/test_toutiao_parser.py",
+    ".trellis/spec/backend/product-search-guidelines.md",
+    ".trellis/spec/backend/browser-search-adapter-guidelines.md"
+  ],
+  "notes": "Implementation, independent review and live acceptance passed; 589 derivative and 353 backend tests passed again before delivery. Historical run 34 cause remains unknown; inherited lint baseline is documented. Temporary rule cleanup, old history/identity/first-seen preservation and original browser tabs were verified. User subsequently explicitly requested commit/push of this repair on existing main branches, derivative first then a clean remotely reachable parent pin. Preserve unrelated dirty work; no sorting/media/AI changes. Archival was not requested. Detailed evidence and delivery checkpoints are recorded under research.",
+  "meta": {}
+}

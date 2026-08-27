@@ -78,6 +78,12 @@ SQLite adds `add_ts` and `last_modify_ts` and upserts by `content_id`.
 - Navigate exactly once per page through the platform's normal public search entry and accept the platform's normal redirect. Do not swallow `ERR_ABORTED`, retry navigation, or fall back to a private/internal endpoint.
 - A recognized result, a recognized empty state, a safety challenge/block, and unknown structure are four distinct outcomes.
 - Search challenges, mandatory login walls, HTTP 403/429, and unknown structure fail closed without retries.
+- The shared Toutiao client may reread only a coherent pending DOM after its initial 1,500 ms wait:
+  zero or one visible main container, empty candidates, and no explicit empty state. Allow at most
+  20 additional 250 ms waits (21 snapshots total), with trusted-origin checks before and after every
+  read. This is bounded page-readiness observation, not navigation/search retry or a wall-clock
+  deadline. Malformed/ambiguous states, login/challenge and unsafe navigation stop immediately;
+  pending-budget exhaustion is a structure error, never empty success. Cancellation propagates.
 - Extract only visible candidate anchors plus a bounded nearby card container. Optional snippet/publisher/time extraction must prove that the selected container is at most 2,000 visible characters. Do not capture raw HTML or page-wide text as a result record.
 
 #### URLs and data
@@ -108,7 +114,8 @@ SQLite adds `add_ts` and `last_modify_ts` and upserts by `content_id`.
 | HTTP 403/429 or mandatory login wall during search | Stop without refresh, retry, or fallback |
 | Results present | Normalize, allowlist, deduplicate, apply the hard limit, and store |
 | Recognized empty state | Return an empty result list successfully |
-| Neither result nor empty state | Raise a structure-change error |
+| Coherent Toutiao pending DOM with neither result nor empty state | Reread within the fixed readiness budget; exhaustion raises a structure-change error |
+| Malformed/ambiguous DOM or unsafe page origin | Raise a structure-change error immediately |
 | Redirect exceeds maximum depth, target is external, scheme is invalid, or port is non-default | Reject the result without network follow-up |
 | Cookie injection/save fails | Raise or warn without the underlying credential-bearing exception text; never save unverified state |
 | SQLite record already exists | Update mutable fields and `last_modify_ts`; do not insert a duplicate |
@@ -128,6 +135,10 @@ SQLite adds `add_ts` and `last_modify_ts` and upserts by `content_id`.
 5. Manual challenge: repeated challenge polls log once, allow later success, and time out without saving or searching.
 6. Search navigation: one public `goto()` only; aborts and blocks propagate with no retry/fallback/evaluation.
 7. DOM fixtures: normal result, missing optional fields, bounded ancestor, recognized empty page, mandatory login, challenge, and structure drift.
+   For Toutiao, include real offline delayed-render fixtures (with explicit UTF-8 encoding), exact
+   21-read/20-additional-wait exhaustion, early success, immediate safety/malformed stops,
+   pre/post-read origin checks and cancellation with owned-page-only cleanup. Browser fixtures must
+   actually run with a detected executable or the validated test-only `TEST_CHROMIUM_EXECUTABLE`.
 8. URL table: one/two redirect layers, excess nesting, current/legacy paths, external host, credentials, invalid scheme, default/non-default ports, fragments, and tracking keys.
 9. Privacy: model construction masks publisher labels and contains no forbidden identity or authentication fields.
 10. Store: JSONL contract/in-run deduplication and isolated SQLite insert/update idempotency.

@@ -213,8 +213,16 @@ Search cancellation uses the search-command prefix with exact `command="cancel"`
 - The Toutiao PC parser requires exactly one visible `.s-result-list`, scans anchors only inside that
   main column, and never treats `.s-side-list` hot-board entries as keyword results. It groups anchors
   by unwrapped content identity, prefers the human title over image/duration/detail labels, and scopes
-  recognized empty text to that same main column. A missing or ambiguous main container fails as
-  `structure_changed`.
+  recognized empty text to that same main column. An ambiguous main container fails immediately as
+  `structure_changed`. The shared client waits 1,500 ms after its single navigation, then reads at
+  most 21 DOM snapshots with at most 20 additional 250 ms waits. Only a well-formed pending snapshot
+  (zero or one main container, no candidates, and no explicit empty state) may be read again. This is
+  a read-count/wait budget, not a wall-clock deadline; it never retries navigation or a search request.
+  Check the trusted official page origin before and after every read. Recognized results/empty
+  states terminate immediately, as do login/challenge, malformed states, unsafe navigation and
+  HTTP 403/429. Zero containers with candidates or an empty marker is inconsistent, not a pending
+  or successful state. Pending-budget exhaustion remains `structure_changed`, never empty success.
+  Cancellation propagates through waits/reads and retains task-owned-page cleanup.
 - The Weibo adapter fixes search type `61`, visits only the allowlisted mobile origin, requests at
   most `ceil(max_results_per_term / 10)` pages per term, and accepts only recognized card type 9
   mblogs with a stable non-empty ID and usable cleaned text. It strips HTML, decodes entities,
@@ -367,6 +375,13 @@ Chinese guidance.
    target/token validation, response-source non-interference, worker-owned fixed-source derivation,
    URL navigation, 300031, final-page outcomes, page handoff and cleanup without retaining any
    secret.
+   Toutiao readiness coverage includes delayed main-container/result rendering with the real DOM
+   script in an offline routed browser fixture, first/last permitted success, exact exhaustion,
+   immediate terminal/malformed outcomes, origin checks before/after each read, cancellation and
+   borrowed-tab preservation. Run parser/full-suite browser cases with an available Chromium;
+   `TEST_CHROMIUM_EXECUTABLE` is a test-only executable override, not production browser discovery.
+   Synthetic delayed-render failure proves the readiness defect, not an uncaptured historical
+   production failure's root cause.
 7. Frontend: runtime decoders, exact status/code pairs, start validation, active polling, cancel,
    history/deep link, new/repeated filters and counts, matched terms, safe original links, empty/error/
    login guidance, unchanged non-XHS anchors, XHS Shadcn open buttons, exact no-body request, all
