@@ -1,0 +1,21 @@
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Verify: Additive migration, transaction snapshots, settled writes and history preservation."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Verify: Constant public errors and strict API boundaries."}
+{"file":".trellis/spec/frontend/directory-structure.md","reason":"Verify: Route, shell and narrow HTTP client ownership."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Verify: Query/URL/form ownership and no mutation from polling."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Verify: Independent strict frontend decoding and status/code validation."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Verify: Existing Base UI/theme, accessible progress and frozen source citations."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Verify: All frozen frontend gates and isolated browser acceptance."}
+{"file":".trellis/tasks/08-28-collection-report-decoupling/research/migration-validation-map.md","reason":"Verify: Current schema baseline, legacy compatibility, provenance and Centaurus validation commands."}
+{"file":".trellis/spec/backend/ai-configuration-guidelines.md","reason":"Verify: Provider revision lease, credential isolation and explicit operation boundaries."}
+{"file":".trellis/spec/backend/ai-summary-guidelines.md","reason":"Verify: Preserve legacy media/usage/citation safeguards; parent design replaces only new workflow trigger/scope."}
+{"file":".trellis/spec/backend/media-projection-guidelines.md","reason":"Verify: Do not convert malformed or incomplete media into ready input."}
+{"file":".trellis/tasks/08-28-collection-report-decoupling/research/coupling-map.md","reason":"Verify: Existing coupling and reusable source identity without a duplicated content store."}
+{"file":".trellis/tasks/08-28-collection-report-decoupling/research/custom-analysis-prompts.md","reason":"Verify: Two independent editable instructions, neutral evidence and forward-only prompt changes."}
+{"file":".trellis/tasks/08-28-collection-report-decoupling/research/report-admission-boundaries.md","reason":"Verify: Confirmed stage-one bulk target and once-after-task report handoff."}
+{"file": ".trellis/spec/backend/initial-analysis-guidelines.md", "reason": "Shared A contract: immutable evidence/prompts, atomic claims, collection handoff and frontend intent."}
+{"file": ".trellis/tasks/08-29-automatic-text-reports/research/checked-dependency-notes.md", "reason": "Checked A event/lease/snapshot and isolated report acceptance seams."}
+{"file": ".trellis/tasks/08-28-collection-report-decoupling/research/acceptance-matrix.md", "reason": "Parent AC01-AC28 evidence map and remaining C integration gates."}
+{"file": ".trellis/spec/backend/collection-schedule-guidelines.md", "reason": "Durable B schedule, clock/lease/recovery, UI and A handoff contract."}
+{"file": ".trellis/tasks/08-29-automatic-text-reports/research/text-engine-contract.md", "reason": "Reviewed pure text-engine/core ownership and bounded call/reuse contract."}
+{"file": ".trellis/tasks/08-29-automatic-text-reports/research/backend-contract.md", "reason": "Exact report HTTP, frozen coverage, version/retry and paginated citation contract."}
+{"file": ".trellis/spec/backend/topic-report-guidelines.md", "reason": "Verify final C event, graph, no-media retry, usage, UI and recovery contract."}

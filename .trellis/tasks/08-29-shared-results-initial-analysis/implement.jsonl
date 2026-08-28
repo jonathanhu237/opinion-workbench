@@ -1,0 +1,16 @@
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Additive migration, transaction snapshots, settled writes and history preservation."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Constant public errors and strict API boundaries."}
+{"file":".trellis/spec/frontend/directory-structure.md","reason":"Route, shell and narrow HTTP client ownership."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Query/URL/form ownership and no mutation from polling."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Independent strict frontend decoding and status/code validation."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Existing Base UI/theme, accessible progress and frozen source citations."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"All frozen frontend gates and isolated browser acceptance."}
+{"file":".trellis/tasks/08-28-collection-report-decoupling/research/migration-validation-map.md","reason":"Current schema baseline, legacy compatibility, provenance and Centaurus validation commands."}
+{"file":".trellis/spec/backend/ai-configuration-guidelines.md","reason":"Provider revision lease, credential isolation and explicit operation boundaries."}
+{"file":".trellis/spec/backend/ai-summary-guidelines.md","reason":"Preserve legacy media/usage/citation safeguards; parent design replaces only new workflow trigger/scope."}
+{"file":".trellis/spec/backend/media-projection-guidelines.md","reason":"Do not convert malformed or incomplete media into ready input."}
+{"file":".trellis/tasks/08-28-collection-report-decoupling/research/coupling-map.md","reason":"Existing coupling and reusable source identity without a duplicated content store."}
+{"file":".trellis/tasks/08-28-collection-report-decoupling/research/custom-analysis-prompts.md","reason":"Two independent editable instructions, neutral evidence and forward-only prompt changes."}
+{"file":".trellis/tasks/08-28-collection-report-decoupling/research/report-admission-boundaries.md","reason":"Confirmed stage-one bulk target and once-after-task report handoff."}
+{"file":".trellis/spec/backend/product-search-guidelines.md","reason":"Collection deduplication, source-run membership and worker/API contracts."}
+{"file": ".trellis/spec/backend/initial-analysis-guidelines.md", "reason": "Shared A contract: immutable evidence/prompts, atomic claims, collection handoff and frontend intent."}

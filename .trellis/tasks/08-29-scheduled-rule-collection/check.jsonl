@@ -1,0 +1,14 @@
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Verify: Additive migration, transaction snapshots, settled writes and history preservation."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Verify: Constant public errors and strict API boundaries."}
+{"file":".trellis/spec/frontend/directory-structure.md","reason":"Verify: Route, shell and narrow HTTP client ownership."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Verify: Query/URL/form ownership and no mutation from polling."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Verify: Independent strict frontend decoding and status/code validation."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Verify: Existing Base UI/theme, accessible progress and frozen source citations."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Verify: All frozen frontend gates and isolated browser acceptance."}
+{"file":".trellis/tasks/08-28-collection-report-decoupling/research/migration-validation-map.md","reason":"Verify: Current schema baseline, legacy compatibility, provenance and Centaurus validation commands."}
+{"file":".trellis/spec/backend/monitoring-rules-guidelines.md","reason":"Verify: Preserve rule group/term limits, ordering and historical snapshots."}
+{"file":".trellis/spec/backend/batch-search-guidelines.md","reason":"Verify: Existing browser ownership, proof checkpoints and explicit manual recovery."}
+{"file":".trellis/spec/backend/product-search-guidelines.md","reason":"Verify: Collection deduplication, source-run membership and worker/API contracts."}
+{"file":".trellis/tasks/08-28-collection-report-decoupling/research/scheduling-boundaries.md","reason":"Verify: Approved fixed intervals, skip-busy policy and no offline catch-up."}
+{"file": ".trellis/spec/backend/initial-analysis-guidelines.md", "reason": "Shared A contract: immutable evidence/prompts, atomic claims, collection handoff and frontend intent."}
+{"file": ".trellis/spec/backend/collection-schedule-guidelines.md", "reason": "Durable B schedule, clock/lease/recovery, UI and A handoff contract."}
