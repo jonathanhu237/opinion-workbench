@@ -10,3 +10,5 @@
 {"file":".trellis/tasks/08-27-ai-opinion-summary/research/implementation-boundary.md","reason":"Check the approved integration slice without claiming five-platform live acceptance."}
 {"file":".trellis/spec/backend/media-projection-guidelines.md","reason":"Reject false-ready media and implicit title-only fallback."}
 {"file":".trellis/spec/backend/ai-summary-guidelines.md","reason":"Checked full-run summary, immutable analysis cache, strict model/UI boundaries and separate live-acceptance contract."}
+{"file":".trellis/tasks/08-27-ai-opinion-summary/research/douyin-media-repair.md","reason":"Check real-DOM readiness regressions, same-ID note rejection, unchanged media guards, and independently verified video-only repair scope."}
+{"file":".trellis/tasks/08-27-ai-opinion-summary/research/report-source-links.md","reason":"Verify paragraph hyperlink rendering, source identity and safety, XHS behavior, keyboard access and no new generation from presentation changes."}

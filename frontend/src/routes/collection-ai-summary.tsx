@@ -42,7 +42,10 @@ import {
 import { isActiveSearchRun, type SearchRunDetail } from '@/lib/api/search-runs'
 import { cn } from '@/lib/utils'
 import { CollectionSummaryConfirmation } from '@/routes/collection-summary-confirmation'
-import { formatLocalDate } from '@/routes/search-run-presenters'
+import {
+  formatLocalDate,
+  searchPlatformPresenters,
+} from '@/routes/search-run-presenters'
 
 const ANALYSIS_PAGE_SIZE = 10
 const summaryLabels = {
@@ -104,24 +107,37 @@ type SourceControls = {
 function SourceLink({
   source,
   disabled,
-  label = '打开原文',
+  citationNumber,
   controls,
 }: {
   source: AISummarySource
   disabled: boolean
-  label?: string
+  citationNumber?: number
   controls: SourceControls
 }) {
+  const label =
+    citationNumber === undefined
+      ? '打开原文'
+      : `原文 ${citationNumber} · ${searchPlatformPresenters[source.platform].label}`
+  const accessibleLabel =
+    citationNumber === undefined ? undefined : `${label}：${source.title}`
+  const title = citationNumber === undefined ? undefined : source.title
   if (source.platform !== 'xhs')
     return (
       <a
         className={cn(
           buttonVariants({ variant: 'link', size: 'sm' }),
           'h-auto min-h-8 justify-start px-0 text-left [overflow-wrap:anywhere] whitespace-normal',
+          citationNumber !== undefined &&
+            'ms-2 align-baseline whitespace-nowrap underline',
         )}
         href={source.content_url}
         target="_blank"
-        rel="noreferrer"
+        rel={
+          citationNumber === undefined ? 'noreferrer' : 'noopener noreferrer'
+        }
+        aria-label={accessibleLabel}
+        title={title}
       >
         {label}
         <ExternalLink className="shrink-0" aria-hidden />
@@ -130,13 +146,23 @@ function SourceLink({
   const pending =
     controls.openPending && controls.activeOpenResultId === source.result_id
   return (
-    <span className="inline-flex flex-col items-start">
+    <span
+      className={cn(
+        'inline-flex flex-col items-start',
+        citationNumber !== undefined && 'ms-2 max-w-full align-baseline',
+      )}
+    >
       <Button
         variant="link"
         size="sm"
-        className="h-auto min-h-8 px-0 text-left [overflow-wrap:anywhere] whitespace-normal"
+        className={cn(
+          'h-auto min-h-8 px-0 text-left [overflow-wrap:anywhere] whitespace-normal',
+          citationNumber !== undefined && 'whitespace-nowrap underline',
+        )}
         disabled={disabled || controls.openPending}
         aria-busy={pending}
+        aria-label={accessibleLabel}
+        title={title}
         onClick={() => controls.onOpen(source.result_id)}
       >
         {pending ? '正在打开…' : label}
@@ -630,27 +656,26 @@ export function CollectionAISummary({
                         {selected.document.overview}
                       </p>
                       {selected.document.items.map((paragraph, index) => (
-                        <div key={index} className="space-y-1">
-                          <p className="text-sm leading-7 [overflow-wrap:anywhere] whitespace-pre-wrap">
-                            {paragraph.text}
-                          </p>
-                          <div className="flex flex-col items-start gap-1">
-                            {paragraph.source_ids.map((id) => {
-                              const item = items.find(
-                                (entry) => entry.source.result_id === id,
-                              )
-                              return item ? (
-                                <SourceLink
-                                  key={id}
-                                  source={item.source}
-                                  disabled={active}
-                                  controls={controls}
-                                  label={`原文：${item.source.title}`}
-                                />
-                              ) : null
-                            })}
-                          </div>
-                        </div>
+                        <p
+                          key={index}
+                          className="text-sm leading-7 [overflow-wrap:anywhere] whitespace-pre-wrap"
+                        >
+                          {paragraph.text}
+                          {paragraph.source_ids.map((id) => {
+                            const item = items.find(
+                              (entry) => entry.source.result_id === id,
+                            )
+                            return item ? (
+                              <SourceLink
+                                key={id}
+                                source={item.source}
+                                disabled={active}
+                                controls={controls}
+                                citationNumber={item.position + 1}
+                              />
+                            ) : null
+                          })}
+                        </p>
                       ))}
                     </div>
                   )}

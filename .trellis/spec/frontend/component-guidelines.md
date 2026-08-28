@@ -45,6 +45,26 @@ Route pages are application-owned compositions. Generic administration primitive
 - Decorative artwork must be hidden from assistive technology; status and error messages use appropriate live regions.
 - All non-essential motion must respect `prefers-reduced-motion`.
 
+## Report source citations
+
+- `routes/collection-ai-summary.tsx` keeps citations inside the report paragraph,
+  using the existing `SourceLink` and shadcn link styling. Show a compact,
+  persistently underlined `原文 N · 平台`; the frozen item's `position + 1` supplies
+  a stable number for repeated references. Keep the full stored title in
+  `aria-label` and `title`, rather than repeating a long title block below prose.
+- Ordinary platform citations are semantic anchors to the validated frozen
+  `source.content_url`, with `target="_blank"` and `rel="noopener noreferrer"`.
+  XHS stays a link-styled Button invoking the existing stored-result action,
+  including pending, disabled and nearby feedback behavior. Never fabricate a
+  direct signed XHS URL or turn model-provided Markdown/HTML into navigation.
+- Omitting `citationNumber` preserves the analysis row's existing `打开原文`
+  presentation. Keep citation changes out of model prompts, saved documents and
+  generation state; displaying a historical report must not call the model.
+- Test paragraph placement, correct stored href/rel, repeated/multiple citations,
+  accessible names and keyboard operation, escaped prose, invalid citations and
+  XHS pending/error behavior. Check the actual report at its current viewport for
+  overflow and visible focus; do not claim live platform opening from mock tests.
+
 ## Responsive behavior
 
 - When JavaScript selects a component mode that CSS also controls, use the same media-query string

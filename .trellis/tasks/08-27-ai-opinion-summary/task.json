@@ -21,7 +21,7 @@
   "children": [],
   "parent": "08-27-multimodal-opinion-analysis",
   "relatedFiles": [],
-  "notes": "2026-08-28: approved manual full-run summary implemented and independently checked: backend596/frontend281 passed, isolated browser confirms mixed decisions, cache reuse, cancellation/history, no automatic calls. Consume checked media contract; separately authorized real-source/provider acceptance remains open, as does whole-five-platform media acceptance. No standalone screening, live paid call, user-runtime migration, commit/push/archive this round. See research/verification.md and integration-check.md.",
+  "notes": "2026-08-28: manual single-run summaries and inline source hyperlinks are implemented and independently checked. The Douyin acquisition repair passed 1126 derivative tests; frontend hyperlinks passed 288 tests. Real summary 6 analysed one complete video with audio and generated a text-only report using 2 requests / 13518 tokens; four note sources remained incomplete without model requests. Same-request replay was verified; cross-generation live paid reuse and broader platform-media acceptance remain open. Batch-wide reports are not implemented. The user requested commit/push of completed work; retain in_progress rather than archive incomplete acceptance. See research/verification.md, douyin-media-repair-check.md and report-source-links-check.md.",
   "meta": {
     "dependencies": [
       "ai-configuration",

@@ -12,3 +12,12 @@ Dependencies: checked AI configuration + platform-media enrichment contract. Sta
 7. Dispatch required Trellis check, update verified specs and report cross-child parent acceptance. Do not archive/commit/push without the user requesting the finish workflow.
 
 Risk points: full-run freeze, media/browser ownership, cache eligibility/source references, model prose/citations, shared configuration lease and additive schema. Rollback preserves all original records, completed evidence and generated summaries.
+
+2026-08-28 live follow-up: the user approved the narrow Douyin media repair after
+summaries 1/2 failed acquisition without provider calls. Follow
+`research/douyin-media-repair.md` before the next real acceptance. This authorizes
+the specified dependency repair, not broader platform or report feature changes.
+
+2026-08-28 subsequent UI follow-up: the user requested hyperlinks attached to the
+report. Follow `research/report-source-links.md` for this separate, presentation-only
+increment. Keep the prior media repair and saved summary 6 intact; no new model call.

@@ -13,3 +13,5 @@
 {"file":".trellis/tasks/08-27-ai-opinion-summary/research/implementation-boundary.md","reason":"Approved integration sequencing, ownership and explicit live-acceptance exclusions."}
 {"file":".trellis/spec/backend/media-projection-guidelines.md","reason":"Incomplete or unknown media must never be treated as complete AI input."}
 {"file":".trellis/spec/backend/ai-summary-guidelines.md","reason":"Preserve the implemented manual summary, stable source references, compatible reuse and no-auto-call contracts."}
+{"file":".trellis/tasks/08-27-ai-opinion-summary/research/douyin-media-repair.md","reason":"Subsequently authorized narrow video-readiness/CDN repair, exact-source evidence and bounded same-five live verification; note layouts remain unsupported."}
+{"file":".trellis/tasks/08-27-ai-opinion-summary/research/report-source-links.md","reason":"Latest approved presentation-only follow-up: compact recognizable paragraph hyperlinks from frozen sources, unchanged XHS action and zero new model calls."}

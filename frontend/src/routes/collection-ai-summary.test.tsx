@@ -345,10 +345,158 @@ describe('manual collection summaries', () => {
     expect(container.querySelector('script')).toBeNull()
     expect(container.querySelector('a[href="https://evil.example"]')).toBeNull()
     expect(
-      screen.getByRole('link', { name: /原文：测试街道道路情况/ }),
+      screen.getByRole('link', { name: '原文 1 · 抖音：测试街道道路情况' }),
     ).toHaveAttribute('href', itemFixture().source.content_url)
     expect(router.state.location.search).toContain('summary=4')
     expect(mockedStart).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    {
+      platform: 'dy',
+      platformName: '抖音',
+      contentId: '7512345678901234567',
+      contentType: 'video',
+      url: 'https://www.douyin.com/video/7512345678901234567',
+    },
+    {
+      platform: 'wb',
+      platformName: '微博',
+      contentId: '5012345678901234',
+      contentType: 'post',
+      url: 'https://m.weibo.cn/detail/5012345678901234',
+    },
+    {
+      platform: 'ks',
+      platformName: '快手',
+      contentId: '3xabc123',
+      contentType: 'video',
+      url: 'https://www.kuaishou.com/short-video/3xabc123',
+    },
+    {
+      platform: 'toutiao',
+      platformName: '今日头条',
+      contentId: '100',
+      contentType: 'article',
+      url: 'https://www.toutiao.com/article/100/',
+    },
+  ] as const)(
+    'attaches a compact underlined $platform citation to its report paragraph with the stored URL',
+    async ({ platform, platformName, contentId, contentType, url }) => {
+      mockedRun.mockResolvedValue({ ...run, platform })
+      const item = itemFixture({
+        source: {
+          ...itemFixture().source,
+          platform,
+          platform_content_id: contentId,
+          content_type: contentType,
+          content_url: url,
+        },
+      })
+      const summary = summaryFixture({ platform })
+      loadVersion(summary, [item])
+      const user = userEvent.setup()
+      renderRun('/collection-runs/70?summary=4')
+      const citation = await screen.findByRole('link', {
+        name: `原文 1 · ${platformName}：${item.source.title}`,
+      })
+      expect(citation).toBeVisible()
+      expect(citation).toHaveTextContent(`原文 1 · ${platformName}`)
+      expect(citation).not.toHaveTextContent(item.source.title)
+      expect(citation).toHaveAttribute('title', item.source.title)
+      expect(citation).toHaveAttribute('href', url)
+      expect(citation).toHaveAttribute('target', '_blank')
+      expect(citation).toHaveAttribute('rel', 'noopener noreferrer')
+      expect(citation).toHaveClass('underline')
+      expect(citation.closest('p')).toHaveTextContent(
+        '视频中可见路面积水，未能确认拍摄日期。',
+      )
+      expect(citation.closest('details')).toBeNull()
+      screen.getByRole('combobox', { name: '汇总版本' }).focus()
+      await user.tab()
+      expect(citation).toHaveFocus()
+      expect(mockedOpen).not.toHaveBeenCalled()
+      expect(mockedStart).not.toHaveBeenCalled()
+      expect(mockedCancel).not.toHaveBeenCalled()
+    },
+  )
+
+  it('keeps distinct frozen source numbers and keyboard order for multiple and repeated paragraph references', async () => {
+    const first = itemFixture()
+    const second = itemFixture({
+      id: 22,
+      position: 1,
+      source: {
+        ...first.source,
+        result_id: 12,
+        platform_content_id: '7512345678901234568',
+        content_url: 'https://www.douyin.com/video/7512345678901234568',
+        title: '测试街道另一处道路情况',
+      },
+    })
+    const summary = summaryFixture({
+      counts: { ...summaryFixture().counts, total: 2, relevant: 2 },
+      document: {
+        overview: '两条内容的测试汇总。',
+        items: [
+          { text: '两条内容均提及道路情况。', source_ids: [12, 11] },
+          { text: '第一条内容尚未确认拍摄日期。', source_ids: [11] },
+        ],
+      },
+    })
+    loadVersion(summary, [first, second])
+    const user = userEvent.setup()
+    renderRun('/collection-runs/70?summary=4')
+    const secondCitation = await screen.findByRole('link', {
+      name: `原文 2 · 抖音：${second.source.title}`,
+    })
+    const firstCitations = screen.getAllByRole('link', {
+      name: `原文 1 · 抖音：${first.source.title}`,
+    })
+    expect(firstCitations).toHaveLength(2)
+    expect(secondCitation.closest('p')).toBe(firstCitations[0].closest('p'))
+    expect(secondCitation.closest('p')).toHaveTextContent(
+      '两条内容均提及道路情况。',
+    )
+    expect(firstCitations[1].closest('p')).toHaveTextContent(
+      '第一条内容尚未确认拍摄日期。',
+    )
+    expect(firstCitations[1].closest('p')).not.toBe(
+      firstCitations[0].closest('p'),
+    )
+    expect(secondCitation).toHaveAttribute('href', second.source.content_url)
+    for (const citation of firstCitations) {
+      expect(citation).toHaveAttribute('href', first.source.content_url)
+    }
+    screen.getByRole('combobox', { name: '汇总版本' }).focus()
+    await user.tab()
+    expect(secondCitation).toHaveFocus()
+    await user.tab()
+    expect(firstCitations[0]).toHaveFocus()
+    await user.tab()
+    expect(firstCitations[1]).toHaveFocus()
+    expect(mockedStart).not.toHaveBeenCalled()
+  })
+
+  it('keeps analysis record links unchanged when the content analyses are expanded', async () => {
+    loadVersion(summaryFixture(), [itemFixture()])
+    const user = userEvent.setup()
+    renderRun('/collection-runs/70?summary=4')
+    await user.click(await screen.findByText('内容分析 · 1 条'))
+    const article = screen
+      .getByRole('heading', { name: itemFixture().source.title })
+      .closest('article')
+    expect(article).not.toBeNull()
+    if (!article) throw new Error('Missing analysis article')
+    const link = within(article).getByRole('link', { name: '打开原文' })
+    expect(link).toHaveAttribute('href', itemFixture().source.content_url)
+    expect(link).toHaveAttribute('rel', 'noreferrer')
+    expect(link).not.toHaveAttribute('aria-label')
+    expect(link).not.toHaveAttribute('title')
+    expect(link).not.toHaveClass('underline')
+    expect(
+      within(article).getByText('内容反映监控范围内的公共问题。'),
+    ).toBeVisible()
   })
 
   it('reads old versions without switching them to a newer history entry', async () => {
@@ -366,7 +514,7 @@ describe('manual collection summaries', () => {
     expect(router.state.location.search).toContain('summary=4')
     expect(mockedDetail.mock.calls.every(([id]) => id === 4)).toBe(true)
     await user.click(screen.getByRole('combobox', { name: '汇总版本' }))
-    await user.click(screen.getByRole('option', { name: /汇总 #5/ }))
+    await user.click(await screen.findByRole('option', { name: /汇总 #5/ }))
     await waitFor(() =>
       expect(router.state.location.search).toContain('summary=5'),
     )
@@ -521,11 +669,94 @@ describe('manual collection summaries', () => {
     const user = userEvent.setup()
     const { container } = renderRun('/collection-runs/70?summary=4')
     await user.click(
-      await screen.findByRole('button', { name: /原文：测试街道道路情况/ }),
+      await screen.findByRole('button', {
+        name: '原文 1 · 小红书：测试街道道路情况',
+      }),
     )
     expect(mockedOpen).toHaveBeenCalledExactlyOnceWith(70, 11)
     expect(container.querySelector('a[href*="xiaohongshu.com"]')).toBeNull()
     expect(mockedStart).not.toHaveBeenCalled()
+  })
+
+  it('keeps inline Xiaohongshu citations keyboard-operable and blocks all source actions while opening, with error feedback', async () => {
+    mockedRun.mockResolvedValue({ ...run, platform: 'xhs' })
+    const first = itemFixture({
+      source: {
+        ...itemFixture().source,
+        platform: 'xhs',
+        platform_content_id: '0123456789abcdef01234567',
+        content_type: 'image',
+        content_url:
+          'https://www.xiaohongshu.com/explore/0123456789abcdef01234567',
+      },
+    })
+    const second = itemFixture({
+      id: 22,
+      position: 1,
+      source: {
+        ...first.source,
+        result_id: 12,
+        platform_content_id: '0123456789abcdef01234568',
+        content_url:
+          'https://www.xiaohongshu.com/explore/0123456789abcdef01234568',
+        title: '另一条小红书来源',
+      },
+    })
+    loadVersion(
+      summaryFixture({
+        platform: 'xhs',
+        counts: { ...summaryFixture().counts, total: 2, relevant: 2 },
+        document: {
+          overview: '测试小红书来源汇总。',
+          items: [{ text: '两条来源待核实。', source_ids: [11, 12] }],
+        },
+      }),
+      [first, second],
+    )
+    let failOpen: ((reason: Error) => void) | undefined
+    mockedOpen.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          failOpen = reject
+        }),
+    )
+    const user = userEvent.setup()
+    const { container } = renderRun('/collection-runs/70?summary=4')
+    const firstCitation = await screen.findByRole('button', {
+      name: `原文 1 · 小红书：${first.source.title}`,
+    })
+    const secondCitation = screen.getByRole('button', {
+      name: `原文 2 · 小红书：${second.source.title}`,
+    })
+    expect(firstCitation).toHaveClass('underline')
+    expect(firstCitation).toHaveAttribute('data-slot', 'button')
+    expect(firstCitation).toHaveAttribute('title', first.source.title)
+    expect(firstCitation.closest('p')).toHaveTextContent('两条来源待核实。')
+    expect(firstCitation.closest('p')).toBe(secondCitation.closest('p'))
+    screen.getByRole('combobox', { name: '汇总版本' }).focus()
+    await user.tab()
+    expect(firstCitation).toHaveFocus()
+    await user.keyboard('{Enter}')
+    expect(mockedOpen).toHaveBeenCalledExactlyOnceWith(70, 11)
+    await waitFor(() => expect(firstCitation).toBeDisabled())
+    expect(firstCitation).toHaveAttribute('aria-busy', 'true')
+    expect(firstCitation).toHaveTextContent('正在打开…')
+    expect(secondCitation).toBeDisabled()
+    await user.click(secondCitation)
+    expect(mockedOpen).toHaveBeenCalledOnce()
+    await act(async () => failOpen?.(new Error('Synthetic opening failure')))
+    await waitFor(() => expect(firstCitation).toBeEnabled())
+    expect(secondCitation).toBeEnabled()
+    expect(firstCitation).toHaveAttribute('aria-busy', 'false')
+    expect(firstCitation).toHaveTextContent('原文 1 · 小红书')
+    const paragraph = firstCitation.closest('p')
+    if (!paragraph) throw new Error('Missing citation paragraph')
+    const feedback = within(paragraph).getByRole('status')
+    expect(feedback).toHaveTextContent('打开原文时发生未知错误，请稍后重试。')
+    expect(feedback.closest('p')).toBe(firstCitation.closest('p'))
+    expect(container.querySelector('a[href*="xiaohongshu.com"]')).toBeNull()
+    expect(mockedStart).not.toHaveBeenCalled()
+    expect(mockedCancel).not.toHaveBeenCalled()
   })
 
   it('resolves citations beyond the visible analysis page and preserves pagination in the URL', async () => {
@@ -554,7 +785,7 @@ describe('manual collection summaries', () => {
     const user = userEvent.setup()
     const { router } = renderRun('/collection-runs/70?summary=4')
     expect(
-      await screen.findByRole('link', { name: /原文：内容 12/ }),
+      await screen.findByRole('link', { name: '原文 12 · 抖音：内容 12' }),
     ).toBeVisible()
     await user.click(screen.getByText('内容分析 · 12 条'))
     expect(screen.getByRole('heading', { name: '内容 1' })).toBeVisible()
