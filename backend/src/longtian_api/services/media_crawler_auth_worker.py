@@ -8,14 +8,32 @@ import signal
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, Protocol, cast
+from typing import Literal, Protocol, cast, get_args
 from uuid import UUID
+
+from pydantic import ValidationError
 
 from longtian_api.search_platforms import (
     SEARCH_PLATFORMS,
     SearchPlatform,
     is_valid_search_content_url,
 )
+from longtian_api.services.enrichment_models import (
+    ENRICHMENT_COMMAND_PREFIX,
+    ENRICHMENT_EVENT_PREFIX,
+    MAX_ENRICHMENT_COMMAND_BYTES,
+    MAX_ENRICHMENT_EVENT_BYTES,
+    MEDIA_ROOT_ENV,
+    EnrichedContent,
+    EnrichmentBudget,
+    EnrichmentOutcome,
+    EnrichmentValidationError,
+    ManifestDescriptor,
+    decode_json_object,
+    valid_source_url,
+    validate_content,
+)
+from longtian_api.services.settled_tasks import settle
 
 AUTH_COMMAND_PREFIX = b"__MEDIACRAWLER_AUTH_COMMAND__"
 AUTH_EVENT_PREFIX = b"__MEDIACRAWLER_AUTH_EVENT__"
@@ -66,6 +84,34 @@ OpenResultOutcome = Literal[
     "browser_unavailable",
     "internal_error",
 ]
+ManualPageAction = Literal["show", "close"]
+ManualPageOutcome = Literal[
+    "opened_existing",
+    "opened_homepage",
+    "browser_unavailable",
+    "navigation_failed",
+    "internal_error",
+    "cancelled",
+    "closed",
+    "not_present",
+]
+_MANUAL_OUTCOMES = {
+    "show": {
+        "opened_existing",
+        "opened_homepage",
+        "browser_unavailable",
+        "navigation_failed",
+        "internal_error",
+        "cancelled",
+    },
+    "close": {
+        "closed",
+        "not_present",
+        "browser_unavailable",
+        "internal_error",
+        "cancelled",
+    },
+}
 
 _WORKER_COMMAND = (
     "uv",
@@ -123,6 +169,7 @@ ProgressCallback = Callable[[UUID, AuthPlatformId, AuthProgressPhase], Awaitable
 SessionDisconnectedCallback = Callable[[UUID | None], Awaitable[None]]
 SearchProgressCallback = Callable[[int, int], Awaitable[None]]
 SearchItemCallback = Callable[[int, "SearchWorkerItem"], Awaitable[None]]
+SearchTermCompletedCallback = Callable[[int, int], Awaitable[None]]
 
 
 class AuthWorkerError(Exception):
@@ -131,6 +178,17 @@ class AuthWorkerError(Exception):
 
 class AuthWorkerBusyError(AuthWorkerError):
     """The worker client already owns one in-flight request."""
+
+
+class EnrichmentWorkerUnsettledError(AuthWorkerError):
+    """No terminal/exit proof: keep the operation quarantined, not reusable."""
+
+    def __init__(self, process: ManagedProcess):
+        super().__init__()
+        self._process = process
+
+    def quiescent(self) -> bool:
+        return self._process.returncode is not None
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,13 +220,29 @@ class OpenResultWorkerResult:
     outcome: OpenResultOutcome
 
 
+@dataclass(frozen=True, slots=True)
+class ManualPageWorkerResult:
+    outcome: ManualPageOutcome
+
+
+@dataclass(frozen=True, slots=True)
+class EnrichmentWorkerResult:
+    outcome: EnrichmentOutcome
+    content: EnrichedContent | None = field(default=None, repr=False)
+    manifest: ManifestDescriptor | None = None
+
+
 @dataclass(slots=True)
 class _ActiveRequest:
     request_id: UUID
     platform: AuthPlatformId
-    kind: Literal["auth", "search", "open_result"]
+    kind: Literal["auth", "search", "open_result", "manual_page", "enrichment"]
     result: asyncio.Future[
-        AuthWorkerResult | SearchWorkerResult | OpenResultWorkerResult
+        AuthWorkerResult
+        | SearchWorkerResult
+        | OpenResultWorkerResult
+        | ManualPageWorkerResult
+        | EnrichmentWorkerResult
     ]
     search_term_count: int = 0
     search_max_results_per_term: int = 0
@@ -177,9 +251,17 @@ class _ActiveRequest:
     search_item_counts: list[int] = field(default_factory=list)
     on_search_progress: SearchProgressCallback | None = None
     on_search_item: SearchItemCallback | None = None
+    on_term_completed: SearchTermCompletedCallback | None = None
+    search_completed_count: int = 0
+    manual_action: ManualPageAction | None = None
     cancel_requested: bool = False
     previous_phase: AuthProgressPhase | None = None
     seen_login: bool = False
+    enrichment_content_id: str | None = None
+    enrichment_content_url: str | None = None
+    enrichment_budget: EnrichmentBudget | None = None
+    enrichment_accepted: bool = False
+    enrichment_terminal: bool = False
 
 
 class PersistentAuthWorkerClient:
@@ -197,11 +279,13 @@ class PersistentAuthWorkerClient:
         cancel_timeout_seconds: float = 3.0,
         shutdown_timeout_seconds: float = 5.0,
         termination_grace_seconds: float = 3.0,
+        media_spool_root: Path | None = None,
     ) -> None:
         self._media_crawler_dir = media_crawler_dir
         self._on_progress = on_progress
         self._on_session_disconnected = on_session_disconnected
-        self._process_launcher = process_launcher or launch_process
+        self._process_launcher = process_launcher
+        self._media_spool_root = media_spool_root
         self._process_group_terminator = (
             process_group_terminator or terminate_owned_process_group
         )
@@ -233,6 +317,94 @@ class PersistentAuthWorkerClient:
             str(self._media_crawler_dir) if part == "{media_crawler_dir}" else part
             for part in _WORKER_COMMAND
         )
+
+    def configure_media_spool(self, root: Path) -> None:
+        """Configure a trusted root before launch, without filesystem/browser I/O."""
+        if not root.is_absolute() or ".." in root.parts:
+            raise AuthWorkerError
+        if root == self._media_spool_root:
+            return
+        if self._process is not None or self._generation or self._request_lock.locked():
+            raise AuthWorkerError
+        self._media_spool_root = root
+
+    async def enrich(
+        self,
+        *,
+        request_id: UUID,
+        platform: SearchPlatform,
+        content_id: str,
+        content_url: str,
+        term: str,
+        budget: EnrichmentBudget,
+    ) -> EnrichmentWorkerResult:
+        """One exact stored-source request, isolated from auth/search protocols."""
+        if self._request_lock.locked():
+            raise AuthWorkerBusyError
+        if (
+            self._media_spool_root is None
+            or not isinstance(request_id, UUID)
+            or request_id.version != 4
+            or not valid_source_url(platform, content_id, content_url)
+            or type(term) is not str
+            or len(term) > 200
+            or (platform == "xhs" and not term.strip())
+            or not isinstance(budget, EnrichmentBudget)
+        ):
+            raise AuthWorkerError
+        async with self._request_lock:
+            if self._closed:
+                raise AuthWorkerError
+            self._completed_request_id = None
+            try:
+                generation = await self._ensure_worker()
+            except asyncio.CancelledError:
+                await asyncio.shield(
+                    self._recycle_generation(self._generation, invalidate=True)
+                )
+                raise
+            request = _ActiveRequest(
+                request_id=request_id,
+                platform=platform,
+                kind="enrichment",
+                result=asyncio.get_running_loop().create_future(),
+                enrichment_content_id=content_id,
+                enrichment_content_url=content_url,
+                enrichment_budget=budget,
+            )
+            process = self._process
+            if process is None:
+                raise AuthWorkerError
+            self._active = request
+            try:
+                await self._write_command(
+                    generation,
+                    {
+                        "version": 1,
+                        "type": "command",
+                        "command": "enrich",
+                        "request_id": str(request_id),
+                        "platform": platform,
+                        "content_id": content_id,
+                        "content_url": content_url,
+                        "term": term,
+                        "budget": budget.model_dump(),
+                    },
+                    prefix=ENRICHMENT_COMMAND_PREFIX,
+                    max_bytes=MAX_ENRICHMENT_COMMAND_BYTES,
+                )
+                result = await asyncio.shield(request.result)
+                if not isinstance(result, EnrichmentWorkerResult):
+                    raise AuthWorkerError
+                return result
+            except asyncio.CancelledError:
+                await settle(self._cancel_request(generation, request))
+                raise
+            finally:
+                if self._active is request:
+                    self._active = None
+                if not request.enrichment_terminal and process.returncode is None:
+                    raise EnrichmentWorkerUnsettledError(process)
 
     async def check(
         self, *, request_id: UUID, platform: AuthPlatformId
@@ -296,6 +468,7 @@ class PersistentAuthWorkerClient:
         max_results_per_term: int,
         on_progress: SearchProgressCallback,
         on_item: SearchItemCallback,
+        on_term_completed: SearchTermCompletedCallback,
     ) -> SearchWorkerResult:
         """Run one correlated product search on the shared worker."""
 
@@ -331,6 +504,7 @@ class PersistentAuthWorkerClient:
                 search_item_counts=[0] * len(terms),
                 on_search_progress=on_progress,
                 on_search_item=on_item,
+                on_term_completed=on_term_completed,
             )
             if self._active is not None:
                 raise AuthWorkerBusyError
@@ -339,7 +513,7 @@ class PersistentAuthWorkerClient:
                 await self._write_command(
                     generation,
                     {
-                        "version": 1,
+                        "version": 2,
                         "type": "command",
                         "command": "search",
                         "request_id": str(request_id),
@@ -407,7 +581,7 @@ class PersistentAuthWorkerClient:
                 await self._write_command(
                     generation,
                     {
-                        "version": 1,
+                        "version": 2,
                         "type": "command",
                         "command": "open_result",
                         "request_id": str(request_id),
@@ -430,6 +604,76 @@ class PersistentAuthWorkerClient:
             finally:
                 if self._active is request:
                     self._active = None
+
+    async def manual_page(
+        self,
+        *,
+        request_id: UUID,
+        platform: SearchPlatform,
+        action: ManualPageAction,
+    ) -> ManualPageWorkerResult:
+        """Show/close owned pages; absent cleanup never launches a worker."""
+        if self._request_lock.locked():
+            raise AuthWorkerBusyError
+        if platform not in SEARCH_PLATFORMS or action not in _MANUAL_OUTCOMES:
+            raise AuthWorkerError
+        async with self._request_lock:
+            if action == "close" and (
+                self._process is None
+                or self._process.returncode is not None
+                or self._generation in self._failed_generations
+            ):
+                return ManualPageWorkerResult("not_present")
+            if self._closed:
+                raise AuthWorkerError
+            try:
+                generation = (
+                    self._generation
+                    if action == "close"
+                    else await self._ensure_worker()
+                )
+            except asyncio.CancelledError:
+                await asyncio.shield(
+                    self._recycle_generation(self._generation, invalidate=True)
+                )
+                raise
+            request = _ActiveRequest(
+                request_id=request_id,
+                platform=platform,
+                kind="manual_page",
+                result=asyncio.get_running_loop().create_future(),
+                manual_action=action,
+            )
+            self._active = request
+            self._completed_request_id = None
+            try:
+                await self._write_command(
+                    generation,
+                    {
+                        "version": 2,
+                        "type": "command",
+                        "command": "manual_page",
+                        "request_id": str(request_id),
+                        "platform": platform,
+                        "action": action,
+                    },
+                    prefix=SEARCH_COMMAND_PREFIX,
+                    max_bytes=MAX_SEARCH_COMMAND_BYTES,
+                )
+                result = await asyncio.shield(request.result)
+                if not isinstance(result, ManualPageWorkerResult):
+                    raise AuthWorkerError
+                return result
+            except asyncio.CancelledError:
+                await asyncio.shield(self._cancel_request(generation, request))
+                raise
+            finally:
+                if self._active is request:
+                    self._active = None
+
+    async def discard_session(self) -> None:
+        """Recycle only the owned worker when its page cleanup cannot be proved."""
+        await self._recycle_generation(self._generation, invalidate=True)
 
     async def shutdown(self) -> None:
         """Stop the owned worker, falling back to its process group only."""
@@ -484,9 +728,16 @@ class PersistentAuthWorkerClient:
             if self._closed:
                 raise AuthWorkerError
             try:
-                process = await self._process_launcher(
-                    self.command, self._media_crawler_dir
-                )
+                if self._process_launcher is None:
+                    process = await launch_process(
+                        self.command,
+                        self._media_crawler_dir,
+                        media_spool_root=self._media_spool_root,
+                    )
+                else:
+                    process = await self._process_launcher(
+                        self.command, self._media_crawler_dir
+                    )
             except Exception:
                 raise AuthWorkerError from None
             if (
@@ -534,25 +785,40 @@ class PersistentAuthWorkerClient:
         if request.result.done():
             return
         try:
-            is_search = request.kind == "search"
+            is_search = request.kind in {"search", "manual_page"}
+            is_enrichment = request.kind == "enrichment"
             request.cancel_requested = True
             await self._write_command(
                 generation,
                 {
-                    "version": 1 if is_search else 2,
+                    "version": 1 if is_enrichment else 2,
                     "type": "command",
                     "command": "cancel",
                     "request_id": str(request.request_id),
                 },
-                prefix=SEARCH_COMMAND_PREFIX if is_search else AUTH_COMMAND_PREFIX,
+                prefix=(
+                    ENRICHMENT_COMMAND_PREFIX
+                    if is_enrichment
+                    else SEARCH_COMMAND_PREFIX
+                    if is_search
+                    else AUTH_COMMAND_PREFIX
+                ),
                 max_bytes=(
-                    MAX_SEARCH_COMMAND_BYTES if is_search else MAX_AUTH_FRAME_BYTES
+                    MAX_ENRICHMENT_COMMAND_BYTES
+                    if is_enrichment
+                    else MAX_SEARCH_COMMAND_BYTES
+                    if is_search
+                    else MAX_AUTH_FRAME_BYTES
                 ),
             )
             async with asyncio.timeout(self._cancel_timeout_seconds):
                 result = await asyncio.shield(request.result)
-            expected: AuthWorkerResult | SearchWorkerResult = (
-                SearchWorkerResult("cancelled")
+            expected = (
+                EnrichmentWorkerResult("cancelled")
+                if is_enrichment
+                else ManualPageWorkerResult("cancelled")
+                if request.kind == "manual_page"
+                else SearchWorkerResult("cancelled")
                 if is_search
                 else AuthWorkerResult("cancelled", "cancelled")
             )
@@ -650,7 +916,13 @@ class PersistentAuthWorkerClient:
             if protocol != "auth":
                 raise AuthWorkerError
             active = self._active
-            if active is not None and active.previous_phase is not None:
+            if active is not None and (
+                active.previous_phase is not None
+                or active.enrichment_accepted
+                or (
+                    active.kind == "search" and active.search_current_term_position >= 0
+                )
+            ):
                 raise AuthWorkerError
             # The worker may emit an idle-session disconnect immediately before
             # it reads a newly queued check. Its stdout frame can reach this
@@ -671,6 +943,52 @@ class PersistentAuthWorkerClient:
         if request_id != active.request_id or platform != active.platform:
             raise AuthWorkerError
 
+        if active.kind == "enrichment":
+            if (
+                protocol != "enrichment"
+                or active.result.done()
+                or event["content_id"] != active.enrichment_content_id
+            ):
+                raise AuthWorkerError
+            if event_name == "accepted":
+                if active.enrichment_accepted:
+                    raise AuthWorkerError
+                active.enrichment_accepted = True
+                return
+            if (
+                event_name != "result"
+                or not active.enrichment_accepted
+                or (event["outcome"] == "cancelled" and not active.cancel_requested)
+            ):
+                raise AuthWorkerError
+            content = None
+            if event["content"] is not None:
+                if (
+                    active.enrichment_budget is None
+                    or active.enrichment_content_url is None
+                ):
+                    raise AuthWorkerError
+                try:
+                    content = validate_content(
+                        event["content"],
+                        platform=platform,
+                        content_id=active.enrichment_content_id or "",
+                        content_url=active.enrichment_content_url,
+                        budget=active.enrichment_budget,
+                    )
+                except EnrichmentValidationError:
+                    raise AuthWorkerError from None
+            active.enrichment_terminal = True
+            self._active = None
+            active.result.set_result(
+                EnrichmentWorkerResult(
+                    cast(EnrichmentOutcome, event["outcome"]),
+                    content,
+                    cast(ManifestDescriptor | None, event["manifest"]),
+                )
+            )
+            return
+
         if active.kind == "search":
             if protocol != "search":
                 raise AuthWorkerError
@@ -680,6 +998,7 @@ class PersistentAuthWorkerClient:
                 if (
                     count != active.search_term_count
                     or position != active.search_current_term_position + 1
+                    or position != active.search_completed_count
                 ):
                     raise AuthWorkerError
                 active.search_current_term_position = position
@@ -694,6 +1013,7 @@ class PersistentAuthWorkerClient:
                 if (
                     callback is None
                     or position != active.search_current_term_position
+                    or position != active.search_completed_count
                     or not 0 <= position < active.search_term_count
                     or active.search_item_counts[position]
                     >= active.search_max_results_per_term
@@ -703,13 +1023,28 @@ class PersistentAuthWorkerClient:
                 active.search_item_counts[position] += 1
                 active.search_item_count += 1
                 return
+            if event_name == "term_completed":
+                position = cast(int, event["term_position"])
+                count = cast(int, event["item_count"])
+                callback = active.on_term_completed
+                if (
+                    callback is None
+                    or position != active.search_current_term_position
+                    or position != active.search_completed_count
+                    or not 0 <= position < active.search_term_count
+                    or count != active.search_item_counts[position]
+                ):
+                    raise AuthWorkerError
+                await callback(position, count)
+                active.search_completed_count += 1
+                return
             if event_name != "result" or active.result.done():
                 raise AuthWorkerError
             outcome = cast(SearchOutcome, event["outcome"])
             if outcome == "cancelled" and not active.cancel_requested:
                 raise AuthWorkerError
             if outcome in {"completed_with_results", "completed_empty"}:
-                if active.search_current_term_position != active.search_term_count - 1:
+                if active.search_completed_count != active.search_term_count:
                     raise AuthWorkerError
                 if (outcome == "completed_with_results") != (
                     active.search_item_count > 0
@@ -717,6 +1052,21 @@ class PersistentAuthWorkerClient:
                     raise AuthWorkerError
             self._active = None
             active.result.set_result(SearchWorkerResult(outcome))
+            return
+
+        if active.kind == "manual_page":
+            if (
+                protocol != "search"
+                or event_name != "manual_page"
+                or active.result.done()
+                or event["action"] != active.manual_action
+                or (event["outcome"] == "cancelled" and not active.cancel_requested)
+            ):
+                raise AuthWorkerError
+            self._active = None
+            active.result.set_result(
+                ManualPageWorkerResult(cast(ManualPageOutcome, event["outcome"]))
+            )
             return
 
         if active.kind == "open_result":
@@ -851,6 +1201,10 @@ def _parse_worker_event(line: bytes) -> dict[str, object]:
         event = _parse_search_event(line)
         event["protocol"] = "search"
         return event
+    if line.startswith(ENRICHMENT_EVENT_PREFIX):
+        event = _parse_enrichment_event(line)
+        event["protocol"] = "enrichment"
+        return event
     raise AuthWorkerError
 
 
@@ -858,6 +1212,50 @@ def _parse_event(line: bytes) -> dict[str, object]:
     """Backward-compatible test seam for the strict worker event parser."""
 
     return _parse_worker_event(line)
+
+
+def _parse_enrichment_event(line: bytes) -> dict[str, object]:
+    if len(line) > MAX_ENRICHMENT_EVENT_BYTES or not line.endswith(b"\n"):
+        raise AuthWorkerError
+    try:
+        raw = decode_json_object(line[len(ENRICHMENT_EVENT_PREFIX) :])
+        base = {"version", "type", "event", "request_id", "platform", "content_id"}
+        _require_exact_fields(
+            raw,
+            base
+            if raw.get("event") == "accepted"
+            else base | {"outcome", "content", "manifest"},
+        )
+        if (
+            type(raw["version"]) is not int
+            or raw["version"] != 1
+            or raw["type"] != "event"
+            or raw["event"] not in {"accepted", "result"}
+            or type(raw["platform"]) is not str
+            or raw["platform"] not in SEARCH_PLATFORMS
+            or type(raw["content_id"]) is not str
+            or not 1 <= len(raw["content_id"]) <= 128
+        ):
+            raise AuthWorkerError
+        raw["request_id"] = _parse_canonical_uuid(raw["request_id"])
+        if raw["event"] == "accepted":
+            return raw
+        if type(raw["outcome"]) is not str or raw["outcome"] not in get_args(
+            EnrichmentOutcome
+        ):
+            raise AuthWorkerError
+        if raw["outcome"] == "completed":
+            if (raw["content"] is None) == (raw["manifest"] is None):
+                raise AuthWorkerError
+            if raw["content"] is not None and not isinstance(raw["content"], dict):
+                raise AuthWorkerError
+            if raw["manifest"] is not None:
+                raw["manifest"] = ManifestDescriptor.model_validate(raw["manifest"])
+        elif raw["content"] is not None or raw["manifest"] is not None:
+            raise AuthWorkerError
+        return raw
+    except (EnrichmentValidationError, ValidationError, ValueError, TypeError):
+        raise AuthWorkerError from None
 
 
 def _parse_auth_event(line: bytes) -> dict[str, object]:
@@ -948,7 +1346,7 @@ def _parse_search_event(line: bytes) -> dict[str, object]:
         raise AuthWorkerError from None
     if not isinstance(raw, dict):
         raise AuthWorkerError
-    if type(raw.get("version")) is not int or raw.get("version") != 1:
+    if type(raw.get("version")) is not int or raw.get("version") != 2:
         raise AuthWorkerError
     if type(raw.get("type")) is not str or raw.get("type") != "event":
         raise AuthWorkerError
@@ -980,6 +1378,24 @@ def _parse_search_event(line: bytes) -> dict[str, object]:
         if type(position) is not int or not 0 <= position < 20:
             raise AuthWorkerError
         raw["item"] = _parse_search_item(raw["item"], platform)
+    elif event == "term_completed":
+        _require_exact_fields(raw, base | {"term_position", "item_count"})
+        if (
+            type(raw["term_position"]) is not int
+            or not 0 <= raw["term_position"] < 20
+            or type(raw["item_count"]) is not int
+            or not 0 <= raw["item_count"] <= 50
+        ):
+            raise AuthWorkerError
+    elif event == "manual_page":
+        _require_exact_fields(raw, base | {"action", "outcome"})
+        if (
+            type(raw["action"]) is not str
+            or raw["action"] not in _MANUAL_OUTCOMES
+            or type(raw["outcome"]) is not str
+            or raw["outcome"] not in _MANUAL_OUTCOMES[raw["action"]]
+        ):
+            raise AuthWorkerError
     elif event == "result":
         _require_exact_fields(raw, base | {"outcome"})
         if raw["outcome"] not in {
@@ -1150,8 +1566,13 @@ async def _settle_tasks(
         await asyncio.gather(*pending, return_exceptions=True)
 
 
-async def launch_process(command: tuple[str, ...], cwd: Path) -> ManagedProcess:
+async def launch_process(
+    command: tuple[str, ...], cwd: Path, *, media_spool_root: Path | None = None
+) -> ManagedProcess:
     """Launch the fixed worker command without a shell."""
+    options = {}
+    if media_spool_root is not None:
+        options["env"] = {**os.environ, MEDIA_ROOT_ENV: str(media_spool_root)}
     process = await asyncio.create_subprocess_exec(
         *command,
         cwd=cwd,
@@ -1160,6 +1581,7 @@ async def launch_process(command: tuple[str, ...], cwd: Path) -> ManagedProcess:
         stderr=asyncio.subprocess.PIPE,
         limit=MAX_CHILD_OUTPUT_LINE_BYTES,
         start_new_session=os.name == "posix",
+        **options,
     )
     return cast(ManagedProcess, process)
 

@@ -3,7 +3,7 @@
   "name": "ai-opinion-summary",
   "title": "舆情手动汇总",
   "description": "直接从采集结果手动生成汇总：同一次操作内分析并复用逐条内容证据，再生成带来源的文字报告；不依赖独立筛选。",
-  "status": "planning",
+  "status": "in_progress",
   "dev_type": "fullstack",
   "scope": null,
   "package": null,
@@ -21,6 +21,14 @@
   "children": [],
   "parent": "08-27-multimodal-opinion-analysis",
   "relatedFiles": [],
-  "notes": "Search-first scope revision accepted on 2026-08-27; integrated analysis/summary design awaits fresh final review. Depends on checked configuration and media enrichment, not the deferred standalone screening child. No implementation yet.",
-  "meta": {"dependencies": ["ai-configuration","platform-media-enrichment"]}
+  "notes": "2026-08-28: approved manual full-run summary implemented and independently checked: backend596/frontend281 passed, isolated browser confirms mixed decisions, cache reuse, cancellation/history, no automatic calls. Consume checked media contract; separately authorized real-source/provider acceptance remains open, as does whole-five-platform media acceptance. No standalone screening, live paid call, user-runtime migration, commit/push/archive this round. See research/verification.md and integration-check.md.",
+  "meta": {
+    "dependencies": [
+      "ai-configuration",
+      "platform-media-enrichment"
+    ],
+    "planning_revision": "2026-08-28-post-media-probe",
+    "final_review_status": "approved",
+    "implementation_approval": "2026-08-28: user replied 来 after the final plan, then 行吧，我觉得可以 after clarification of saved per-item analysis and minimal integration. Start against the checked media contract; do not wait for all five live platform gates or claim them complete."
+  }
 }

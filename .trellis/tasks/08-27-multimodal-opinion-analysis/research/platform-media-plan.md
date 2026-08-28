@@ -5,6 +5,8 @@
 - Date: 2026-08-27
 - Evidence: **Source** = inspected executable source, not live platform success. **Proposal** = candidate requiring fixtures and live acceptance.
 
+This is the original 2026-08-27 source audit; anchors and protocol observations below are historical. The 2026-08-28 amendment at the end updates the Douyin implementation candidate and current protocol baseline without treating the probe as production support.
+
 ## Findings
 
 ### Existing boundary
@@ -117,3 +119,11 @@ MediaAsset {
 - No live proof: detail completeness/schema, CDN/expiry/redirects, type coverage, soundtrack and model audiovisual consumption require gates.
 - No Toutiao detail/media, WB video or KS image-post extractor found. DY/XHS first-page lookup cannot promise arbitrary historic coverage.
 - Filename/cover/page link/text connection test is not audiovisual proof. Unsupported/incomplete inputs stay visible, never silently unrelated/completed/summary evidence.
+
+## 2026-08-28 post-probe amendment
+
+- See `product-integration-readiness.md` and the linked real-video verification. Three stored Douyin canonical pages exposed usable complete MP4 files; this provides evidence for the previously proposed owned canonical-page extractor, but not its product implementation or arbitrary historic-post support. Prefer that narrow exact-ID page/player candidate first; the earlier first-search-page lookup remains a historically researched option, not an automatic fallback. Revisit identity, caption completion and media inventory in fixtures and live acceptance.
+- The probe read only visible heading/player data and downloaded observed HTTPS media with pinned public DNS, no cookies/authorization/redirects/proxies, and an enforced byte/time cap. Do not hard-code its ephemeral URLs/CDN assumptions or copy standalone orchestration around the production ownership service.
+- One inspected post was skipped for blob input and the probe's duration bound; do not equate that with platform-wide failure, add transcoding, or promote the probe-specific 90-second limit into a product policy without review.
+- The current working tree has search protocol v2/manual recovery and SQLite v10. The older `auth v2/search v1` and "new screening service" references above are audit history: preserve the actual latest protocols/checkpoint/paused-owner behavior and integrate acquisition into the manual-summary service, not a separate screening task.
+- Five-platform production media gates, audio grounding, safe temporary lifecycle and cache reuse remain required. The experiment's media files were deleted and private results are not product evidence cache.

@@ -44,6 +44,13 @@ API route -> service -> repository -> sqlite3
 - A service operation that replaces an aggregate and its children is one transaction. Partial parent
   or child updates are invalid.
 - Keep transactions short and rollback on every exception before closing the connection.
+- Read multi-query aggregate projections in one explicit read transaction. A batch item, its latest
+  attempt, proof prefix and result counts must describe the same SQLite snapshot, not four points
+  in time. This still allows legitimate transitions between separately committed run/item records.
+- Async services that own a browser/runner must await `services/settled_tasks.database_call` for
+  writes and drain the thread on cancellation before terminalization or releasing ownership.
+  Cancelling the await of plain `asyncio.to_thread` does not cancel the SQLite transaction. Keep
+  active-run/current-attempt guards inside writes as a second fence against late callbacks.
 - Enforce invariants in both service validation (clear product feedback) and database constraints
   (race/corruption guard).
 
@@ -59,6 +66,10 @@ API route -> service -> repository -> sqlite3
   unconditional startup seed: deleting or editing seeded data must survive restart.
 - Migration failures fail application startup. Never serve an empty projection when the source of
   truth could not initialize.
+- Version 10 adds immutable execution offsets, completion proofs and guarded batch recovery. Infer
+  only justified old prefixes and leave historical completion times null. Preserve every old column,
+  ID, observation and relationship; append an audit record before explicitly reopening terminal
+  history. See [Batch Search](./batch-search-guidelines.md) for the executable recovery contract.
 
 ## Naming and stored values
 
@@ -81,6 +92,9 @@ API route -> service -> repository -> sqlite3
 - Cover fresh migration, repeated initialization, forward-version rejection, idempotent seed
   behavior, persistence across reopen, deterministic ordering, constraint translation, transaction
   rollback, and sanitized storage failure.
+- Build old-version fixtures with historical SQL/schema helpers. Do not call current repositories
+  against an old schema, and do not fake an old version by relabeling a modern schema. Compare old
+  column projections across migrations separately from defaults for genuinely new columns.
 
 ## Common mistakes
 

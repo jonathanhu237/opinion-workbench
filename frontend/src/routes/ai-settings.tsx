@@ -106,6 +106,7 @@ function SettingsForm({ saved }: { saved: Settings }) {
     shouldUnregister: true,
   })
   const { reset, resetField } = form
+  const [apiKeyFocused, setApiKeyFocused] = useState(false)
   const [pending, setPending] = useState<'save' | 'test' | null>(null)
   const [feedback, setFeedback] = useState<{
     error: boolean
@@ -221,16 +222,32 @@ function SettingsForm({ saved }: { saved: Settings }) {
             render={({ field, fieldState }) => (
               <Field data-invalid={fieldState.invalid}>
                 <FieldLabel htmlFor="ai-api-key">API Key</FieldLabel>
-                <Input
-                  {...field}
-                  id="ai-api-key"
-                  type="password"
-                  autoComplete="off"
-                  spellCheck={false}
-                  className="min-h-11"
-                  aria-invalid={fieldState.invalid}
-                  aria-describedby="ai-key-help ai-key-error"
-                />
+                <div className="relative">
+                  <Input
+                    {...field}
+                    id="ai-api-key"
+                    type="password"
+                    autoComplete="off"
+                    spellCheck={false}
+                    className="min-h-11"
+                    aria-invalid={fieldState.invalid}
+                    aria-describedby="ai-key-help ai-key-error"
+                    onFocus={() => setApiKeyFocused(true)}
+                    onBlur={() => {
+                      field.onBlur()
+                      setApiKeyFocused(false)
+                    }}
+                  />
+                  {saved.has_api_key && !field.value && !apiKeyFocused && (
+                    <span
+                      aria-hidden="true"
+                      data-disabled={pending !== null}
+                      className="pointer-events-none absolute inset-y-0 left-2.5 flex items-center text-base text-foreground select-none data-[disabled=true]:opacity-50 md:text-sm"
+                    >
+                      ********************
+                    </span>
+                  )}
+                </div>
                 <FieldDescription id="ai-key-help">
                   {saved.has_api_key
                     ? '已配置，留空保留；更改 Base URL 需重新输入。'

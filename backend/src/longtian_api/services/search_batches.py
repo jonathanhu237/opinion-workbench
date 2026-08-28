@@ -3,30 +3,40 @@
 import asyncio
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol, cast
 from uuid import uuid4
 
 from longtian_api.database import Database
 from longtian_api.repositories.search_batches import (
     SearchBatchAttemptRecord,
+    SearchBatchItemNotRecoverableError,
     SearchBatchItemRecord,
     SearchBatchNotActiveError,
     SearchBatchNotFoundError,
     SearchBatchNotPausedError,
     SearchBatchRecord,
+    SearchBatchRecoveryUnavailableError,
     SearchBatchRepository,
     SearchBatchRepositoryError,
     SearchBatchRepositoryUnavailableError,
+    SearchBatchStateChangedError,
 )
 from longtian_api.repositories.search_runs import SearchRunRecord, SearchRunStatus
 from longtian_api.schemas.search_batches import (
+    ManualPageOutcome,
     SearchBatchAttempt,
     SearchBatchAttemptListResponse,
+    SearchBatchCancel,
+    SearchBatchControl,
     SearchBatchCreate,
     SearchBatchDetail,
     SearchBatchErrorCode,
     SearchBatchItem,
     SearchBatchListResponse,
+    SearchBatchManualPageResponse,
+    SearchBatchRecover,
+    SearchBatchResult,
+    SearchBatchResultListResponse,
     SearchBatchSummary,
 )
 from longtian_api.schemas.search_runs import SearchRunSummary
@@ -39,7 +49,9 @@ from longtian_api.services.search_runs import (
     MAX_SEARCH_TERMS,
     SearchRunError,
     SearchRunService,
+    _to_result,
 )
+from longtian_api.services.settled_tasks import database_call, settle
 
 
 class SearchBatchRepositoryProtocol(Protocol):
@@ -62,16 +74,34 @@ class SearchBatchRepositoryProtocol(Protocol):
     def create_attempt(self, batch_id: int, position: int) -> SearchRunRecord: ...
 
     def finish_item(
-        self, batch_id: int, position: int, run_status: SearchRunStatus
+        self,
+        batch_id: int,
+        position: int,
+        run_status: SearchRunStatus,
+        expected_run_id: int | None = None,
     ) -> SearchBatchRecord: ...
 
     def finalize(self, batch_id: int) -> SearchBatchRecord: ...
 
     def fail_batch(self, batch_id: int) -> SearchBatchRecord: ...
 
-    def continue_batch(self, batch_id: int) -> SearchBatchRecord: ...
+    def continue_batch(self, batch_id: int, **kwargs) -> SearchBatchRecord: ...
 
-    def cancel_batch(self, batch_id: int) -> SearchBatchRecord: ...
+    def cancel_batch(
+        self, batch_id: int, *, expected_revision: int
+    ) -> SearchBatchRecord: ...
+
+    def skip_item(self, batch_id: int, **kwargs) -> SearchBatchRecord: ...
+
+    def recover_item(
+        self, batch_id: int, position: int, **kwargs
+    ) -> SearchBatchRecord: ...
+
+    def validate_control(self, batch_id: int, **kwargs) -> SearchBatchRecord: ...
+
+    def reconcile_interrupted_items(self, batch_id: int | None = None) -> int: ...
+
+    def list_results(self, **kwargs): ...
 
     def get(self, batch_id: int) -> SearchBatchRecord: ...
 
@@ -127,6 +157,9 @@ class SearchBatchService:
         self._active_owner: BrowserOperationOwner | None = None
         self._current_task: asyncio.Task[None] | None = None
         self._shutdown_started = False
+        self._manual_task: asyncio.Task | None = None
+        self._control_task: asyncio.Task | None = None
+        self._cancelling = False
 
     def initialize(self) -> None:
         self._repository.initialize()
@@ -147,10 +180,13 @@ class SearchBatchService:
                 return
             self._active_batch_id = record.id
             self._active_owner = owner
-            if record.status != "paused_for_manual_action":
-                self._current_task = self._create_runner(record.id, owner)
+            # Initialization already reconciled unfinished work to a pause.
+            # Startup/GET never schedule browser work.
 
     async def start_batch(self, payload: SearchBatchCreate) -> SearchBatchDetail:
+        return await settle(self._start_batch(payload))
+
+    async def _start_batch(self, payload: SearchBatchCreate) -> SearchBatchDetail:
         try:
             rule = await self._search_runs.load_rule(payload.monitoring_rule_id)
         except SearchRunError as error:
@@ -235,79 +271,221 @@ class SearchBatchService:
             attempts=[_to_attempt(record) for record in records]
         )
 
-    async def continue_batch(self, batch_id: int) -> SearchBatchDetail:
-        persisted = await self._get_record(batch_id)
-        if persisted.status != "paused_for_manual_action":
-            raise _not_paused()
+    async def list_results(
+        self,
+        *,
+        batch_id: int,
+        position: int,
+        kind: Literal["all", "new", "repeated"],
+        limit: int,
+        offset: int,
+    ) -> SearchBatchResultListResponse:
+        records, total = await self._call(
+            self._repository.list_results,
+            batch_id=batch_id,
+            position=position,
+            kind=kind,
+            limit=limit,
+            offset=offset,
+        )
+        return SearchBatchResultListResponse(
+            results=[
+                SearchBatchResult(
+                    **_to_result(record.result).model_dump(),
+                    source_run_id=record.source_run_id,
+                )
+                for record in records
+            ],
+            total=total,
+            limit=limit,
+            offset=offset,
+        )
+
+    async def continue_batch(
+        self, batch_id: int, payload: SearchBatchControl
+    ) -> SearchBatchDetail:
+        return await settle(self._resume_control(batch_id, payload, skip=False))
+
+    async def skip_item(
+        self, batch_id: int, payload: SearchBatchControl
+    ) -> SearchBatchDetail:
+        return await settle(self._resume_control(batch_id, payload, skip=True))
+
+    async def _resume_control(
+        self, batch_id: int, payload: SearchBatchControl, *, skip: bool
+    ) -> SearchBatchDetail:
+        await self._call(
+            self._repository.validate_control, batch_id, **payload.model_dump()
+        )
+        # The old runner can be in its finalizer after the durable pause is visible.
+        task = self._current_task
+        if task is not None:
+            await asyncio.shield(task)
         async with self._lock:
-            settling_task = (
-                self._current_task
-                if self._active_batch_id == batch_id
-                and self._current_task is not None
-                and not self._current_task.done()
-                else None
+            record = await self._call(
+                self._repository.validate_control, batch_id, **payload.model_dump()
             )
-        if settling_task is not None:
-            await settling_task
-        async with self._lock:
+            self._require_owner(batch_id)
+            if self._control_task is not None:
+                raise _browser_operation_active()
             if (
-                self._active_batch_id != batch_id
-                or self._active_owner is None
-                or (self._current_task is not None and not self._current_task.done())
+                not skip
+                and not record.items[payload.item_position].checkpoint.available
             ):
+                raise _repository_error(SearchBatchRecoveryUnavailableError())
+            self._control_task = asyncio.current_task()
+            manual = self._manual_task
+            platform = record.items[payload.item_position].platform
+        try:
+            await _cancel_and_drain(manual)
+            await self._search_runs.manual_page(platform, "close")
+            async with self._lock:
+                self._require_owner(batch_id)
+                method = (
+                    self._repository.skip_item
+                    if skip
+                    else self._repository.continue_batch
+                )
+                record = await self._call(method, batch_id, **payload.model_dump())
+                self._current_task = self._create_runner(batch_id, self._active_owner)
+            return _to_detail(record)
+        finally:
+            async with self._lock:
+                if self._control_task is asyncio.current_task():
+                    self._control_task = None
+
+    async def manual_page(
+        self, batch_id: int, payload: SearchBatchControl
+    ) -> SearchBatchManualPageResponse:
+        await self._call(
+            self._repository.validate_control, batch_id, **payload.model_dump()
+        )
+        task = self._current_task
+        if task is not None:
+            await asyncio.shield(task)
+        async with self._lock:
+            record = await self._call(
+                self._repository.validate_control, batch_id, **payload.model_dump()
+            )
+            self._require_owner(batch_id)
+            if self._control_task is not None or self._manual_task is not None:
+                raise _browser_operation_active()
+            task = asyncio.create_task(
+                self._search_runs.manual_page(
+                    record.items[payload.item_position].platform, "show"
+                )
+            )
+            self._manual_task = task
+        try:
+            try:
+                result = await task
+            except asyncio.CancelledError:
+                return SearchBatchManualPageResponse(outcome="cancelled")
+            async with self._lock:
+                await self._call(
+                    self._repository.validate_control, batch_id, **payload.model_dump()
+                )
+            return SearchBatchManualPageResponse(
+                outcome=cast(ManualPageOutcome, result.outcome)
+            )
+        finally:
+            async with self._lock:
+                if self._manual_task is task:
+                    self._manual_task = None
+
+    async def recover_item(
+        self, batch_id: int, position: int, payload: SearchBatchRecover
+    ) -> SearchBatchDetail:
+        return await settle(self._recover_item(batch_id, position, payload))
+
+    async def _recover_item(
+        self, batch_id: int, position: int, payload: SearchBatchRecover
+    ) -> SearchBatchDetail:
+        owner = BrowserOperationOwner("search_batch", uuid4())
+        async with self._lock:
+            if self._shutdown_started or self._active_batch_id is not None:
+                raise _browser_operation_active()
+            if not await self._browser_operations.try_claim(owner):
                 raise _browser_operation_active()
             try:
-                record = await asyncio.to_thread(
-                    self._repository.continue_batch, batch_id
+                record = await self._call(
+                    self._repository.recover_item,
+                    batch_id,
+                    position,
+                    **payload.model_dump(),
                 )
-            except SearchBatchNotFoundError:
-                raise _not_found() from None
-            except SearchBatchNotPausedError:
-                raise _not_paused() from None
-            except SearchBatchRepositoryUnavailableError:
-                raise _storage_unavailable() from None
-            self._current_task = self._create_runner(batch_id, self._active_owner)
+            except BaseException:
+                await self._browser_operations.release(owner)
+                raise
+            self._active_batch_id = batch_id
+            self._active_owner = owner
         return _to_detail(record)
 
-    async def cancel_batch(self, batch_id: int) -> SearchBatchDetail:
+    async def cancel_batch(
+        self, batch_id: int, payload: SearchBatchCancel
+    ) -> SearchBatchDetail:
+        return await settle(self._cancel_batch(batch_id, payload))
+
+    async def _cancel_batch(
+        self, batch_id: int, payload: SearchBatchCancel
+    ) -> SearchBatchDetail:
         async with self._lock:
-            try:
-                record = await asyncio.to_thread(
-                    self._repository.cancel_batch, batch_id
-                )
-            except SearchBatchNotFoundError:
-                raise _not_found() from None
-            except SearchBatchNotActiveError:
-                raise _not_active() from None
-            except SearchBatchRepositoryUnavailableError:
-                raise _storage_unavailable() from None
-            task = self._current_task if self._active_batch_id == batch_id else None
+            # Atomic status + revision fences callbacks before draining them.
+            record = await self._call(
+                self._repository.cancel_batch, batch_id, **payload.model_dump()
+            )
+            self._cancelling = True
             owner = self._active_owner if self._active_batch_id == batch_id else None
-            if task is not None and not task.done():
-                task.cancel()
-        if task is not None:
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-        if owner is not None:
-            await self._release_owner(owner)
-        return _to_detail(await self._get_record(record.id))
+            tasks = (
+                (self._current_task, self._manual_task, self._control_task)
+                if owner is not None
+                else ()
+            )
+            for task in tasks:
+                if task is not None and not task.done():
+                    task.cancel()
+        try:
+            for task in tasks:
+                await _cancel_and_drain(task)
+            if owner is not None and record.current_item_position is not None:
+                await self._search_runs.manual_page(
+                    record.items[record.current_item_position].platform, "close"
+                )
+        finally:
+            if owner is not None:
+                await self._release_owner(owner)
+            self._cancelling = False
+        return _to_detail(await self._get_record(batch_id))
 
     async def shutdown(self) -> None:
         async with self._lock:
             self._shutdown_started = True
-            task = self._current_task
-            owner = self._active_owner
-        if task is not None and not task.done():
-            task.cancel()
-        if task is not None:
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+            tasks = (self._current_task, self._manual_task, self._control_task)
+            owner, batch_id = self._active_owner, self._active_batch_id
+            for task in tasks:
+                if task is not None and not task.done():
+                    task.cancel()
+        for task in tasks:
+            await _cancel_and_drain(task)
+        if batch_id is not None:
+            await self._call(self._repository.reconcile_interrupted_items, batch_id)
         if owner is not None:
             await self._release_owner(owner)
+
+    def _require_owner(self, batch_id: int) -> None:
+        if (
+            self._shutdown_started
+            or self._cancelling
+            or self._active_batch_id != batch_id
+            or self._active_owner is None
+        ):
+            raise _browser_operation_active()
+
+    async def _call(self, method, *args, **kwargs):
+        try:
+            return await database_call(method, *args, **kwargs)
+        except SearchBatchRepositoryError as error:
+            raise _repository_error(error) from None
 
     def _create_runner(
         self, batch_id: int, owner: BrowserOperationOwner
@@ -322,61 +500,67 @@ class SearchBatchService:
         try:
             record = await self._get_record(batch_id)
             if record.status == "queued":
-                record = await asyncio.to_thread(
-                    self._repository.mark_running, batch_id
-                )
+                record = await database_call(self._repository.mark_running, batch_id)
             if record.status != "running":
                 return
             while True:
+                if self._shutdown_started or self._cancelling:
+                    return
                 item = await asyncio.to_thread(
                     self._repository.next_queued_item, batch_id
                 )
                 if item is None:
-                    await asyncio.to_thread(self._repository.finalize, batch_id)
+                    await database_call(self._repository.finalize, batch_id)
                     return
-                run = await asyncio.to_thread(
+                run = await database_call(
                     self._repository.create_attempt, batch_id, item.position
                 )
                 request_id = uuid4()
-                cancelled = False
-                try:
-                    run = await self._search_runs.execute_attempt(run, request_id)
-                except asyncio.CancelledError:
-                    cancelled = True
-                    run = await self._search_runs.get_run(run.id)
-                await asyncio.shield(
-                    asyncio.to_thread(
-                        self._repository.finish_item,
-                        batch_id,
-                        item.position,
-                        run.status,
-                    )
+                run = await self._search_runs.execute_attempt(
+                    run,
+                    request_id,
+                    cancellation_status=lambda: (
+                        "internal_error" if self._shutdown_started else "cancelled"
+                    ),
                 )
-                batch = await self._get_record(batch_id)
+                batch = await database_call(
+                    self._repository.finish_item,
+                    batch_id,
+                    item.position,
+                    run.status,
+                    expected_run_id=run.id,
+                )
                 if batch.status == "paused_for_manual_action":
                     preserve_owner = True
                     return
                 if batch.status == "cancelled":
                     return
-                if cancelled:
-                    raise asyncio.CancelledError
         except asyncio.CancelledError:
+            if not self._cancelling:
+                await database_call(
+                    self._repository.reconcile_interrupted_items, batch_id
+                )
+                preserve_owner = True
             raise
-        except (SearchBatchRepositoryUnavailableError, SearchRunError):
+        except (SearchBatchRepositoryError, SearchRunError, SearchBatchError):
             try:
-                await asyncio.to_thread(self._repository.fail_batch, batch_id)
+                await database_call(self._repository.fail_batch, batch_id)
             except SearchBatchRepositoryError:
                 pass
         except Exception:
             try:
-                await asyncio.to_thread(self._repository.fail_batch, batch_id)
+                await database_call(self._repository.fail_batch, batch_id)
             except Exception:
                 pass
         finally:
             async with self._lock:
                 if self._active_batch_id == batch_id:
                     self._current_task = None
-            if not preserve_owner:
+            if (
+                not preserve_owner
+                and not self._cancelling
+                and not self._shutdown_started
+            ):
                 await self._release_owner(owner)
 
     async def _release_owner(self, owner: BrowserOperationOwner) -> None:
@@ -431,6 +615,16 @@ def _to_item(record: SearchBatchItemRecord) -> SearchBatchItem:
         latest_attempt=(
             _to_attempt(record.latest_attempt) if record.latest_attempt else None
         ),
+        completed_term_count=record.checkpoint.completed,
+        remaining_term_count=record.checkpoint.remaining,
+        next_term_position=record.checkpoint.next_position,
+        checkpoint_basis=record.checkpoint.basis,
+        recovery_available=record.checkpoint.available,
+        pause_reason=record.pause_reason,
+        completion_basis=record.completion_basis,
+        new_count=record.new_count,
+        repeated_count=record.repeated_count,
+        total_count=record.total_count,
         created_at=record.created_at,
         started_at=record.started_at,
         finished_at=record.finished_at,
@@ -439,7 +633,8 @@ def _to_item(record: SearchBatchItemRecord) -> SearchBatchItem:
 
 def _to_summary(record: SearchBatchRecord) -> SearchBatchSummary:
     terminal_count = sum(
-        item.status in {"completed", "failed", "cancelled"} for item in record.items
+        item.status in {"completed", "failed", "cancelled", "skipped"}
+        for item in record.items
     )
     return SearchBatchSummary(
         id=record.id,
@@ -450,6 +645,7 @@ def _to_summary(record: SearchBatchRecord) -> SearchBatchSummary:
         terminal_item_count=terminal_count,
         max_results_per_term=record.max_results_per_term,
         status=record.status,
+        control_revision=record.control_revision,
         current_item_position=record.current_item_position,
         created_at=record.created_at,
         started_at=record.started_at,
@@ -503,3 +699,42 @@ def _storage_unavailable() -> SearchBatchError:
         code="search_storage_unavailable",
         message="采集任务暂时无法读取或保存，请稍后重试。",
     )
+
+
+async def _cancel_and_drain(task: asyncio.Task | None) -> None:
+    if task is None:
+        return
+    if not task.done() and not task.cancelling():
+        task.cancel()
+    try:
+        await settle(task)
+    except (asyncio.CancelledError, SearchBatchError):
+        pass
+
+
+def _repository_error(error: SearchBatchRepositoryError) -> SearchBatchError:
+    if isinstance(error, SearchBatchNotFoundError):
+        return _not_found()
+    if isinstance(error, SearchBatchNotActiveError):
+        return _not_active()
+    if isinstance(error, SearchBatchNotPausedError):
+        return _not_paused()
+    if isinstance(error, SearchBatchStateChangedError):
+        return SearchBatchError(
+            status_code=409,
+            code="search_batch_state_changed",
+            message="采集任务状态已变化，请刷新后重试。",
+        )
+    if isinstance(error, SearchBatchRecoveryUnavailableError):
+        return SearchBatchError(
+            status_code=409,
+            code="search_batch_recovery_unavailable",
+            message="无法确认可靠的续采位置，请跳过此平台或取消批次。",
+        )
+    if isinstance(error, SearchBatchItemNotRecoverableError):
+        return SearchBatchError(
+            status_code=409,
+            code="search_batch_item_not_recoverable",
+            message="该平台当前不能重新处理。",
+        )
+    return _storage_unavailable()

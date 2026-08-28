@@ -3,10 +3,43 @@ import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import {
   fetchSearchBatch,
   fetchSearchBatchAttempts,
+  fetchSearchBatchResults,
   fetchSearchBatches,
   isActiveSearchBatch,
   SEARCH_BATCHES_QUERY_KEY,
 } from '@/lib/api/search-batches'
+import type { SearchResultFilter } from '@/lib/api/search-runs'
+
+export function useSearchBatchResults(
+  batchId: number | null,
+  position: number | null,
+  kind: SearchResultFilter,
+  offset: number,
+  active: boolean,
+) {
+  return useQuery({
+    queryKey: [
+      ...SEARCH_BATCHES_QUERY_KEY,
+      batchId,
+      'items',
+      position,
+      'results',
+      kind,
+      offset,
+    ],
+    queryFn: ({ signal }) =>
+      fetchSearchBatchResults(
+        batchId ?? 0,
+        position ?? 0,
+        kind,
+        offset,
+        signal,
+      ),
+    enabled: batchId !== null && position !== null,
+    retry: false,
+    refetchInterval: active ? 1000 : false,
+  })
+}
 
 export function useSearchBatches() {
   const query = useInfiniteQuery({

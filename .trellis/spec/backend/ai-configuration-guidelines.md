@@ -7,6 +7,10 @@ connection test. It applies when changing AI settings, admitting AI operations, 
 future screening/summary consumer. It does not establish multimedia compatibility or authorize
 automatic model requests.
 
+The implemented manual summary consumer follows [Manual AI Summaries](./ai-summary-guidelines.md).
+Its shared `AIClient.complete(...)` adds optional validated usage without changing the tiny explicit
+connection test; media compatibility, request limits and strict output parsing belong to that guide.
+
 Owners under `backend/src/longtian_api/`: `schemas/ai_settings.py`,
 `repositories/ai_settings.py`, `services/ai_settings.py`, `services/ai_credentials.py`,
 `services/ai_client.py`, `services/ai_errors.py` and `api/v1/ai_settings.py`.

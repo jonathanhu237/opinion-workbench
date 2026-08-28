@@ -21,6 +21,7 @@ from longtian_api.main import create_app
 from longtian_api.repositories.search_runs import (
     SearchContentInput,
     SearchResultNotFoundError,
+    SearchRunNotActiveError,
     SearchRunRepository,
     SearchRunRepositoryUnavailableError,
 )
@@ -73,6 +74,27 @@ def _xhs_content(*, observed_at: str) -> SearchContentInput:
     )
 
 
+def _observe(repository, *, run_id, term_position, item):
+    """Supply ordered v2 start/completion evidence in repository result fixtures."""
+    run = repository.get(run_id)
+    if run.status == "running" and run.search_protocol_version == 2:
+        current = run.current_term_position
+        if current is None:
+            current = run.execution_start_term_position
+            repository.set_progress(run_id, current)
+        while current < term_position:
+            with repository._database.connect() as connection:
+                count = connection.execute(
+                    "SELECT COUNT(*) FROM search_run_content_terms "
+                    "WHERE run_id = ? AND term_position = ?",
+                    (run_id, current),
+                ).fetchone()[0]
+            repository.complete_term(run_id, current, count)
+            current += 1
+            repository.set_progress(run_id, current)
+    repository.observe_item(run_id=run_id, term_position=term_position, item=item)
+
+
 def test_repository_open_target_proves_relation_and_original_term_order(
     tmp_path: Path,
 ) -> None:
@@ -86,8 +108,9 @@ def test_repository_open_target_proves_relation_and_original_term_order(
         max_results_per_term=10,
     )
     repository.mark_running(run.id)
-    for position in (2, 0, 1):
-        repository.observe_item(
+    for position in (0, 1, 2):
+        _observe(
+            repository,
             run_id=run.id,
             term_position=position,
             item=_xhs_content(observed_at=f"2026-08-26T08:0{position}:00+00:00"),
@@ -121,17 +144,20 @@ def test_repository_preserves_cross_term_and_cross_run_deduplication(
         max_results_per_term=10,
     )
     repository.mark_running(first.id)
-    repository.observe_item(
+    _observe(
+        repository,
         run_id=first.id,
         term_position=0,
         item=_content(observed_at="2026-08-25T08:00:00+00:00"),
     )
-    repository.observe_item(
+    _observe(
+        repository,
         run_id=first.id,
         term_position=0,
         item=_content(observed_at="2026-08-25T08:01:00+00:00"),
     )
-    repository.observe_item(
+    _observe(
+        repository,
         run_id=first.id,
         term_position=1,
         item=_content(observed_at="2026-08-25T08:02:00+00:00"),
@@ -164,7 +190,8 @@ def test_repository_preserves_cross_term_and_cross_run_deduplication(
         max_results_per_term=5,
     )
     repository.mark_running(second.id)
-    repository.observe_item(
+    _observe(
+        repository,
         run_id=second.id,
         term_position=0,
         item=_content(
@@ -228,7 +255,7 @@ def test_migration_reconciliation_rule_deletion_and_failed_item_rollback(
             term_position=9,
             item=_content(observed_at="2026-08-26T08:00:00+00:00"),
         )
-    except SearchRunRepositoryUnavailableError:
+    except SearchRunNotActiveError:
         pass
     else:
         raise AssertionError("invalid term position should fail atomically")
@@ -265,6 +292,7 @@ class FakeSearchWorker:
         max_results_per_term: int,
         on_progress: Callable[[int, int], Awaitable[None]],
         on_item: Callable[[int, SearchWorkerItem], Awaitable[None]],
+        on_term_completed: Callable[[int, int], Awaitable[None]],
     ) -> SearchWorkerResult:
         self.calls.append((request_id, platform, tuple(terms), max_results_per_term))
         await on_progress(0, len(terms))
@@ -315,6 +343,11 @@ class FakeSearchWorker:
                     discovered_at=1_777_000_000_000,
                 ),
             )
+        if self.outcome in {"completed_with_results", "completed_empty"}:
+            await on_term_completed(0, int(self.emit_item))
+            for position in range(1, len(terms)):
+                await on_progress(position, len(terms))
+                await on_term_completed(position, 0)
         return SearchWorkerResult(self.outcome)  # type: ignore[arg-type]
 
     async def open_result(
@@ -366,7 +399,8 @@ def _seed_xhs_result(database_path: Path) -> tuple[int, int]:
         max_results_per_term=10,
     )
     repository.mark_running(run.id)
-    repository.observe_item(
+    _observe(
+        repository,
         run_id=run.id,
         term_position=0,
         item=_xhs_content(observed_at="2026-08-26T08:00:00+00:00"),
@@ -1184,7 +1218,8 @@ def test_version_two_migration_preserves_toutiao_and_isolates_weibo_identity(
         max_results_per_term=7,
     )
     repository.mark_running(weibo.id)
-    repository.observe_item(
+    _observe(
+        repository,
         run_id=weibo.id,
         term_position=0,
         item=SearchContentInput(
@@ -1222,25 +1257,10 @@ def test_version_one_database_upgrades_without_reseeding_monitoring_rules(
     tmp_path: Path,
 ) -> None:
     database = Database(tmp_path / "upgrade.sqlite3")
-    database.initialize()
     with database.connect() as connection:
+        _migrate_to_version_1(connection)
         connection.execute("BEGIN IMMEDIATE")
-        for table in (
-            "monitoring_rule_issue_terms",
-            "ai_settings",
-            "search_batch_attempts",
-            "search_batch_items",
-            "search_batch_terms",
-            "search_batches",
-            "search_run_content_terms",
-            "search_run_contents",
-            "search_contents",
-            "search_run_terms",
-            "search_runs",
-        ):
-            connection.execute(f"DROP TABLE {table}")  # noqa: S608 - closed names.
         connection.execute("UPDATE monitoring_rules SET name = '保留的旧规则'")
-        connection.execute("PRAGMA user_version = 1")
         connection.execute("COMMIT")
 
     database.initialize()
@@ -1351,6 +1371,8 @@ def test_version_three_migration_preserves_rows_relations_and_sequences(
         )
         assert migrated.execute("PRAGMA foreign_key_check").fetchall() == []
 
+    assert all(row[-2:] == (0, 1) for row in after["search_runs"])
+    after["search_runs"] = [row[:-2] for row in after["search_runs"]]
     assert after == before
     assert sequences == {"search_contents": 150, "search_runs": 75}
 
@@ -1363,7 +1385,8 @@ def test_version_three_migration_preserves_rows_relations_and_sequences(
         max_results_per_term=7,
     )
     repository.mark_running(kuaishou.id)
-    repository.observe_item(
+    _observe(
+        repository,
         run_id=kuaishou.id,
         term_position=0,
         item=SearchContentInput(
@@ -1488,6 +1511,8 @@ def test_version_four_migration_preserves_rows_and_isolates_douyin_identity(
         )
         assert migrated.execute("PRAGMA foreign_key_check").fetchall() == []
 
+    assert all(row[-2:] == (0, 1) for row in after["search_runs"])
+    after["search_runs"] = [row[:-2] for row in after["search_runs"]]
     assert after == before
     assert sequences == {"search_contents": 150, "search_runs": 75}
 
@@ -1500,7 +1525,8 @@ def test_version_four_migration_preserves_rows_and_isolates_douyin_identity(
         max_results_per_term=7,
     )
     repository.mark_running(douyin.id)
-    repository.observe_item(
+    _observe(
+        repository,
         run_id=douyin.id,
         term_position=0,
         item=SearchContentInput(
@@ -1627,6 +1653,8 @@ def test_version_five_migration_preserves_rows_sequences_and_adds_xhs(
         )
         assert migrated.execute("PRAGMA foreign_key_check").fetchall() == []
 
+    assert all(row[-2:] == (0, 1) for row in after["search_runs"])
+    after["search_runs"] = [row[:-2] for row in after["search_runs"]]
     assert after == before
     assert sequences == {"search_contents": 150, "search_runs": 75}
 
@@ -1639,7 +1667,8 @@ def test_version_five_migration_preserves_rows_sequences_and_adds_xhs(
         max_results_per_term=7,
     )
     repository.mark_running(xhs.id)
-    repository.observe_item(
+    _observe(
+        repository,
         run_id=xhs.id,
         term_position=0,
         item=SearchContentInput(

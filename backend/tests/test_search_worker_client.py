@@ -67,7 +67,7 @@ def search_event(
         SEARCH_EVENT_PREFIX
         + json.dumps(
             {
-                "version": 1,
+                "version": 2,
                 "type": "event",
                 "event": event,
                 "request_id": request_id,
@@ -274,6 +274,15 @@ class SearchProcess:
                 "empty_content_type",
                 "unsafe_publisher",
             }:
+                self.stdout.feed(
+                    search_event(
+                        "term_completed",
+                        request_id,
+                        platform=platform,
+                        term_position=0,
+                        item_count=1,
+                    )
+                )
                 for position in range(1, term_count):
                     self.stdout.feed(
                         search_event(
@@ -283,6 +292,15 @@ class SearchProcess:
                             phase="term_started",
                             term_position=position,
                             term_count=term_count,
+                        )
+                    )
+                    self.stdout.feed(
+                        search_event(
+                            "term_completed",
+                            request_id,
+                            platform=platform,
+                            term_position=position,
+                            item_count=0,
                         )
                     )
                 self.stdout.feed(
@@ -309,6 +327,18 @@ class SearchProcess:
                 event += b',"xsec_token":"SENTINEL_XSEC_TOKEN"}\n'
             self.stdout.feed(event)
         elif payload["command"] == "cancel":
+            previous = self.commands[-2][1]
+            if previous["command"] == "manual_page":
+                self.stdout.feed(
+                    search_event(
+                        "manual_page",
+                        str(payload["request_id"]),
+                        platform=previous["platform"],
+                        action=previous["action"],
+                        outcome="cancelled",
+                    )
+                )
+                return
             self.stdout.feed(
                 search_event(
                     "result",
@@ -318,6 +348,20 @@ class SearchProcess:
                         or str(self.commands[0][1]["platform"])
                     ),
                     outcome="cancelled",
+                )
+            )
+        elif payload["command"] == "manual_page":
+            if self.hanging:
+                return
+            self.stdout.feed(
+                search_event(
+                    "manual_page",
+                    str(payload["request_id"]),
+                    platform=self.event_platform_override or payload["platform"],
+                    action=payload["action"],
+                    outcome="opened_existing"
+                    if payload["action"] == "show"
+                    else "closed",
                 )
             )
         elif payload["command"] == "shutdown":
@@ -406,6 +450,7 @@ def test_client_decodes_progress_items_and_result_from_search_protocol() -> None
             max_results_per_term=10,
             on_progress=on_progress,
             on_item=on_item,
+            on_term_completed=lambda _position, _count: asyncio.sleep(0),
         )
 
         assert result.outcome == "completed_with_results"
@@ -416,6 +461,184 @@ def test_client_decodes_progress_items_and_result_from_search_protocol() -> None
         assert prefix == SEARCH_COMMAND_PREFIX
         assert command["terms"] == ["龙田街道", "坪山大道"]
         assert disconnects == []
+        await client.shutdown()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("platform", ["toutiao", "wb", "ks", "dy", "xhs"])
+def test_manual_page_exact_v2_frames_and_absent_close_never_launches(platform):
+    async def scenario():
+        process = SearchProcess()
+        client, launcher, _, _ = build_client(process)
+        absent = await client.manual_page(
+            request_id=uuid4(), platform=platform, action="close"
+        )
+        assert absent.outcome == "not_present"
+        assert launcher.calls == 0
+        request_id = uuid4()
+        shown = await client.manual_page(
+            request_id=request_id, platform=platform, action="show"
+        )
+        assert shown.outcome == "opened_existing"
+        assert process.commands[0] == (
+            SEARCH_COMMAND_PREFIX,
+            {
+                "version": 2,
+                "type": "command",
+                "command": "manual_page",
+                "request_id": str(request_id),
+                "platform": platform,
+                "action": "show",
+            },
+        )
+        assert (
+            await client.manual_page(
+                request_id=uuid4(), platform=platform, action="close"
+            )
+        ).outcome == "closed"
+        assert launcher.calls == 1
+        await client.shutdown()
+
+    asyncio.run(scenario())
+
+
+def test_manual_page_correlated_cancellation_keeps_healthy_worker():
+    async def scenario():
+        process = SearchProcess(hanging=True)
+        client, _, terminator, _ = build_client(process)
+        task = asyncio.create_task(
+            client.manual_page(request_id=uuid4(), platform="xhs", action="show")
+        )
+        while not process.commands:
+            await asyncio.sleep(0)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert process.commands[-1][0] == SEARCH_COMMAND_PREFIX
+        assert process.commands[-1][1]["version"] == 2
+        assert process.commands[-1][1]["command"] == "cancel"
+        assert terminator.calls == 0
+        await client.shutdown()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "sequence",
+    [
+        "missing",
+        "duplicate",
+        "count",
+        "before_start",
+        "next_start",
+        "late_item",
+        "old_version",
+    ],
+)
+def test_completion_stream_rejects_order_count_version_drift(sequence):
+    class CompletionProcess(SearchProcess):
+        def receive(self, data):
+            if data.startswith(SEARCH_COMMAND_PREFIX):
+                payload = json.loads(data[len(SEARCH_COMMAND_PREFIX) :])
+                if payload["command"] == "search":
+                    self.commands.append((SEARCH_COMMAND_PREFIX, payload))
+                    request = payload["request_id"]
+                    start = search_event(
+                        "progress",
+                        request,
+                        phase="term_started",
+                        term_position=0,
+                        term_count=2,
+                    )
+                    complete = search_event(
+                        "term_completed",
+                        request,
+                        term_position=0,
+                        item_count=1 if sequence == "count" else 0,
+                    )
+                    if sequence != "before_start":
+                        self.stdout.feed(start)
+                    if sequence not in {"missing", "next_start"}:
+                        self.stdout.feed(
+                            complete
+                            if sequence != "old_version"
+                            else complete.replace(b'"version":2', b'"version":1')
+                        )
+                    if sequence == "duplicate":
+                        self.stdout.feed(complete)
+                    elif sequence == "next_start":
+                        self.stdout.feed(
+                            search_event(
+                                "progress",
+                                request,
+                                phase="term_started",
+                                term_position=1,
+                                term_count=2,
+                            )
+                        )
+                    elif sequence == "late_item":
+                        self.stdout.feed(
+                            search_event(
+                                "item", request, term_position=0, item=self.item()
+                            )
+                        )
+                    self.stdout.feed(
+                        search_event("result", request, outcome="completed_empty")
+                    )
+                    return
+            super().receive(data)
+
+    async def scenario():
+        client, _, terminator, _ = build_client(CompletionProcess())
+        with pytest.raises(AuthWorkerError):
+            await client.search(
+                request_id=uuid4(),
+                platform="toutiao",
+                terms=("词一", "词二"),
+                max_results_per_term=1,
+                on_progress=lambda *_: asyncio.sleep(0),
+                on_item=lambda *_: asyncio.sleep(0),
+                on_term_completed=lambda *_: asyncio.sleep(0),
+            )
+        assert terminator.calls == 1
+
+    asyncio.run(scenario())
+
+
+def test_reader_awaits_completion_persistence_before_next_term():
+    async def scenario():
+        process = SearchProcess()
+        client, _, _, _ = build_client(process)
+        started, release = asyncio.Event(), asyncio.Event()
+        order = []
+
+        async def progress(position, count):
+            order.append(("start", position))
+
+        async def completed(position, count):
+            if position == 0:
+                started.set()
+                await release.wait()
+            order.append(("complete", position))
+
+        task = asyncio.create_task(
+            client.search(
+                request_id=uuid4(),
+                platform="toutiao",
+                terms=("词一", "词二"),
+                max_results_per_term=2,
+                on_progress=progress,
+                on_item=lambda *_: asyncio.sleep(0),
+                on_term_completed=completed,
+            )
+        )
+        await started.wait()
+        assert order == [("start", 0)]
+        assert not task.done()
+        release.set()
+        await task
+        assert order == [("start", 0), ("complete", 0), ("start", 1), ("complete", 1)]
         await client.shutdown()
 
     asyncio.run(scenario())
@@ -437,6 +660,7 @@ def test_client_threads_weibo_platform_and_rejects_cross_platform_events() -> No
             max_results_per_term=10,
             on_progress=lambda _position, _count: asyncio.sleep(0),
             on_item=on_item,
+            on_term_completed=lambda _position, _count: asyncio.sleep(0),
         )
 
         assert result.outcome == "completed_with_results"
@@ -456,6 +680,7 @@ def test_client_threads_weibo_platform_and_rejects_cross_platform_events() -> No
                 max_results_per_term=10,
                 on_progress=lambda _position, _count: asyncio.sleep(0),
                 on_item=lambda _position, _item: asyncio.sleep(0),
+                on_term_completed=lambda _position, _count: asyncio.sleep(0),
             )
 
         assert terminator.calls == 1
@@ -481,6 +706,7 @@ def test_client_threads_kuaishou_platform_and_canonical_url() -> None:
             max_results_per_term=10,
             on_progress=lambda _position, _count: asyncio.sleep(0),
             on_item=on_item,
+            on_term_completed=lambda _position, _count: asyncio.sleep(0),
         )
 
         assert result.outcome == "completed_with_results"
@@ -507,6 +733,7 @@ def test_client_threads_douyin_platform_and_canonical_url() -> None:
             max_results_per_term=10,
             on_progress=lambda _position, _count: asyncio.sleep(0),
             on_item=on_item,
+            on_term_completed=lambda _position, _count: asyncio.sleep(0),
         )
 
         assert result.outcome == "completed_with_results"
@@ -526,6 +753,7 @@ def test_client_threads_douyin_platform_and_canonical_url() -> None:
                 max_results_per_term=10,
                 on_progress=lambda _position, _count: asyncio.sleep(0),
                 on_item=lambda _position, _item: asyncio.sleep(0),
+                on_term_completed=lambda _position, _count: asyncio.sleep(0),
             )
 
         assert terminator.calls == 1
@@ -551,6 +779,7 @@ def test_client_threads_xhs_platform_and_query_free_canonical_url() -> None:
             max_results_per_term=10,
             on_progress=lambda _position, _count: asyncio.sleep(0),
             on_item=on_item,
+            on_term_completed=lambda _position, _count: asyncio.sleep(0),
         )
 
         assert result.outcome == "completed_with_results"
@@ -570,6 +799,7 @@ def test_client_threads_xhs_platform_and_query_free_canonical_url() -> None:
                 max_results_per_term=10,
                 on_progress=lambda _position, _count: asyncio.sleep(0),
                 on_item=lambda _position, _item: asyncio.sleep(0),
+                on_term_completed=lambda _position, _count: asyncio.sleep(0),
             )
 
         assert terminator.calls == 1
@@ -611,7 +841,7 @@ def test_client_open_result_uses_exact_secret_free_frame_and_decodes_outcome(
         prefix, command = process.commands[0]
         assert prefix == SEARCH_COMMAND_PREFIX
         assert command == {
-            "version": 1,
+            "version": 2,
             "type": "command",
             "command": "open_result",
             "request_id": str(request_id),
@@ -691,6 +921,7 @@ def test_client_search_cancellation_uses_the_search_cancel_frame() -> None:
                 max_results_per_term=10,
                 on_progress=lambda _position, _count: asyncio.sleep(0),
                 on_item=lambda _position, _item: asyncio.sleep(0),
+                on_term_completed=lambda _position, _count: asyncio.sleep(0),
             )
         )
         while len(process.commands) < 1:
@@ -722,6 +953,7 @@ def test_client_rejects_non_toutiao_item_urls_and_recycles_worker() -> None:
                 max_results_per_term=10,
                 on_progress=lambda _position, _count: asyncio.sleep(0),
                 on_item=lambda _position, _item: asyncio.sleep(0),
+                on_term_completed=lambda _position, _count: asyncio.sleep(0),
             )
 
         assert terminator.calls == 1
@@ -899,6 +1131,7 @@ def test_client_rejects_inconsistent_search_event_sequences_and_recycles_worker(
                 max_results_per_term=limit,
                 on_progress=lambda _position, _count: asyncio.sleep(0),
                 on_item=lambda _position, _item: asyncio.sleep(0),
+                on_term_completed=lambda _position, _count: asyncio.sleep(0),
             )
 
         assert terminator.calls == 1

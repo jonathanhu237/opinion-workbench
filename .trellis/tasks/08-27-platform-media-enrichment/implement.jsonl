@@ -5,3 +5,6 @@
 {"file":".trellis/spec/infra/submodule-guidelines.md","reason":"Separate fork publication and reproducible gitlink."}
 {"file":".trellis/tasks/08-27-multimodal-opinion-analysis/research/platform-media-plan.md","reason":"Verified source candidates, forbidden reuse paths and live media gates."}
 {"file":".trellis/tasks/08-27-multimodal-opinion-analysis/research/model-transport-contract.md","reason":"Bounded explicit model transport, media envelope and validated outputs."}
+{"file":".trellis/tasks/08-27-multimodal-opinion-analysis/research/product-integration-readiness.md","reason":"Use observed Douyin canonical-page candidate without copying probe-only limits or assuming five-platform support; preserve recovery."}
+{"file":".trellis/tasks/08-27-platform-media-enrichment/research/enrichment-protocol-contract.md","reason":"Exact shared enrichment-v1 command/result/staging contract; existing auth-v2/search-v2 remain unchanged."}
+{"file":".trellis/tasks/08-27-platform-media-enrichment/research/implementation-boundary.md","reason":"Approved scope, fork/backend file ownership and preservation of pre-existing dirty changes."}

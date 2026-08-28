@@ -43,6 +43,8 @@ class SearchRunRecord:
     created_at: str
     started_at: str | None
     finished_at: str | None
+    execution_start_term_position: int = 0
+    search_protocol_version: int = 2
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +85,22 @@ class SearchResultOpenTargetRecord:
     platform: SearchPlatform
     platform_content_id: str
     matched_terms: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class SearchResultSourceRecord:
+    """Internal stored identity; no caller-provided navigation target is accepted."""
+
+    run_id: int
+    result_id: int
+    platform: SearchPlatform
+    platform_content_id: str
+    content_type: str
+    content_url: str
+    title: str
+    snippet: str
+    matched_terms: tuple[str, ...]
+    collection_active: bool
 
 
 class SearchRunRepositoryError(Exception):
@@ -143,8 +161,9 @@ class SearchRunRepository:
                 """
                 INSERT INTO search_runs (
                   monitoring_rule_id, platform, rule_name, max_results_per_term,
-                  status, current_term_position, created_at, started_at, finished_at
-                ) VALUES (?, ?, ?, ?, 'queued', NULL, ?, NULL, NULL)
+                  status, current_term_position, created_at, started_at, finished_at,
+                  execution_start_term_position, search_protocol_version
+                ) VALUES (?, ?, ?, ?, 'queued', NULL, ?, NULL, NULL, 0, 2)
                 """,
                 (
                     monitoring_rule_id,
@@ -182,6 +201,32 @@ class SearchRunRepository:
 
     def set_progress(self, run_id: int, term_position: int) -> None:
         with _translate_storage_errors(), self._write_connection() as connection:
+            run = _require_active_writer(connection, run_id)
+            if run["search_protocol_version"] == 2:
+                current = run["current_term_position"]
+                expected = (
+                    run["execution_start_term_position"]
+                    if current is None
+                    else current + 1
+                )
+                if term_position != expected or (
+                    current is not None
+                    and connection.execute(
+                        "SELECT 1 FROM search_run_term_completions WHERE run_id = ? "
+                        "AND term_position = ?",
+                        (run_id, current),
+                    ).fetchone()
+                    is None
+                ):
+                    raise SearchRunNotActiveError
+            if (
+                connection.execute(
+                    "SELECT 1 FROM search_run_terms WHERE run_id = ? AND position = ?",
+                    (run_id, term_position),
+                ).fetchone()
+                is None
+            ):
+                raise SearchRunNotActiveError
             cursor = connection.execute(
                 """
                 UPDATE search_runs
@@ -193,6 +238,36 @@ class SearchRunRepository:
             if cursor.rowcount == 0:
                 _raise_missing_or_inactive(connection, run_id)
 
+    def complete_term(self, run_id: int, term_position: int, item_count: int) -> None:
+        with _translate_storage_errors(), self._write_connection() as connection:
+            run = _require_active_writer(connection, run_id)
+            completed = connection.execute(
+                "SELECT COUNT(*) FROM search_run_term_completions WHERE run_id = ?",
+                (run_id,),
+            ).fetchone()[0]
+            count = connection.execute(
+                "SELECT COUNT(*) FROM search_run_content_terms WHERE run_id = ? AND "
+                "term_position = ?",
+                (run_id, term_position),
+            ).fetchone()[0]
+            if (
+                run["search_protocol_version"] != 2
+                or term_position != run["current_term_position"]
+                or term_position != run["execution_start_term_position"] + completed
+                or type(item_count) is not int
+                or item_count != count
+                or not 0 <= item_count <= run["max_results_per_term"]
+            ):
+                raise SearchRunNotActiveError
+            timestamp = _utc_timestamp()
+            connection.execute(
+                """INSERT INTO search_run_term_completions
+                   (run_id, term_position, proof, result_count, completed_at,
+                   recorded_at)
+                   VALUES (?, ?, 'worker_term_completed', ?, ?, ?)""",
+                (run_id, term_position, item_count, timestamp, timestamp),
+            )
+
     def observe_item(
         self,
         *,
@@ -201,15 +276,17 @@ class SearchRunRepository:
         item: SearchContentInput,
     ) -> None:
         with _translate_storage_errors(), self._write_connection() as connection:
-            active = connection.execute(
-                """
-                SELECT platform FROM search_runs
-                WHERE id = ? AND status = 'running'
-                """,
-                (run_id,),
-            ).fetchone()
-            if active is None:
-                _raise_missing_or_inactive(connection, run_id)
+            active = _require_active_writer(connection, run_id)
+            if active["search_protocol_version"] == 2 and (
+                active["current_term_position"] != term_position
+                or connection.execute(
+                    "SELECT 1 FROM search_run_term_completions WHERE run_id = ? AND "
+                    "term_position = ?",
+                    (run_id, term_position),
+                ).fetchone()
+                is not None
+            ):
+                raise SearchRunNotActiveError
             platform = cast(SearchPlatform, str(active["platform"]))
             term = connection.execute(
                 """
@@ -363,6 +440,7 @@ class SearchRunRepository:
         with _translate_storage_errors():
             connection = self._database.connect()
             try:
+                connection.execute("BEGIN")
                 return _read_run(connection, run_id)
             finally:
                 connection.close()
@@ -467,21 +545,47 @@ class SearchRunRepository:
     def get_result_open_target(
         self, *, run_id: int, result_id: int
     ) -> SearchResultOpenTargetRecord:
+        source = self.get_result_source(run_id=run_id, result_id=result_id)
+        return SearchResultOpenTargetRecord(
+            platform=source.platform,
+            platform_content_id=source.platform_content_id,
+            matched_terms=source.matched_terms,
+        )
+
+    def get_result_source(
+        self, *, run_id: int, result_id: int
+    ) -> SearchResultSourceRecord:
+        """Prove the relation and read its ordered provenance in one snapshot."""
         with _translate_storage_errors():
             connection = self._database.connect()
             try:
+                connection.execute("BEGIN")
                 row = connection.execute(
                     """
-                    SELECT contents.platform, contents.platform_content_id
+                    SELECT contents.platform, contents.platform_content_id,
+                      contents.content_type, contents.content_url,
+                      contents.title, contents.snippet,
+                      runs.platform AS run_platform,
+                      (runs.status IN ('queued', 'running') OR EXISTS (
+                        SELECT 1 FROM search_batch_attempts AS attempts
+                        JOIN search_batches AS batches ON batches.id = attempts.batch_id
+                        WHERE attempts.search_run_id = runs.id
+                          AND batches.status IN (
+                            'queued', 'running', 'paused_for_manual_action'
+                          )
+                      )) AS collection_active
                     FROM search_run_contents AS links
                     JOIN search_contents AS contents
                       ON contents.id = links.search_content_id
+                    JOIN search_runs AS runs ON runs.id = links.run_id
                     WHERE links.run_id = ? AND contents.id = ?
                     """,
                     (run_id, result_id),
                 ).fetchone()
                 if row is None:
                     raise SearchResultNotFoundError
+                if row["run_platform"] != row["platform"]:
+                    raise sqlite3.DatabaseError("Search source platform mismatch")
                 term_rows = connection.execute(
                     """
                     SELECT terms.value
@@ -497,10 +601,17 @@ class SearchRunRepository:
                 matched_terms = tuple(str(term["value"]) for term in term_rows)
                 if not matched_terms:
                     raise sqlite3.DatabaseError("Search result has no matched terms")
-                return SearchResultOpenTargetRecord(
+                return SearchResultSourceRecord(
+                    run_id=run_id,
+                    result_id=result_id,
                     platform=cast(SearchPlatform, str(row["platform"])),
                     platform_content_id=str(row["platform_content_id"]),
+                    content_type=str(row["content_type"]),
+                    content_url=str(row["content_url"]),
+                    title=str(row["title"]),
+                    snippet=str(row["snippet"]),
                     matched_terms=matched_terms,
+                    collection_active=bool(row["collection_active"]),
                 )
             finally:
                 connection.close()
@@ -520,7 +631,12 @@ class SearchRunRepository:
             connection.close()
 
 
-def _read_run(connection: sqlite3.Connection, run_id: int) -> SearchRunRecord:
+def _read_run(
+    connection: sqlite3.Connection,
+    run_id: int,
+    *,
+    allow_empty_terms: bool = False,
+) -> SearchRunRecord:
     row = connection.execute(
         """
         SELECT
@@ -546,7 +662,7 @@ def _read_run(connection: sqlite3.Connection, run_id: int) -> SearchRunRecord:
         (run_id,),
     ).fetchall()
     terms = tuple(str(term["value"]) for term in term_rows)
-    if not terms:
+    if not terms and not allow_empty_terms:
         raise sqlite3.DatabaseError("Search run has no terms")
     return SearchRunRecord(
         id=int(row["id"]),
@@ -571,6 +687,8 @@ def _read_run(connection: sqlite3.Connection, run_id: int) -> SearchRunRecord:
         created_at=str(row["created_at"]),
         started_at=str(row["started_at"]) if row["started_at"] else None,
         finished_at=str(row["finished_at"]) if row["finished_at"] else None,
+        execution_start_term_position=int(row["execution_start_term_position"]),
+        search_protocol_version=int(row["search_protocol_version"]),
     )
 
 
@@ -589,6 +707,13 @@ def _assemble_result(
         """,
         (run_id, int(row["id"])),
     ).fetchall()
+    return assemble_result(row, tuple(str(term["value"]) for term in term_rows))
+
+
+def assemble_result(
+    row: sqlite3.Row, matched_terms: tuple[str, ...]
+) -> SearchResultRecord:
+    """Share the safe normalized projection with batch-wide result queries."""
     return SearchResultRecord(
         id=int(row["id"]),
         platform=cast(SearchPlatform, str(row["platform"])),
@@ -605,8 +730,37 @@ def _assemble_result(
         discovery_kind=str(row["discovery_kind"]),  # type: ignore[arg-type]
         first_observed_at=str(row["first_observed_at"]),
         last_observed_at=str(row["last_observed_at"]),
-        matched_terms=tuple(str(term["value"]) for term in term_rows),
+        matched_terms=matched_terms,
     )
+
+
+def _require_active_writer(connection: sqlite3.Connection, run_id: int) -> sqlite3.Row:
+    row = connection.execute(
+        "SELECT * FROM search_runs WHERE id = ? AND status = 'running'", (run_id,)
+    ).fetchone()
+    if row is None:
+        _raise_missing_or_inactive(connection, run_id)
+    attempt = connection.execute(
+        """SELECT batches.status AS batch_status, items.status AS item_status,
+                  attempts.attempt_number, (
+                    SELECT MAX(a.attempt_number) FROM search_batch_attempts AS a
+                    WHERE a.batch_id = attempts.batch_id AND a.item_position =
+                    attempts.item_position
+                  ) AS latest
+           FROM search_batch_attempts AS attempts
+           JOIN search_batches AS batches ON batches.id = attempts.batch_id
+           JOIN search_batch_items AS items ON items.batch_id = attempts.batch_id
+             AND items.position = attempts.item_position
+           WHERE attempts.search_run_id = ?""",
+        (run_id,),
+    ).fetchone()
+    if attempt is not None and (
+        attempt["batch_status"] != "running"
+        or attempt["item_status"] != "running"
+        or attempt["attempt_number"] != attempt["latest"]
+    ):
+        raise SearchRunNotActiveError
+    return row
 
 
 def _raise_missing_or_inactive(connection: sqlite3.Connection, run_id: int) -> None:

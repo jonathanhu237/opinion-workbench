@@ -335,7 +335,7 @@ function RuleEditorDialog({ editor, onClose, onSaved }: RuleEditorDialogProps) {
                     id="rule-objects"
                     rows={4}
                     className="min-h-24 resize-y"
-                    placeholder={'龙田街道\n龙田社区\n老坑社区'}
+                    placeholder={'对象 1\n对象 2\n对象 3'}
                     aria-invalid={fieldState.invalid}
                     aria-describedby={
                       fieldState.error
@@ -368,7 +368,7 @@ function RuleEditorDialog({ editor, onClose, onSaved }: RuleEditorDialogProps) {
                     id="rule-issues"
                     rows={3}
                     className="min-h-20 resize-y"
-                    placeholder={'噪音扰民\n道路积水'}
+                    placeholder={'关键词 1\n关键词 2\n关键词 3'}
                     aria-invalid={fieldState.invalid}
                     aria-describedby={
                       fieldState.error

@@ -1,6 +1,7 @@
 """Orchestrate durable one-shot platform searches through the shared worker."""
 
 import asyncio
+from collections.abc import Callable
 from pathlib import Path
 from typing import Literal, Protocol
 from uuid import UUID, uuid4
@@ -36,6 +37,8 @@ from longtian_api.services.browser_operations import (
 )
 from longtian_api.services.media_crawler_auth_worker import (
     AuthWorkerError,
+    ManualPageAction,
+    ManualPageWorkerResult,
     PersistentAuthWorkerClient,
     SearchWorkerItem,
 )
@@ -43,6 +46,7 @@ from longtian_api.services.monitoring_rules import (
     MonitoringRuleError,
     MonitoringRuleService,
 )
+from longtian_api.services.settled_tasks import database_call
 
 MAX_SEARCH_TERMS = 20
 
@@ -63,6 +67,10 @@ class SearchRunRepositoryProtocol(Protocol):
     def mark_running(self, run_id: int) -> SearchRunRecord: ...
 
     def set_progress(self, run_id: int, term_position: int) -> None: ...
+
+    def complete_term(
+        self, run_id: int, term_position: int, item_count: int
+    ) -> None: ...
 
     def observe_item(
         self, *, run_id: int, term_position: int, item: SearchContentInput
@@ -327,13 +335,38 @@ class SearchRunService:
                 pass
 
     async def execute_attempt(
-        self, record: SearchRunRecord, request_id: UUID
+        self,
+        record: SearchRunRecord,
+        request_id: UUID,
+        cancellation_status: Callable[[], SearchRunStatus] | None = None,
     ) -> SearchRunRecord:
         """Execute one already-persisted batch attempt under external ownership."""
-        terminal, cancelled = await self._execute_record(record, request_id)
+        terminal, cancelled = await self._execute_record(
+            record, request_id, cancellation_status
+        )
         if cancelled:
             raise asyncio.CancelledError
         return await self._get_record(record.id)
+
+    async def manual_page(
+        self, platform: SearchPlatform, action: ManualPageAction
+    ) -> ManualPageWorkerResult:
+        """Caller already owns the batch browser operation."""
+        try:
+            async with asyncio.timeout(self._open_timeout_seconds):
+                result = await self._worker.manual_page(
+                    request_id=uuid4(), platform=platform, action=action
+                )
+        except (AuthWorkerError, TimeoutError):
+            await self._worker.discard_session()
+            return ManualPageWorkerResult("internal_error")
+        if action == "close" and result.outcome not in {
+            "closed",
+            "not_present",
+            "browser_unavailable",
+        }:
+            await self._worker.discard_session()
+        return result
 
     async def load_rule(self, rule_id: int) -> MonitoringRule:
         """Load and validate the enabled rule shared by run orchestrators."""
@@ -391,24 +424,33 @@ class SearchRunService:
             raise asyncio.CancelledError
 
     async def _execute_record(
-        self, record: SearchRunRecord, request_id: UUID
+        self,
+        record: SearchRunRecord,
+        request_id: UUID,
+        cancellation_status: Callable[[], SearchRunStatus] | None = None,
     ) -> tuple[SearchRunStatus, bool]:
         terminal: SearchRunStatus = "internal_error"
         cancelled = False
         try:
-            await asyncio.to_thread(self._repository.mark_running, record.id)
+            await database_call(self._repository.mark_running, record.id)
+            start = record.execution_start_term_position
 
             async def on_progress(position: int, _count: int) -> None:
-                await asyncio.to_thread(
-                    self._repository.set_progress, record.id, position
+                await database_call(
+                    self._repository.set_progress, record.id, start + position
+                )
+
+            async def on_term_completed(position: int, count: int) -> None:
+                await database_call(
+                    self._repository.complete_term, record.id, start + position, count
                 )
 
             async def on_item(position: int, item: SearchWorkerItem) -> None:
                 observed_at = _timestamp_from_epoch_milliseconds(item.discovered_at)
-                await asyncio.to_thread(
+                await database_call(
                     self._repository.observe_item,
                     run_id=record.id,
-                    term_position=position,
+                    term_position=start + position,
                     item=SearchContentInput(
                         platform_content_id=item.content_id,
                         content_type=item.content_type,
@@ -426,25 +468,24 @@ class SearchRunService:
                 result = await self._worker.search(
                     request_id=request_id,
                     platform=record.platform,
-                    terms=record.terms,
+                    terms=record.terms[start:],
                     max_results_per_term=record.max_results_per_term,
                     on_progress=on_progress,
                     on_item=on_item,
+                    on_term_completed=on_term_completed,
                 )
             terminal = _project_worker_outcome(result.outcome)
         except TimeoutError:
             terminal = "timed_out"
         except asyncio.CancelledError:
-            terminal = "cancelled"
+            terminal = cancellation_status() if cancellation_status else "cancelled"
             cancelled = True
         except (AuthWorkerError, SearchRunRepositoryUnavailableError):
             terminal = "internal_error"
         except Exception:
             terminal = "internal_error"
         try:
-            await asyncio.shield(
-                asyncio.to_thread(self._repository.finish, record.id, terminal)
-            )
+            await database_call(self._repository.finish, record.id, terminal)
         except (SearchRunNotActiveError, SearchRunRepositoryUnavailableError):
             pass
         return terminal, cancelled

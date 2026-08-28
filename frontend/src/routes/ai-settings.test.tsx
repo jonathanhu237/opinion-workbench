@@ -36,6 +36,7 @@ const empty: Settings = {
   revision: 0,
 }
 const key = 'fake-form-key-sentinel'
+const savedKeyMask = '********************'
 const fetchSettings = vi.mocked(fetchAISettings)
 const saveSettings = vi.mocked(saveAISettings)
 const testConnection = vi.mocked(testAIConnection)
@@ -67,12 +68,18 @@ describe('AI settings form', () => {
     const password = await screen.findByLabelText('API Key')
     expect(password).toHaveAttribute('type', 'password')
     expect(password).toHaveAttribute('autocomplete', 'off')
+    expect(password).not.toHaveAttribute('placeholder')
     expect(password).toHaveValue('')
+    const mask = screen.getByText(savedKeyMask)
+    expect(mask).toBeVisible()
+    expect(mask).toHaveAttribute('aria-hidden', 'true')
+    expect(mask).toHaveClass('text-foreground', 'pointer-events-none')
     expect(screen.getByLabelText('Base URL')).toHaveValue(saved.base_url)
     expect(screen.getByLabelText('模型名称')).toHaveValue(saved.model)
     expect(screen.getByRole('button', { name: '保存' })).toBeDisabled()
     expect(screen.getByRole('button', { name: '测试连接' })).toBeEnabled()
     expect(screen.getByText(/已配置，留空保留/)).toBeVisible()
+    expect(screen.queryByText('请先保存配置')).toBeNull()
     expect(testConnection).not.toHaveBeenCalled()
     expect(saveSettings).not.toHaveBeenCalled()
   })
@@ -81,6 +88,10 @@ describe('AI settings form', () => {
     fetchSettings.mockResolvedValue(empty)
     const user = userEvent.setup()
     renderSettings()
+    expect(await screen.findByLabelText('API Key')).not.toHaveAttribute(
+      'placeholder',
+    )
+    expect(screen.queryByText(savedKeyMask)).toBeNull()
     await user.click(await screen.findByRole('button', { name: '保存' }))
     expect(
       await screen.findByText('请输入有效的 HTTPS Base URL。'),
@@ -100,12 +111,49 @@ describe('AI settings form', () => {
     expect(saveSettings).not.toHaveBeenCalled()
   })
 
+  it('hides saved-key text on focus or typing and restores it only on empty blur', async () => {
+    const user = userEvent.setup()
+    renderSettings()
+    const password = await screen.findByLabelText('API Key')
+    await user.click(password)
+    expect(password).toHaveFocus()
+    expect(password).toHaveValue('')
+    expect(screen.queryByText(savedKeyMask)).toBeNull()
+    expect(screen.getByRole('button', { name: '保存' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '测试连接' })).toBeEnabled()
+    await user.tab()
+    expect(password).not.toHaveFocus()
+    expect(screen.getByText(savedKeyMask)).toBeVisible()
+    await user.type(password, key)
+    expect(password).toHaveValue(key)
+    expect(password).toHaveAttribute('type', 'password')
+    expect(screen.queryByText(savedKeyMask)).toBeNull()
+    expect(screen.getByRole('button', { name: '保存' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: '测试连接' })).toBeDisabled()
+    await user.tab()
+    expect(password).not.toHaveFocus()
+    expect(screen.queryByText(savedKeyMask)).toBeNull()
+    await user.clear(password)
+    expect(password).toHaveValue('')
+    expect(password).toHaveFocus()
+    expect(screen.queryByText(savedKeyMask)).toBeNull()
+    await user.tab()
+    expect(screen.getByText(savedKeyMask)).toBeVisible()
+    expect(screen.getByRole('button', { name: '保存' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '测试连接' })).toBeEnabled()
+    expect(screen.queryByText('请先保存配置')).toBeNull()
+    expect(saveSettings).not.toHaveBeenCalled()
+    expect(testConnection).not.toHaveBeenCalled()
+  })
+
   it('requires a newly entered key for an endpoint change and prevents testing dirty values', async () => {
     const user = userEvent.setup()
     renderSettings()
     const endpoint = await screen.findByLabelText('Base URL')
     await user.clear(endpoint)
     await user.type(endpoint, 'https://other.example.com/v1')
+    expect(screen.getByLabelText('API Key')).toHaveValue('')
+    expect(screen.getByText(savedKeyMask)).toBeVisible()
     expect(screen.getByRole('button', { name: '测试连接' })).toBeDisabled()
     expect(screen.getByText('请先保存配置')).toBeVisible()
     await user.click(screen.getByRole('button', { name: '保存' }))
@@ -118,7 +166,7 @@ describe('AI settings form', () => {
     expect(testConnection).not.toHaveBeenCalled()
   })
 
-  it('saves directly, clears the key, and retains only non-secret query data', async () => {
+  it('saves directly, restores the mask on reopen, and retains only non-secret query data', async () => {
     fetchSettings.mockResolvedValue(empty)
     let finish: ((value: Settings) => void) | undefined
     saveSettings.mockReturnValue(
@@ -128,7 +176,7 @@ describe('AI settings form', () => {
     )
     const localWrite = vi.spyOn(Storage.prototype, 'setItem')
     const user = userEvent.setup()
-    const { queryClient } = renderSettings()
+    const { queryClient, unmount } = renderSettings()
     await user.type(await screen.findByLabelText('API Key'), key)
     await user.type(screen.getByLabelText('Base URL'), saved.base_url ?? '')
     await user.type(screen.getByLabelText('模型名称'), saved.model ?? '')
@@ -151,10 +199,19 @@ describe('AI settings form', () => {
     await act(async () => finish?.(saved))
     expect(await screen.findByRole('status')).toHaveTextContent('已保存。')
     expect(screen.getByLabelText('API Key')).toHaveValue('')
+    expect(screen.getByText(savedKeyMask)).toBeVisible()
     expect(queryClient.getQueryData(AI_SETTINGS_QUERY_KEY)).toEqual(saved)
     expect(queryClient.getMutationCache().getAll()).toEqual([])
     expect(localWrite).not.toHaveBeenCalled()
     expect(testConnection).not.toHaveBeenCalled()
+    unmount()
+    renderSettings()
+    const reopenedPassword = await screen.findByLabelText('API Key')
+    expect(reopenedPassword).toHaveValue('')
+    expect(reopenedPassword).not.toHaveAttribute('placeholder')
+    expect(screen.getByText(savedKeyMask)).toBeVisible()
+    expect(screen.getByRole('button', { name: '保存' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '测试连接' })).toBeEnabled()
     localWrite.mockRestore()
   })
 
@@ -162,6 +219,7 @@ describe('AI settings form', () => {
     const user = userEvent.setup()
     renderSettings()
     const model = await screen.findByLabelText('模型名称')
+    expect(screen.getByText(savedKeyMask)).toBeVisible()
     await user.clear(model)
     await user.type(model, 'other-model')
     const result = { ...saved, model: 'other-model', revision: 2 }
@@ -172,6 +230,10 @@ describe('AI settings form', () => {
     expect(saveSettings).toHaveBeenCalledWith(
       { base_url: saved.base_url, model: 'other-model' },
       expect.any(AbortSignal),
+    )
+    expect(saveSettings.mock.calls[0]?.[0]).not.toHaveProperty('api_key')
+    expect(JSON.stringify(saveSettings.mock.calls[0]?.[0])).not.toContain(
+      savedKeyMask,
     )
   })
 
@@ -188,6 +250,7 @@ describe('AI settings form', () => {
       'AI 配置暂时无法读取或保存',
     )
     expect(screen.getByLabelText('API Key')).toHaveValue('')
+    expect(screen.getByText(savedKeyMask)).toBeVisible()
     expect(screen.getByLabelText('模型名称')).toHaveValue('test-model-edited')
     expect(screen.getByRole('button', { name: '测试连接' })).toBeDisabled()
     expect(queryClient.getQueryData(AI_SETTINGS_QUERY_KEY)).toEqual(saved)
@@ -209,6 +272,10 @@ describe('AI settings form', () => {
       await screen.findByRole('button', { name: '测试中…' }),
     ).toBeDisabled()
     expect(screen.getByLabelText('Base URL')).toBeDisabled()
+    expect(screen.getByText(savedKeyMask)).toHaveAttribute(
+      'data-disabled',
+      'true',
+    )
     expect(screen.getByRole('button', { name: '保存' })).toBeDisabled()
     expect(testConnection).toHaveBeenCalledExactlyOnceWith(
       1,
@@ -217,6 +284,10 @@ describe('AI settings form', () => {
     await act(async () => finish?.())
     expect(await screen.findByRole('status')).toHaveTextContent(
       '连接成功，仅验证文本响应。',
+    )
+    expect(screen.getByText(savedKeyMask)).toHaveAttribute(
+      'data-disabled',
+      'false',
     )
     expect(screen.getByText(/不验证图片或音视频能力/)).toBeVisible()
     expect(saveSettings).not.toHaveBeenCalled()

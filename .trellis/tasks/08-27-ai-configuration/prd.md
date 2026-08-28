@@ -33,3 +33,37 @@ user review and a separately requested commit/archival; later child tasks remain
 - Produces the configuration projection/revision, credential lease and bounded model-client contracts consumed by screening/summary. No browser/media/collection database changes in this child.
 - Model protocol/limits are defined in the parent's `research/model-transport-contract.md`; no vendor SDK, native protocol adapter or cloud file storage.
 - Real provider testing is a later explicitly invoked acceptance step using a locally entered replacement key, never the chat-disclosed credential.
+
+## Approved Follow-up: Saved-Key Mask (2026-08-27)
+
+The user requested that a configured API Key appear as a fixed group of asterisks in its input.
+This is a small frontend-only follow-up to the already approved configuration feature. The user
+then clarified that these should be normal visible asterisks, not a muted placeholder, and more
+numerous. The current acceptance below supersedes the first eight-character placeholder version.
+
+- [x] A saved key is indicated by 20 literal asterisks (`********************`) in normal foreground
+  text when the input is empty and unfocused, not by a placeholder or browser password dots.
+  Hide the display during focus/typing, restore it on empty blur, and show no mask when unconfigured.
+  Preserve the current shadcn input, label and password type for actual replacement input.
+- [x] The mask is display-only, independent of the real key and its length. It is never form data,
+  a saved payload, a dirty-state trigger or a replacement for the retained backend key.
+- [x] Typing, clearing, saving, reopening and failed-save clearing preserve existing behavior.
+  Changing Base URL still requires a newly typed key. No provider requests, credential reads,
+  backend changes, design restyling, commit or push are part of this follow-up.
+
+Follow-up evidence: `research/saved-key-mask-verification.md` and
+`research/saved-key-mask-check.md`. The earlier live-search acceptance is unchanged.
+
+## Additional Approved UI Copy Follow-up (2026-08-27)
+
+The user explicitly requested generic numbered placeholders in the monitoring-rule editor during
+this UI-polish session. This separate copy-only request does not change AI configuration scope or
+monitoring behavior. Preserve all existing uncommitted work.
+
+- [x] Monitoring objects show exactly `对象 1\n对象 2\n对象 3`; issue keywords show exactly
+  `关键词 1\n关键词 2\n关键词 3`, each rendered as three lines in the existing textarea.
+- [x] These remain placeholders, not default/form/saved values. Keep labels, validation, query
+  composition, existing rules, component styling and API behavior unchanged; no live save/search.
+
+Evidence: `research/monitoring-placeholders-verification.md` and
+`research/monitoring-placeholders-check.md`.

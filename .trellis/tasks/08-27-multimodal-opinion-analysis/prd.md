@@ -1,24 +1,30 @@
 # 多模态舆情分析与汇总
 
+Current execution update (2026-08-28): the manual-summary child is active and its implementation
+has passed independent backend/frontend gates (596/281 tests) and isolated browser acceptance.
+The checked media contract is integrated, but separately authorized real-source/provider acceptance
+and full five-platform media validation remain open. See
+`../08-27-ai-opinion-summary/research/verification.md`; earlier planning statements below are baseline
+history, not a claim that the new summary code is absent or that live acceptance has completed.
+
 ## Goal
 
 Find obvious local problem leads through the platforms' existing search, using separate user-maintained monitoring-object and issue-keyword lists to generate place-plus-issue queries. Keep deduplicated search results available without a mandatory AI screening step. When the user explicitly requests a summary, use the configured multimodal LLM to assess and summarize the actual text/images/video once per uncached item, then compose a source-linked report from saved evidence without uploading media again.
 
-Scope revision on 2026-08-27: the user accepted prioritizing obvious problem leads and potentially missing implicit or purely visual complaints. This supersedes the earlier separate `AI 筛选` then `生成汇总` interaction. AI configuration is already implemented and checked; the revised downstream plan requires a fresh final review before implementation.
-
-The user subsequently accepted two input areas, `监控对象` and `舆情关键词`, with query preview, and then accepted empty issue keywords meaning object-only search. This supersedes the hand-written-complete-phrases-only proposal. The bounded rule-composition child is now ready for its final implementation review.
+The 2026-08-27 search-first decision accepts potentially missing implicit or purely visual complaints and replaces the earlier separate `AI 筛选` then `生成汇总` interaction. On 2026-08-28 the user accepted the small real-video experiment's cost and agreed to move toward product integration. This final downstream plan is for review, not a claim that media acquisition or summary generation is already implemented.
 
 ## Background and Confirmed Facts
 
 - The existing application has monitoring rules and single-/multi-platform collection for Toutiao, Weibo, Kuaishou, Douyin, and Xiaohongshu.
-- Monitoring rules currently contain a name, search terms, and an enabled flag. The current editor splits only on newlines and preserves internal spaces, so complete phrases work today (`frontend/src/routes/monitoring-rules.tsx:60`; `backend/src/longtian_api/services/monitoring_rules.py:154`). It does not yet store separate object/issue lists or an analysis brief (`backend/src/longtian_api/schemas/monitoring_rules.py:21`).
-- Existing rule storage allows 1–100 terms, but both single-platform and multi-platform collection accept at most 20 effective search queries per platform (`backend/src/longtian_api/services/search_runs.py:47`; `backend/src/longtian_api/services/search_batches.py:170`). Query combinations multiply; preview must make the effective count visible and must not silently exceed/truncate the existing execution limit.
+- Monitoring-object/optional-issue inputs, query preview and object-only search with empty issues are implemented, checked and archived under `../archive/2026-08/08-27-monitoring-rule-combinations/`. This replaces the earlier complete-phrases-only proposal. Historical pre-change anchors were `frontend/src/routes/monitoring-rules.tsx:60`, `backend/src/longtian_api/services/monitoring_rules.py:154` and `backend/src/longtian_api/schemas/monitoring_rules.py:21`; the current schema explicitly exposes both lists at `backend/src/longtian_api/schemas/monitoring_rules.py:23`. No analysis-brief editor has been added.
+- The implemented rule composer preserves the 1–100 effective-query save bound and 20-query-per-platform execution cap. Historical inspection anchors were `backend/src/longtian_api/services/search_runs.py:47` and `backend/src/longtian_api/services/search_batches.py:170`; the current owners are `services/search_runs.py:51` and `services/search_batches.py:206`. Preview/count warnings are already delivered, not new media/summary scope.
 - Current search results expose a title, bounded snippet, masked publisher information, publication display text, and a canonical original-page link. They do not expose full-text or image/video inputs (`backend/src/longtian_api/schemas/search_runs.py:91`).
 - Current product search adapters deliberately exclude detail and media fetching. Obtaining actual model inputs is additional work, not a capability already delivered by the search adapters (`.trellis/spec/backend/product-search-guidelines.md:155`).
 - Existing content identity and cross-run deduplication use `(platform, platform_content_id)`. That collection behavior must remain compatible.
-- The user has Qwen and DeepSeek API access and configured Alibaba Cloud locally. One explicitly requested synthetic text test with `qwen3.5-omni-plus` passed; see `../08-27-ai-configuration/verification.md`. This establishes text connectivity only, not actual image/video/audio understanding or availability of other models.
+- The user has Qwen and DeepSeek API access and configured Alibaba Cloud locally. The explicitly requested synthetic text test passed (`../08-27-ai-configuration/verification.md`). The later isolated probe sent three actual Douyin MP4s once each to saved `qwen3.5-omni-plus`: two validated judgments and one local output-validation failure, 56,913 total tokens, approximately CNY 0.46 at the verified standard prices, not an actual bill. These are experiment results, not five-platform media support, an accuracy rate, reusable production evidence or integrated summary acceptance. See `research/product-integration-readiness.md` and the linked verification record.
 - The user explicitly requested an AI configuration option with API Key, Base URL, and model name. Alibaba Cloud Qwen3.5-Omni remains the recommended initial validation target, not a hard-coded or exclusive model selection; see `research/model-api-options.md`.
 - The AI configuration child now supplies the settings route/API, protected credential store and checked text transport. Reuse those implementations; `research/ai-configuration-boundary.md` records the original pre-implementation audit.
+- Current local schema is v10, including in-progress manual collection recovery; the original search protocol has also evolved. New AI tables must follow the actual version at implementation time, preserving all existing dirty changes. The collection-detail route has no summary action and `SearchResult` still has no media inputs.
 
 ## Requirements
 
@@ -35,6 +41,7 @@ The user subsequently accepted two input areas, `监控对象` and `舆情关键
 - **R11 — Explicit full-run scope.** Only the user's `生成汇总` action initiates content acquisition/AI work. Collection completion, page load, refresh and restart make no model calls. Show the selected terminal run's full stored result scope, destination and progress; pagination or visible filters do not silently reduce it. Choosing not to summarize leaves search and source viewing fully usable.
 - **R12 — Reuse compatible content analysis.** During a user-requested summary, reuse completed item evidence when stored content, frozen monitoring context, model/endpoint, prompt and observed input versions remain compatible. Known changes invalidate reuse; an explicit force-refresh option within summary generation reacquires and reanalyses content. No standalone `重新筛选` action is required. Technical/input failures are not successful cached results. Reuse does not prove remote freshness; no continuous post revisits or automatic paid work.
 - **R13 — Two-list query composition.** Let the user separately maintain required monitoring objects (streets, communities, roads, estates or other search targets) and optional issue keywords, with a visible preview of full queries. When issues exist, combine each object with each issue and search the resulting phrases separately, merging through existing deduplication. When issues are empty, search each object unchanged. No typed AND/OR syntax, nested logic or keyword suggestions are needed. Preserve existing rule IDs and past run/batch snapshots; old complete phrases become object entries with empty issues, never inferred splits. Editing/preview/saving must not launch searches or model requests. The existing 100-query save bound and 20-query-per-platform execution cap remain, with visible counts/warnings and no silent truncation.
+- **R14 — Observable cost and strict results.** Preserve provider-reported numeric token usage when available, including a completed response whose final JSON/schema fails validation. Missing usage is unknown, not zero; reuse records no new per-item request or copied billable usage. Accept only plain JSON or an exact whole-response JSON code fence, followed by the same strict schema. Do not make repair/retry calls, relax verdicts, or expose raw model/provider responses as diagnostics. Separate stream, JSON and schema failure codes; no billing dashboard, hard-coded price calculator or actual-charge claim.
 
 ## Acceptance Criteria
 
@@ -56,6 +63,7 @@ The user subsequently accepted two input areas, `监控对象` and `舆情关键
 - [ ] Only completed related evidence enters final report composition. Unrelated, uncertain, incomplete-input and technical-failure outcomes remain distinguishable and original collection history remains intact (R3, R10).
 - [ ] Summary scope includes all stored results of the selected run, not just the current page. Search completion, navigation, refresh and restart never start acquisition or paid analysis automatically (R11).
 - [ ] Repeated compatible content reuses prior item evidence without another per-item call. Known changes and explicit force-refresh cause new analysis only within a user-requested summary, preserving previous versions (R12).
+- [ ] A valid whole-response JSON fence is parsed without another request; malformed output remains a technical failure. Available usage survives local output failure, unavailable usage stays unknown, and reused evidence does not duplicate historical usage (R3, R6, R12, R14).
 
 ## Out of Scope
 
@@ -75,9 +83,9 @@ The user subsequently accepted two input areas, `监控对象` and `舆情关键
 | Child | Verifiable outcome | Dependency | Parent requirements |
 | --- | --- | --- | --- |
 | `08-27-ai-configuration` | Save/reload/update one configuration and explicitly test connectivity; implemented/checked, not yet archived | None | R2, R6–R9 |
-| `08-27-monitoring-rule-combinations` | Required objects, optional issues, query preview and lossless old-rule behavior | Existing rule/search contracts; no media/model dependency | R5, R10, R13 |
+| `08-27-monitoring-rule-combinations` | Completed/archived: required objects, optional issues, query preview and lossless old-rule behavior | Existing rule/search contracts; no media/model dependency | R5, R10, R13 |
 | `08-27-platform-media-enrichment` | Bounded actual text/image/video retrieval for the five platforms | Shared input contract; no provider needed | R1, R5, R6 |
-| `08-27-ai-opinion-summary` | One manual analysis-and-summary flow with per-item evidence reuse and source-linked output | Configuration + media children | R1–R6, R10–R12 |
+| `08-27-ai-opinion-summary` | One manual analysis-and-summary flow with per-item evidence reuse, token usage and source-linked output | Configuration + media children | R1–R6, R10–R12, R14 |
 | `08-27-ai-relevance-screening` | Deferred outside the first version; old plans retained as history, not an implementation dependency | Requires a new product decision before resumption | Superseded by revised R3, R10–R12 |
 
 The parent owns cross-child acceptance. Remaining deliveries are sequential; shared database/lifespan files are not parallel work targets. The deferred screening child is not a first-version completion gate.
@@ -85,7 +93,7 @@ The parent owns cross-child acceptance. Remaining deliveries are sequential; sha
 ## Limits and Live Acceptance Gates
 
 - The supported initial protocol is streaming Chat Completions over a user-configured HTTPS endpoint; the first reviewed multimedia contract is Qwen3.5-Omni. Configurable fields do not support every vendor's native API, and a text test does not enable unknown/media-incompatible models. The recommendation and exact wire contract are in `research/model-api-options.md` and `research/model-transport-contract.md`.
-- Actual platform media retrieval remains unverified live. `research/platform-media-plan.md` separates reusable source helpers from missing functionality and lists required per-platform gates. An adapter returning only unavailable states is not a completed successful media adaptation.
+- Platform media retrieval now has a checked implementation contract, but complete worker-to-model live acceptance remains open. The three earlier manually acquired Douyin inputs are not that gate. `research/platform-media-plan.md` and the media child's verification distinguish implemented helpers from missing/incomplete platform paths. An adapter returning only unavailable states is not a completed successful media adaptation; no success on one platform establishes the other four.
 - The first implementation sends media inline, without a separate upload service. Its conservative aggregate limit is 6 MiB of raw media per post and a request body below 9,000,000 bytes. Oversized, incomplete, unsupported, or inaccessible input remains visibly unresolved; it is never silently truncated or declared irrelevant.
 - One requested summary covers at most 100 unique stored sources; reject larger runs before acquisition/model work. Final evidence-only composition is capped at 120,000 characters and checked before that call. The action may use one call per uncached complete item plus one final text call, not a single multimedia call for the whole run; prior evidence survives composition-limit failures.
 - Persist configuration secrets only in backend-owned restricted local files, separate from SQLite and Git. This protects against accidental database exports, not an administrator or someone copying the whole runtime directory. Current macOS/Linux permission behavior must be verified; do not claim untested OS protection.
@@ -94,7 +102,6 @@ The parent owns cross-child acceptance. Remaining deliveries are sequential; sha
 
 ## Artifact Status
 
-- Search-first scope and missed-content tolerance were accepted on 2026-08-27. This revised PRD, design, execution plan and affected child plans replace the earlier separate-screening delivery order.
-- AI configuration and its successful live text check remain valid. No product-code, dependency, database, provider-configuration, live collection or running-service change is made by this scope revision.
-- Two-input/preview/empty-issue behavior is resolved. The rule-composition child has a converged PRD, design, checklist and curated context and is awaiting final approval for that bounded change.
-- This review does not activate media or summary implementation. The current checked AI-configuration task remains active; no product changes or paid/live calls were made while updating these plans.
+- PRD convergence on 2026-08-28 preserves R1–R13, their acceptance mappings and historical anchors, adds the probe-derived R14, and reconciles completed configuration/rule work with the current schema and remaining scope.
+- The parent and both remaining children have PRD, design, execution checklists and curated implement/check contexts. The user approved the final summary with `来`, then the clarified saved-analysis integration with `行吧，我觉得可以` on 2026-08-28. Summary is now the active child against the checked media contract; the media child remains open for its real-platform gates. Standalone screening stays deferred.
+- The earlier planning review changed only task artifacts and left `08-27-live-search-ai-acceptance` active. The subsequent approved implementation switched the active task to media enrichment. Current acceptance belongs to the active child's verification record; no commit, push or archival is authorized by the implementation approval.

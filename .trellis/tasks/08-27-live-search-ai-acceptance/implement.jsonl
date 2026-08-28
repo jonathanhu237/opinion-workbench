@@ -1,0 +1,6 @@
+{"file":".trellis/spec/backend/product-search-guidelines.md","reason":"Live browser ownership, result normalization, deduplication and evidence limits."}
+{"file":".trellis/spec/backend/batch-search-guidelines.md","reason":"Serial batches, challenge pause and immutable attempt outcomes."}
+{"file":".trellis/spec/backend/monitoring-rules-guidelines.md","reason":"Preserved original groups, derived query semantics and v9 migration."}
+{"file":".trellis/spec/backend/ai-configuration-guidelines.md","reason":"Saved configuration lease and secure client without key exposure; live operations require the explicit follow-up scope."}
+{"file":".trellis/tasks/08-27-live-search-ai-acceptance/research/current-boundary.md","reason":"Read-only baseline and scoped runtime placement; no product implementation is authorized."}
+{"file":".trellis/tasks/08-27-live-search-ai-acceptance/research/media-cost-probe-plan.md","reason":"Later user-approved three-video experiment and bounded diagnostic correction; overrides only historical text-test limits, not production feature scope."}

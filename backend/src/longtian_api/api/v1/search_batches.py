@@ -1,17 +1,22 @@
 """Versioned endpoints for durable multi-platform collection batches."""
 
-from typing import Annotated, Never
+from typing import Annotated, Literal, Never
 
 from fastapi import APIRouter, HTTPException, Path, Query, status
 
 from longtian_api.api.dependencies import SearchBatchServiceDep
 from longtian_api.schemas.search_batches import (
     SearchBatchAttemptListResponse,
+    SearchBatchCancel,
+    SearchBatchControl,
     SearchBatchCreate,
     SearchBatchDetail,
     SearchBatchErrorDetail,
     SearchBatchErrorResponse,
     SearchBatchListResponse,
+    SearchBatchManualPageResponse,
+    SearchBatchRecover,
+    SearchBatchResultListResponse,
 )
 from longtian_api.services.search_batches import SearchBatchError
 
@@ -85,10 +90,11 @@ async def list_search_batch_attempts(
 )
 async def continue_search_batch(
     batch_id: SearchBatchId,
+    payload: SearchBatchControl,
     service: SearchBatchServiceDep,
 ) -> SearchBatchDetail:
     try:
-        return await service.continue_batch(batch_id)
+        return await service.continue_batch(batch_id, payload)
     except SearchBatchError as error:
         _raise_http_error(error)
 
@@ -100,10 +106,79 @@ async def continue_search_batch(
 )
 async def cancel_search_batch(
     batch_id: SearchBatchId,
+    payload: SearchBatchCancel,
     service: SearchBatchServiceDep,
 ) -> SearchBatchDetail:
     try:
-        return await service.cancel_batch(batch_id)
+        return await service.cancel_batch(batch_id, payload)
+    except SearchBatchError as error:
+        _raise_http_error(error)
+
+
+@router.post(
+    "/{batch_id}/skip",
+    status_code=status.HTTP_202_ACCEPTED,
+    responses={**_ERROR_404, **_ERROR_409, **_ERROR_422, **_ERROR_503},
+)
+async def skip_search_batch_item(
+    batch_id: SearchBatchId,
+    payload: SearchBatchControl,
+    service: SearchBatchServiceDep,
+) -> SearchBatchDetail:
+    try:
+        return await service.skip_item(batch_id, payload)
+    except SearchBatchError as error:
+        _raise_http_error(error)
+
+
+@router.post(
+    "/{batch_id}/manual-page",
+    responses={**_ERROR_404, **_ERROR_409, **_ERROR_422, **_ERROR_503},
+)
+async def show_search_batch_page(
+    batch_id: SearchBatchId,
+    payload: SearchBatchControl,
+    service: SearchBatchServiceDep,
+) -> SearchBatchManualPageResponse:
+    try:
+        return await service.manual_page(batch_id, payload)
+    except SearchBatchError as error:
+        _raise_http_error(error)
+
+
+@router.post(
+    "/{batch_id}/items/{position}/recover",
+    status_code=status.HTTP_202_ACCEPTED,
+    responses={**_ERROR_404, **_ERROR_409, **_ERROR_422, **_ERROR_503},
+)
+async def recover_search_batch_item(
+    batch_id: SearchBatchId,
+    position: SearchBatchItemPosition,
+    payload: SearchBatchRecover,
+    service: SearchBatchServiceDep,
+) -> SearchBatchDetail:
+    try:
+        return await service.recover_item(batch_id, position, payload)
+    except SearchBatchError as error:
+        _raise_http_error(error)
+
+
+@router.get(
+    "/{batch_id}/items/{position}/results",
+    responses={**_ERROR_404, **_ERROR_422, **_ERROR_503},
+)
+async def list_search_batch_results(
+    batch_id: SearchBatchId,
+    position: SearchBatchItemPosition,
+    service: SearchBatchServiceDep,
+    kind: Literal["all", "new", "repeated"] = "all",
+    limit: Annotated[int, Query(ge=1, le=50)] = 50,
+    offset: Annotated[int, Query(ge=0, le=9_223_372_036_854_775_807)] = 0,
+) -> SearchBatchResultListResponse:
+    try:
+        return await service.list_results(
+            batch_id=batch_id, position=position, kind=kind, limit=limit, offset=offset
+        )
     except SearchBatchError as error:
         _raise_http_error(error)
 

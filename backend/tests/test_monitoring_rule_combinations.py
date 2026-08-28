@@ -57,26 +57,25 @@ def test_v8_upgrade_preserves_every_old_row_and_deleted_seed(tmp_path: Path) -> 
             "INSERT INTO ai_settings VALUES (1, ?, ?, ?, 3, ?)",
             ("https://example.com/v1", "fixture-model", "a" * 36, "settings-updated"),
         )
-    runs = SearchRunRepository(database)
-    run = runs.create_run(
-        monitoring_rule_id=7,
-        platform="wb",
-        rule_name="历史规则",
-        terms=("历史 搜索词",),
-        max_results_per_term=2,
-    )
-    runs.finish(run.id, "completed_empty")
-    batches = SearchBatchRepository(database)
-    batch = batches.create_batch(
-        monitoring_rule_id=7,
-        rule_name="批次历史",
-        terms=("原有 完整查询",),
-        platforms=("wb", "xhs"),
-        max_results_per_term=1,
-    )
-    batches.mark_running(batch.id)
-    child = batches.create_attempt(batch.id, 0)
     with database.connect() as connection:
+        # Seed via the historical v8 contract, not the modern v10 writer.
+        connection.execute("""INSERT INTO search_runs VALUES
+          (1, 7, 'wb', '历史规则', 2, 'completed_empty', 0,
+           'created', 'started', 'finished'),
+          (2, 7, 'wb', '批次历史', 1, 'queued', NULL, 'created', NULL, NULL)""")
+        connection.execute("""INSERT INTO search_run_terms VALUES
+          (1, 0, '历史 搜索词'), (2, 0, '原有 完整查询')""")
+        connection.execute("""INSERT INTO search_batches VALUES
+          (1, 7, '批次历史', 1, 'running', 0, 'created', 'started', NULL)""")
+        connection.execute(
+            "INSERT INTO search_batch_terms VALUES (1, 0, '原有 完整查询')"
+        )
+        connection.execute("""INSERT INTO search_batch_items VALUES
+          (1, 0, 'wb', 'running', 'created', 'started', NULL),
+          (1, 1, 'xhs', 'queued', 'created', NULL, NULL)""")
+        connection.execute(
+            "INSERT INTO search_batch_attempts VALUES (1, 0, 1, 2, 'created')"
+        )
         old_tables = [
             row[0]
             for row in connection.execute(
@@ -87,6 +86,13 @@ def test_v8_upgrade_preserves_every_old_row_and_deleted_seed(tmp_path: Path) -> 
             table: connection.execute(
                 f'SELECT * FROM "{table}" ORDER BY rowid'
             ).fetchall()  # noqa: S608 - test-owned schema names
+            for table in old_tables
+        }
+        old_columns = {
+            table: ", ".join(
+                f'"{row[1]}"'
+                for row in connection.execute(f'PRAGMA table_info("{table}")')
+            )
             for table in old_tables
         }
 
@@ -105,9 +111,18 @@ def test_v8_upgrade_preserves_every_old_row_and_deleted_seed(tmp_path: Path) -> 
         )
         for table in old_tables:
             assert (
-                connection.execute(f'SELECT * FROM "{table}" ORDER BY rowid').fetchall()
+                connection.execute(
+                    f'SELECT {old_columns[table]} FROM "{table}" ORDER BY rowid'
+                ).fetchall()
                 == before[table]
             )  # noqa: S608 - test-owned schema names
+        assert [
+            tuple(row)
+            for row in connection.execute(
+                "SELECT execution_start_term_position, search_protocol_version "
+                "FROM search_runs"
+            )
+        ] == [(0, 1), (0, 1)]
     service = MonitoringRuleService(database_path=database.path)
     rules = service.list_rules().rules
     assert len(rules) == 1
@@ -116,8 +131,9 @@ def test_v8_upgrade_preserves_every_old_row_and_deleted_seed(tmp_path: Path) -> 
     assert rules[0].monitoring_objects == rules[0].terms == ("A  B", "龙田 噪音")
     assert rules[0].issue_keywords == ()
     assert service.list_enabled() == ()
-    assert runs.get(run.id).terms == ("历史 搜索词",)
-    assert runs.get(child.id).terms == batches.get(batch.id).terms == ("原有 完整查询",)
+    runs, batches = SearchRunRepository(database), SearchBatchRepository(database)
+    assert runs.get(1).terms == ("历史 搜索词",)
+    assert runs.get(2).terms == batches.get(1).terms == ("原有 完整查询",)
 
 
 def test_v9_partial_migration_rolls_back_table_and_version(tmp_path: Path) -> None:

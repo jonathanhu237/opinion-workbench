@@ -36,6 +36,23 @@ vi.mock('@/lib/api/monitoring-rules', async (importOriginal) => {
   return { ...actual, fetchMonitoringRules: vi.fn() }
 })
 
+vi.mock('@/lib/api/ai-settings', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api/ai-settings')>()),
+  fetchAISettings: vi.fn().mockResolvedValue({
+    base_url: null,
+    model: null,
+    has_api_key: false,
+    revision: 0,
+  }),
+}))
+
+vi.mock('@/lib/api/ai-summaries', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api/ai-summaries')>()),
+  fetchAISummaries: vi
+    .fn()
+    .mockResolvedValue({ summaries: [], next_before_id: null }),
+}))
+
 vi.mock('@/lib/api/search-batches', async (importOriginal) => {
   const actual =
     await importOriginal<typeof import('@/lib/api/search-batches')>()
@@ -44,6 +61,10 @@ vi.mock('@/lib/api/search-batches', async (importOriginal) => {
     fetchSearchBatches: vi.fn(),
     fetchSearchBatch: vi.fn(),
     fetchSearchBatchAttempts: vi.fn(),
+    fetchSearchBatchResults: vi.fn(),
+    showSearchBatchManualPage: vi.fn(),
+    skipSearchBatchPlatform: vi.fn(),
+    recoverSearchBatchPlatform: vi.fn(),
     startSearchBatch: vi.fn(),
     continueSearchBatch: vi.fn(),
     cancelSearchBatch: vi.fn(),
@@ -91,10 +112,33 @@ function standaloneRun(
   }
 }
 
+const completedProgress = {
+  completed_term_count: 2,
+  remaining_term_count: 0,
+  next_term_position: null,
+  checkpoint_basis: 'explicit' as const,
+  recovery_available: true,
+  pause_reason: null,
+  completion_basis: 'attempt_success' as const,
+  new_count: 0,
+  repeated_count: 0,
+  total_count: 0,
+}
+
+const pausedProgress = {
+  ...completedProgress,
+  completed_term_count: 1,
+  remaining_term_count: 1,
+  next_term_position: 1,
+  pause_reason: 'attempt_failed' as const,
+  completion_basis: null,
+}
+
 function batch(values: Partial<SearchBatchDetail> = {}): SearchBatchDetail {
   const run = standaloneRun({ id: 71, platform: 'toutiao' })
   return {
     id: 9,
+    control_revision: 5,
     monitoring_rule_id: 1,
     rule_name: rule.name,
     term_count: 2,
@@ -106,6 +150,7 @@ function batch(values: Partial<SearchBatchDetail> = {}): SearchBatchDetail {
     terms: rule.terms,
     items: [
       {
+        ...completedProgress,
         position: 0,
         platform: 'toutiao',
         status: 'completed',
@@ -116,6 +161,7 @@ function batch(values: Partial<SearchBatchDetail> = {}): SearchBatchDetail {
         finished_at: run.finished_at,
       },
       {
+        ...completedProgress,
         position: 1,
         platform: 'wb',
         status: 'completed',
@@ -129,6 +175,7 @@ function batch(values: Partial<SearchBatchDetail> = {}): SearchBatchDetail {
         finished_at: run.finished_at,
       },
       {
+        ...completedProgress,
         position: 2,
         platform: 'ks',
         status: 'completed',
@@ -355,7 +402,7 @@ describe('multi-platform collection routes', () => {
     })
     renderRoute()
 
-    expect(await screen.findByText('采集正在等待安全验证')).toBeVisible()
+    expect(await screen.findByText('采集已暂停，等待人工处理')).toBeVisible()
     expect(screen.getByRole('button', { name: '开始采集' })).toBeDisabled()
     for (const checkbox of screen.getAllByRole('checkbox')) {
       expect(checkbox).toHaveAttribute('aria-disabled', 'true')
@@ -438,6 +485,7 @@ describe('multi-platform collection routes', () => {
       items: [
         batch().items[0],
         {
+          ...pausedProgress,
           position: 1,
           platform: 'wb',
           status: 'paused_for_manual_action',
@@ -468,15 +516,21 @@ describe('multi-platform collection routes', () => {
     renderRoute('/collection-batches/9')
 
     expect(
-      await screen.findByRole('heading', { name: '请完成微博安全验证' }),
+      await screen.findByRole('heading', { name: '采集已暂停 · 微博' }),
     ).toBeVisible()
     await user.click(screen.getByRole('button', { name: '查看 2 次尝试' }))
     expect(
       await screen.findByText((content) => content.includes('第 2 次 ·')),
     ).toBeVisible()
     await user.click(screen.getByRole('button', { name: '继续采集' }))
-    await waitFor(() => expect(mockedContinueBatch).toHaveBeenCalledWith(9))
-    expect(await screen.findByText(/已继续采集/u)).toBeVisible()
+    await waitFor(() =>
+      expect(mockedContinueBatch).toHaveBeenCalledWith(9, {
+        item_position: 1,
+        expected_run_id: 80,
+        expected_revision: 5,
+      }),
+    )
+    expect(await screen.findByText(/已继续处理/u)).toBeVisible()
   })
 
   it('clears an earlier continue error when cancellation later succeeds', async () => {
@@ -494,6 +548,7 @@ describe('multi-platform collection routes', () => {
         items: [
           batch().items[0],
           {
+            ...pausedProgress,
             position: 1,
             platform: 'wb',
             status: 'paused_for_manual_action',
@@ -530,7 +585,9 @@ describe('multi-platform collection routes', () => {
     ).toBeVisible()
     await user.click(screen.getByRole('button', { name: '取消批次' }))
 
-    expect(await screen.findByText('已取消剩余平台。')).toBeVisible()
+    expect(
+      await screen.findByText('已取消批次，已有结果仍然保留。'),
+    ).toBeVisible()
     expect(
       screen.queryByText('谷歌浏览器正在执行其他操作，请稍后重试。'),
     ).toBeNull()
@@ -544,7 +601,13 @@ describe('multi-platform collection routes', () => {
     renderRoute('/collection-batches/9')
 
     await user.click(await screen.findByRole('button', { name: '取消批次' }))
-    await waitFor(() => expect(mockedCancelBatch).toHaveBeenCalledWith(9))
-    expect(await screen.findByText('已取消剩余平台。')).toBeVisible()
+    await waitFor(() =>
+      expect(mockedCancelBatch).toHaveBeenCalledWith(9, {
+        expected_revision: 5,
+      }),
+    )
+    expect(
+      await screen.findByText('已取消批次，已有结果仍然保留。'),
+    ).toBeVisible()
   })
 })

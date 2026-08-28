@@ -4,7 +4,7 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
-CURRENT_DATABASE_VERSION = 9
+CURRENT_DATABASE_VERSION = 11
 DEFAULT_RULE_NAME = "龙田街道及四个社区"
 DEFAULT_RULE_TERMS = (
     "龙田街道",
@@ -79,6 +79,12 @@ class Database:
                 version = 8
             if version < 9:
                 _migrate_to_version_9(connection)
+                version = 9
+            if version < 10:
+                _migrate_to_version_10(connection)
+                version = 10
+            if version < 11:
+                _migrate_to_version_11(connection)
         finally:
             connection.close()
 
@@ -88,6 +94,246 @@ def _read_user_version(connection: sqlite3.Connection) -> int:
     if row is None:
         raise sqlite3.DatabaseError("SQLite did not return user_version")
     return int(row[0])
+
+
+def _migrate_to_version_11(connection: sqlite3.Connection) -> None:
+    """Append manual-summary versions without rewriting collection history."""
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        version = _read_user_version(connection)
+        if version >= 11:
+            connection.execute("COMMIT")
+            return
+        if version != 10:
+            raise DatabaseVersionError("Unsupported database migration source version.")
+        connection.execute("""
+            CREATE TABLE ai_summary_runs (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              request_id TEXT NOT NULL UNIQUE,
+              source_run_id INTEGER NOT NULL REFERENCES search_runs(id)
+                ON DELETE RESTRICT,
+              source_run_status TEXT NOT NULL,
+              platform TEXT NOT NULL CHECK (platform IN
+                ('wb','dy','ks','xhs','toutiao')),
+              rule_name TEXT NOT NULL, terms_json TEXT NOT NULL,
+              configuration_revision INTEGER NOT NULL
+                CHECK (configuration_revision > 0),
+              base_url TEXT NOT NULL, model TEXT NOT NULL,
+              force_refresh INTEGER NOT NULL CHECK (force_refresh IN (0,1)),
+              analysis_prompt_version TEXT NOT NULL,
+              summary_prompt_version TEXT NOT NULL,
+              model_input_version TEXT NOT NULL,
+              status TEXT NOT NULL CHECK (status IN
+                ('queued','running','completed','failed','cancelled','interrupted')),
+              phase TEXT NOT NULL CHECK (phase IN ('analysing','summarising')),
+              composition_attempted INTEGER NOT NULL DEFAULT 0
+                CHECK (composition_attempted IN (0,1)),
+              composition_usage_json TEXT, composition_input_hash TEXT,
+              document_json TEXT, error_json TEXT,
+              created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT,
+              CHECK ((status IN ('queued','running') AND finished_at IS NULL)
+                OR (status NOT IN ('queued','running') AND finished_at IS NOT NULL)),
+              CHECK ((status = 'completed' AND document_json IS NOT NULL)
+                OR (status != 'completed' AND document_json IS NULL)),
+              CHECK (composition_usage_json IS NULL OR composition_attempted = 1)
+            )
+        """)
+        connection.execute("""
+            CREATE UNIQUE INDEX ix_ai_summary_runs_active ON ai_summary_runs((1))
+            WHERE status IN ('queued','running')
+        """)
+        connection.execute("""
+            CREATE INDEX ix_ai_summary_runs_source
+              ON ai_summary_runs(source_run_id,id DESC)
+        """)
+        connection.execute("""
+            CREATE TABLE ai_summary_items (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              summary_run_id INTEGER NOT NULL REFERENCES ai_summary_runs(id)
+                ON DELETE RESTRICT,
+              content_id INTEGER NOT NULL REFERENCES search_contents(id)
+                ON DELETE RESTRICT,
+              position INTEGER NOT NULL CHECK (position BETWEEN 0 AND 99),
+              source_json TEXT NOT NULL, observation_hash TEXT NOT NULL,
+              cache_key TEXT NOT NULL, input_json TEXT, input_hash TEXT,
+              status TEXT NOT NULL CHECK (status IN ('pending','analysing','completed',
+                'input_incomplete','failed','cancelled','interrupted')),
+              decision TEXT CHECK (decision IN ('relevant','irrelevant','uncertain')),
+              reason TEXT, evidence_summary TEXT,
+              reused_from_item_id INTEGER REFERENCES ai_summary_items(id)
+                ON DELETE RESTRICT,
+              attempted INTEGER NOT NULL DEFAULT 0 CHECK (attempted IN (0,1)),
+              usage_json TEXT, error_json TEXT,
+              started_at TEXT, finished_at TEXT,
+              UNIQUE (summary_run_id,content_id), UNIQUE (summary_run_id,position),
+              CHECK ((status IN ('pending','analysing') AND finished_at IS NULL)
+                OR (status NOT IN ('pending','analysing') AND finished_at IS NOT NULL)),
+              CHECK ((status = 'completed' AND ((reused_from_item_id IS NOT NULL
+                 AND attempted = 0 AND usage_json IS NULL AND decision IS NULL
+                 AND reason IS NULL AND evidence_summary IS NULL)
+                OR (reused_from_item_id IS NULL AND attempted = 1
+                 AND decision IS NOT NULL
+                 AND reason IS NOT NULL AND evidence_summary IS NOT NULL
+                 AND input_json IS NOT NULL AND input_hash IS NOT NULL)))
+                OR (status != 'completed' AND reused_from_item_id IS NULL
+                 AND decision IS NULL AND reason IS NULL AND evidence_summary IS NULL)),
+              CHECK (usage_json IS NULL OR attempted = 1),
+              CHECK (reused_from_item_id IS NULL OR reused_from_item_id < id)
+            )
+        """)
+        connection.execute("""
+            CREATE INDEX ix_ai_summary_items_cache
+              ON ai_summary_items(cache_key,id DESC)
+            WHERE status = 'completed' AND reused_from_item_id IS NULL
+        """)
+        connection.execute("PRAGMA user_version = 11")
+        connection.execute("COMMIT")
+    except BaseException:
+        if connection.in_transaction:
+            connection.execute("ROLLBACK")
+        raise
+
+
+def _migrate_to_version_10(connection: sqlite3.Connection) -> None:
+    """Add immutable term proofs and guarded, audited manual recovery."""
+    from longtian_api.search_checkpoints import backfill_legacy_completions
+
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        version = _read_user_version(connection)
+        if version >= 10:
+            connection.execute("COMMIT")
+            return
+        if version != 9:
+            raise DatabaseVersionError("Unsupported database migration source version.")
+        connection.execute("""
+            ALTER TABLE search_runs ADD COLUMN execution_start_term_position
+            INTEGER NOT NULL DEFAULT 0 CHECK (execution_start_term_position BETWEEN
+            0 AND 19)
+        """)
+        connection.execute("""
+            ALTER TABLE search_runs ADD COLUMN search_protocol_version
+            INTEGER NOT NULL DEFAULT 1 CHECK (search_protocol_version IN (1, 2))
+        """)
+        connection.execute("""
+            ALTER TABLE search_batches ADD COLUMN control_revision
+            INTEGER NOT NULL DEFAULT 0 CHECK (control_revision >= 0)
+        """)
+        connection.execute("""
+            CREATE TABLE search_run_term_completions (
+              run_id INTEGER NOT NULL,
+              term_position INTEGER NOT NULL,
+              proof TEXT NOT NULL CHECK (proof IN (
+                'worker_term_completed', 'legacy_next_term_started',
+                'legacy_run_succeeded'
+              )),
+              result_count INTEGER NOT NULL CHECK (result_count BETWEEN 0 AND 50),
+              completed_at TEXT,
+              recorded_at TEXT NOT NULL,
+              PRIMARY KEY (run_id, term_position),
+              FOREIGN KEY (run_id, term_position)
+                REFERENCES search_run_terms(run_id, position) ON DELETE CASCADE,
+              CHECK ((proof = 'worker_term_completed' AND completed_at IS NOT NULL)
+                OR (proof != 'worker_term_completed' AND completed_at IS NULL))
+            )
+        """)
+        connection.execute("""
+            CREATE TABLE search_batch_items_v10 (
+              batch_id INTEGER NOT NULL REFERENCES search_batches(id) ON DELETE CASCADE,
+              position INTEGER NOT NULL CHECK (position >= 0),
+              platform TEXT NOT NULL CHECK (platform IN
+              ('toutiao','wb','ks','dy','xhs')),
+              status TEXT NOT NULL CHECK (status IN ('queued','running',
+                'paused_for_manual_action','completed','failed','cancelled','skipped')),
+              created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT,
+              pause_reason TEXT CHECK (pause_reason IN
+              ('attempt_failed','process_interrupted')),
+              completion_basis TEXT CHECK (completion_basis IN
+              ('attempt_success','confirmed_terms')),
+              PRIMARY KEY (batch_id, position), UNIQUE (batch_id, platform)
+            )
+        """)
+        connection.execute("""
+            INSERT INTO search_batch_items_v10
+            SELECT *, CASE WHEN status = 'paused_for_manual_action' THEN
+            'attempt_failed' END,
+                      CASE WHEN status = 'completed' THEN 'attempt_success' END
+            FROM search_batch_items
+        """)
+        connection.execute("""
+            CREATE TABLE search_batch_attempts_v10 (
+              batch_id INTEGER NOT NULL, item_position INTEGER NOT NULL,
+              attempt_number INTEGER NOT NULL CHECK (attempt_number >= 1),
+              search_run_id INTEGER NOT NULL UNIQUE REFERENCES search_runs(id) ON
+              DELETE RESTRICT,
+              created_at TEXT NOT NULL,
+              PRIMARY KEY (batch_id, item_position, attempt_number),
+              FOREIGN KEY (batch_id, item_position)
+                REFERENCES search_batch_items_v10(batch_id, position) ON DELETE CASCADE
+            )
+        """)
+        connection.execute(
+            "INSERT INTO search_batch_attempts_v10 SELECT * FROM search_batch_attempts"
+        )
+        connection.execute("DROP TABLE search_batch_attempts")
+        connection.execute("DROP TABLE search_batch_items")
+        connection.execute(
+            "ALTER TABLE search_batch_items_v10 RENAME TO search_batch_items"
+        )
+        connection.execute(
+            "ALTER TABLE search_batch_attempts_v10 RENAME TO search_batch_attempts"
+        )
+        connection.execute("""
+            CREATE INDEX ix_search_batch_attempts_item
+            ON search_batch_attempts(batch_id, item_position, attempt_number DESC)
+        """)
+        connection.execute("""
+            CREATE TABLE search_batch_recoveries (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              batch_id INTEGER NOT NULL, item_position INTEGER NOT NULL,
+              previous_control_revision INTEGER NOT NULL CHECK
+              (previous_control_revision >= 0),
+              previous_batch_status TEXT NOT NULL CHECK (previous_batch_status =
+              'completed_with_failures'),
+              previous_item_status TEXT NOT NULL CHECK (previous_item_status =
+              'failed'),
+              previous_batch_finished_at TEXT NOT NULL,
+              previous_item_finished_at TEXT NOT NULL,
+              recovered_at TEXT NOT NULL,
+              FOREIGN KEY (batch_id, item_position)
+                REFERENCES search_batch_items(batch_id, position) ON DELETE RESTRICT
+            )
+        """)
+        backfill_legacy_completions(connection, datetime.now(UTC).isoformat())
+        connection.execute("""
+            CREATE TRIGGER search_run_execution_immutable
+            BEFORE UPDATE OF execution_start_term_position, search_protocol_version
+            ON search_runs
+            BEGIN SELECT RAISE(ABORT, 'immutable execution'); END
+        """)
+        connection.execute("""
+            CREATE TRIGGER search_completion_immutable BEFORE UPDATE ON
+            search_run_term_completions
+            BEGIN SELECT RAISE(ABORT, 'immutable completion'); END
+        """)
+        connection.execute("""
+            CREATE TRIGGER search_recovery_immutable BEFORE UPDATE ON
+            search_batch_recoveries
+            BEGIN SELECT RAISE(ABORT, 'immutable recovery'); END
+        """)
+        connection.execute("""
+            CREATE TRIGGER search_recovery_no_delete BEFORE DELETE ON
+            search_batch_recoveries
+            BEGIN SELECT RAISE(ABORT, 'immutable recovery'); END
+        """)
+        if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
+            raise sqlite3.DatabaseError("Foreign key check failed after migration")
+        connection.execute("PRAGMA user_version = 10")
+        connection.execute("COMMIT")
+    except BaseException:
+        if connection.in_transaction:
+            connection.execute("ROLLBACK")
+        raise
 
 
 def _migrate_to_version_9(connection: sqlite3.Connection) -> None:

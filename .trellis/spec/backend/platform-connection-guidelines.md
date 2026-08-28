@@ -55,6 +55,13 @@ v1 after a v2 failure.
 - Keep one healthy worker, Playwright runtime, CDP manager, Browser connection, and borrowed
   default BrowserContext for serialized checks. Reuse them across platforms and repeat checks;
   connect only once until Chrome disconnects, the worker is recycled, or FastAPI shuts down.
+- The same coordinator also protects product searches and paused manual recovery. A paused batch
+  retains ownership; account checks cannot interleave. Search-v2 `manual_page` does not change auth-v2
+  frames or call authentication. It shows only a registered current-generation owned page or opens
+  one fixed homepage on explicit request. Its outcome is never proof of login. See
+  [Batch Search](./batch-search-guidelines.md) for show/close, timeouts and cleanup contracts.
+- A disconnect callback captures its own session-generation event. A late callback from an old
+  Browser must not set a newer session's disconnected event or invalidate its owned manual page.
 - Only one authentication request may be active. Product state remains in memory and is reset by
   a backend restart. A second HTTP request keeps the existing global 409 behavior, and a second
   worker `check` while busy is a protocol violation.

@@ -171,6 +171,28 @@ describe('monitoring rules route', () => {
     expect(screen.getAllByRole('button', { name: '新建规则' })).toHaveLength(2)
   })
 
+  it('shows numbered three-line placeholders without filling or saving the inputs', async () => {
+    const user = userEvent.setup()
+
+    renderRules()
+    await screen.findByText(defaultRule.name)
+    await user.click(screen.getByRole('button', { name: '新建规则' }))
+    const dialog = screen.getByRole('dialog', { name: '新建监控规则' })
+    const objects = within(dialog).getByLabelText('监控对象')
+    const issues = within(dialog).getByLabelText('舆情关键词（选填）')
+
+    expect(objects).toHaveAttribute('placeholder', '对象 1\n对象 2\n对象 3')
+    expect(issues).toHaveAttribute(
+      'placeholder',
+      '关键词 1\n关键词 2\n关键词 3',
+    )
+    expect(objects).toHaveValue('')
+    expect(issues).toHaveValue('')
+    expect(within(dialog).getByText('生成的搜索词 · 共 0 个')).toBeVisible()
+    expect(mockedCreateRule).not.toHaveBeenCalled()
+    expect(mockedUpdateRule).not.toHaveBeenCalled()
+  })
+
   it('creates a rule from trimmed multiline terms and updates the visible cache', async () => {
     const user = userEvent.setup()
     const createdRule: MonitoringRule = {

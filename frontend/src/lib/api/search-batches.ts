@@ -6,7 +6,9 @@ import {
   SEARCH_PLATFORM_ORDER,
   searchPlatformSchema,
   searchRunSummarySchema,
+  searchResultSchema,
   type SearchPlatform,
+  type SearchResultFilter,
 } from '@/lib/api/search-runs'
 
 export const SEARCH_BATCHES_QUERY_KEY = ['search-batches'] as const
@@ -26,6 +28,7 @@ const searchBatchItemStatusSchema = z.enum([
   'paused_for_manual_action',
   'completed',
   'failed',
+  'skipped',
   'cancelled',
 ])
 const positiveSafeIntegerSchema = z
@@ -38,9 +41,16 @@ const nonnegativeSafeIntegerSchema = z
   .int()
   .nonnegative()
   .max(Number.MAX_SAFE_INTEGER)
+// A damaged historical child snapshot must remain visible so its batch can be
+// skipped or cancelled. Normal recoverable items are checked against the batch
+// snapshot below; standalone run decoding stays unchanged.
+const searchBatchRunSummarySchema = searchRunSummarySchema.safeExtend({
+  term_count: z.number().int().min(0).max(20),
+  current_term_position: nonnegativeSafeIntegerSchema.nullable(),
+})
 const searchBatchAttemptSchema = z.strictObject({
   attempt_number: z.number().int().min(1),
-  run: searchRunSummarySchema,
+  run: searchBatchRunSummarySchema,
 })
 const searchBatchItemSchema = z
   .strictObject({
@@ -49,12 +59,30 @@ const searchBatchItemSchema = z
     status: searchBatchItemStatusSchema,
     attempt_count: nonnegativeSafeIntegerSchema,
     latest_attempt: searchBatchAttemptSchema.nullable(),
+    completed_term_count: z.number().int().min(0).max(20),
+    remaining_term_count: z.number().int().min(0).max(20),
+    next_term_position: z.number().int().min(0).max(19).nullable(),
+    checkpoint_basis: z.enum([
+      'explicit',
+      'legacy_inferred',
+      'mixed',
+      'unknown',
+    ]),
+    recovery_available: z.boolean(),
+    pause_reason: z.enum(['attempt_failed', 'process_interrupted']).nullable(),
+    completion_basis: z.enum(['attempt_success', 'confirmed_terms']).nullable(),
+    new_count: nonnegativeSafeIntegerSchema,
+    repeated_count: nonnegativeSafeIntegerSchema,
+    total_count: nonnegativeSafeIntegerSchema,
     created_at: isoDateSchema,
     started_at: isoDateSchema.nullable(),
     finished_at: isoDateSchema.nullable(),
   })
   .superRefine((value, context) => {
     const runStatus = value.latest_attempt?.run.status
+    const runActive = runStatus === 'queued' || runStatus === 'running'
+    const runSuccess =
+      runStatus === 'completed_with_results' || runStatus === 'completed_empty'
     if (
       (value.latest_attempt === null) !== (value.attempt_count === 0) ||
       (value.latest_attempt !== null &&
@@ -64,22 +92,32 @@ const searchBatchItemSchema = z
       context.addIssue({ code: 'custom', message: 'invalid batch item' })
     }
     if (
-      (value.status === 'queued' && value.latest_attempt !== null) ||
-      (value.status === 'running' &&
-        runStatus !== 'queued' &&
-        runStatus !== 'running') ||
+      value.new_count + value.repeated_count !== value.total_count ||
+      (value.latest_attempt !== null &&
+        value.latest_attempt.run.total_count > value.total_count) ||
+      (value.status === 'queued' && (runActive || runSuccess)) ||
+      // The run result commits before the runner finalizes its batch item.
+      (value.status === 'running' && runStatus === undefined) ||
       (value.status === 'paused_for_manual_action' &&
-        runStatus !== 'manual_challenge_required') ||
+        (runActive ||
+          runSuccess ||
+          value.pause_reason === null ||
+          (runStatus === undefined &&
+            value.pause_reason !== 'process_interrupted'))) ||
+      (value.status !== 'paused_for_manual_action' &&
+        value.pause_reason !== null) ||
       (value.status === 'completed' &&
-        runStatus !== 'completed_with_results' &&
-        runStatus !== 'completed_empty') ||
-      (value.status === 'failed' &&
-        runStatus !== undefined &&
-        (runStatus === 'queued' ||
-          runStatus === 'running' ||
-          runStatus === 'completed_with_results' ||
-          runStatus === 'completed_empty' ||
-          runStatus === 'manual_challenge_required'))
+        (value.completion_basis === null ||
+          (value.completion_basis === 'attempt_success' && !runSuccess) ||
+          (value.completion_basis === 'confirmed_terms' &&
+            (!value.recovery_available ||
+              value.remaining_term_count !== 0 ||
+              runStatus === undefined ||
+              runActive ||
+              runSuccess)))) ||
+      (value.status !== 'completed' && value.completion_basis !== null) ||
+      (value.status === 'failed' && (runActive || runSuccess)) ||
+      (['skipped', 'cancelled'].includes(value.status) && runActive)
     ) {
       context.addIssue({ code: 'custom', message: 'invalid batch item status' })
     }
@@ -93,6 +131,7 @@ const summaryShape = {
   terminal_item_count: z.number().int().min(0).max(5),
   max_results_per_term: z.number().int().min(1).max(50),
   status: searchBatchStatusSchema,
+  control_revision: nonnegativeSafeIntegerSchema,
   current_item_position: z.number().int().min(0).max(4).nullable(),
   created_at: isoDateSchema,
   started_at: isoDateSchema.nullable(),
@@ -113,7 +152,7 @@ const searchBatchDetailSchema = z
   })
   .superRefine((value, context) => {
     const terminalCount = value.items.filter((item) =>
-      ['completed', 'failed', 'cancelled'].includes(item.status),
+      ['completed', 'failed', 'skipped', 'cancelled'].includes(item.status),
     ).length
     const platformIndexes = value.items.map((item) =>
       SEARCH_PLATFORM_ORDER.indexOf(item.platform),
@@ -125,6 +164,7 @@ const searchBatchDetailSchema = z
     const pausedItems = value.items.filter(
       (item) => item.status === 'paused_for_manual_action',
     )
+    const runningItems = value.items.filter((item) => item.status === 'running')
     const allTerminal = terminalCount === value.platform_count
     const validAggregateState =
       (value.status === 'queued' &&
@@ -135,9 +175,13 @@ const searchBatchDetailSchema = z
         value.finished_at === null) ||
       (value.status === 'running' &&
         pausedItems.length === 0 &&
+        runningItems.length <= 1 &&
+        (runningItems.length === 0 ||
+          value.current_item_position === runningItems[0]?.position) &&
         value.finished_at === null) ||
       (value.status === 'paused_for_manual_action' &&
         pausedItems.length === 1 &&
+        runningItems.length === 0 &&
         value.current_item_position === pausedItems[0]?.position &&
         value.finished_at === null) ||
       (value.status === 'completed' &&
@@ -148,7 +192,9 @@ const searchBatchDetailSchema = z
         allTerminal &&
         value.items.some((item) => item.status !== 'completed') &&
         value.finished_at !== null) ||
-      (value.status === 'cancelled' && value.finished_at !== null) ||
+      (value.status === 'cancelled' &&
+        allTerminal &&
+        value.finished_at !== null) ||
       (value.status === 'internal_error' &&
         allTerminal &&
         value.finished_at !== null)
@@ -160,7 +206,41 @@ const searchBatchDetailSchema = z
       new Set(value.items.map((item) => item.platform)).size !==
         value.items.length ||
       !ordered ||
-      !validAggregateState
+      !validAggregateState ||
+      (value.current_item_position !== null &&
+        value.current_item_position >= value.platform_count) ||
+      value.items.some((item) => {
+        if (
+          item.completed_term_count + item.remaining_term_count !==
+          value.term_count
+        )
+          return true
+        if (
+          item.latest_attempt &&
+          (item.latest_attempt.run.max_results_per_term !==
+            value.max_results_per_term ||
+            (item.recovery_available &&
+              (item.latest_attempt.run.term_count !== value.term_count ||
+                (item.latest_attempt.run.current_term_position !== null &&
+                  item.latest_attempt.run.current_term_position >=
+                    value.term_count))))
+        )
+          return true
+        if (!item.recovery_available)
+          return (
+            item.checkpoint_basis !== 'unknown' ||
+            item.completed_term_count !== 0 ||
+            item.next_term_position !== null
+          )
+        return (
+          item.next_term_position !==
+            (item.remaining_term_count === 0
+              ? null
+              : item.completed_term_count) ||
+          (item.checkpoint_basis === 'unknown') !==
+            (item.completed_term_count === 0)
+        )
+      })
     ) {
       context.addIssue({ code: 'custom', message: 'invalid batch detail' })
     }
@@ -172,6 +252,39 @@ const searchBatchListSchema = z.strictObject({
 const searchBatchAttemptListSchema = z.strictObject({
   attempts: z.array(searchBatchAttemptSchema),
 })
+const searchBatchResultSchema = searchResultSchema.safeExtend({
+  source_run_id: positiveSafeIntegerSchema,
+})
+const searchBatchResultListSchema = z
+  .strictObject({
+    results: z.array(searchBatchResultSchema),
+    total: nonnegativeSafeIntegerSchema,
+    limit: z.number().int().min(1).max(50),
+    offset: nonnegativeSafeIntegerSchema,
+  })
+  .superRefine((value, context) => {
+    if (
+      value.results.length > value.limit ||
+      value.results.length > Math.max(0, value.total - value.offset) ||
+      new Set(value.results.map((result) => result.id)).size !==
+        value.results.length
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'invalid aggregate result page',
+      })
+    }
+  })
+const manualPageResponseSchema = z.strictObject({
+  outcome: z.enum([
+    'opened_existing',
+    'opened_homepage',
+    'browser_unavailable',
+    'navigation_failed',
+    'internal_error',
+    'cancelled',
+  ]),
+})
 const errorEnvelopeSchema = z.strictObject({
   detail: z.strictObject({ code: z.string(), message: z.string() }),
 })
@@ -182,6 +295,16 @@ export type SearchBatchAttempt = z.infer<typeof searchBatchAttemptSchema>
 export type SearchBatchItem = z.infer<typeof searchBatchItemSchema>
 export type SearchBatchSummary = z.infer<typeof searchBatchSummarySchema>
 export type SearchBatchDetail = z.infer<typeof searchBatchDetailSchema>
+export type SearchBatchResult = z.infer<typeof searchBatchResultSchema>
+export type ManualPageOutcome = z.infer<
+  typeof manualPageResponseSchema
+>['outcome']
+export type SearchBatchControl = {
+  item_position: number
+  expected_run_id: number | null
+  expected_revision: number
+}
+export type SearchBatchRecovery = Omit<SearchBatchControl, 'item_position'>
 
 type ProductErrorCode =
   | 'invalid_request'
@@ -192,6 +315,9 @@ type ProductErrorCode =
   | 'search_batch_not_found'
   | 'search_batch_not_active'
   | 'search_batch_not_paused'
+  | 'search_batch_state_changed'
+  | 'search_batch_recovery_unavailable'
+  | 'search_batch_item_not_recoverable'
   | 'search_storage_unavailable'
 
 type SearchBatchApiErrorCode =
@@ -226,6 +352,18 @@ const productErrorContracts: Record<
   search_batch_not_paused: {
     status: 409,
     message: '该批采集任务当前不需要继续操作。',
+  },
+  search_batch_state_changed: {
+    status: 409,
+    message: '采集任务状态已变化，请刷新后重试。',
+  },
+  search_batch_recovery_unavailable: {
+    status: 409,
+    message: '无法确认可靠的续采位置，请跳过此平台或取消批次。',
+  },
+  search_batch_item_not_recoverable: {
+    status: 409,
+    message: '该平台当前不能重新处理。',
   },
   search_storage_unavailable: {
     status: 503,
@@ -345,23 +483,96 @@ export async function fetchSearchBatch(batchId: number, signal: AbortSignal) {
   return parseResponse(response, 200, searchBatchDetailSchema)
 }
 
-export async function cancelSearchBatch(batchId: number, signal?: AbortSignal) {
+export async function cancelSearchBatch(
+  batchId: number,
+  input: { expected_revision: number },
+  signal?: AbortSignal,
+) {
   const response = await request(
     `/search-batches/${encodeURIComponent(String(batchId))}/cancel`,
-    { method: 'POST', headers: { Accept: 'application/json' }, signal },
+    controlRequest(input, signal),
   )
   return parseResponse(response, 202, searchBatchDetailSchema)
 }
 
 export async function continueSearchBatch(
   batchId: number,
+  input: SearchBatchControl,
   signal?: AbortSignal,
 ) {
   const response = await request(
     `/search-batches/${encodeURIComponent(String(batchId))}/continue`,
-    { method: 'POST', headers: { Accept: 'application/json' }, signal },
+    controlRequest(input, signal),
   )
   return parseResponse(response, 202, searchBatchDetailSchema)
+}
+
+function controlRequest(input: object, signal?: AbortSignal): RequestInit {
+  return {
+    method: 'POST',
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+    signal,
+  }
+}
+
+export async function skipSearchBatchPlatform(
+  batchId: number,
+  input: SearchBatchControl,
+  signal?: AbortSignal,
+) {
+  const response = await request(
+    `/search-batches/${batchId}/skip`,
+    controlRequest(input, signal),
+  )
+  return parseResponse(response, 202, searchBatchDetailSchema)
+}
+
+export async function showSearchBatchManualPage(
+  batchId: number,
+  input: SearchBatchControl,
+  signal?: AbortSignal,
+) {
+  const response = await request(
+    `/search-batches/${batchId}/manual-page`,
+    controlRequest(input, signal),
+  )
+  return parseResponse(response, 200, manualPageResponseSchema)
+}
+
+export async function recoverSearchBatchPlatform(
+  batchId: number,
+  position: number,
+  input: SearchBatchRecovery,
+  signal?: AbortSignal,
+) {
+  const response = await request(
+    `/search-batches/${batchId}/items/${position}/recover`,
+    controlRequest(input, signal),
+  )
+  return parseResponse(response, 202, searchBatchDetailSchema)
+}
+
+export async function fetchSearchBatchResults(
+  batchId: number,
+  position: number,
+  kind: SearchResultFilter,
+  offset: number,
+  signal: AbortSignal,
+) {
+  const query = new URLSearchParams({
+    kind,
+    limit: '50',
+    offset: String(offset),
+  })
+  const response = await request(
+    `/search-batches/${batchId}/items/${position}/results?${query}`,
+    {
+      headers: { Accept: 'application/json' },
+      signal,
+    },
+  )
+  return parseResponse(response, 200, searchBatchResultListSchema)
 }
 
 export async function fetchSearchBatchAttempts(

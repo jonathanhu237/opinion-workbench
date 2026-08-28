@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
+from schema_fixtures import create_legacy_schema
 
 from longtian_api.database import CURRENT_DATABASE_VERSION, Database
 from longtian_api.main import create_app
@@ -75,11 +76,8 @@ def test_settings_migration_is_additive_idempotent_and_has_constraints(
     tmp_path: Path,
 ) -> None:
     database = Database(tmp_path / "product.sqlite3")
-    database.initialize()
+    create_legacy_schema(database, 7)
     with database.connect() as connection:
-        connection.execute("DROP TABLE ai_settings")
-        connection.execute("DROP TABLE monitoring_rule_issue_terms")
-        connection.execute("PRAGMA user_version = 7")
         before = connection.execute("SELECT * FROM monitoring_rules").fetchall()
     database.initialize()
     database.initialize()

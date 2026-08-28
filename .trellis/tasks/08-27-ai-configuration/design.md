@@ -24,3 +24,14 @@ The form uses RHF, Zod and shadcn Field/Input/Button. Save submits the sensitive
 ## Migration and Rollback
 
 At current baseline settings adds the next migration after v7; verify the actual version at implementation. Temporary database/secret roots are mandatory for tests. Removing this feature must not mutate collection tables. Older binaries need a pre-migration backup, not a down-migration. No platform submodule changes.
+
+## Saved-Key Display Follow-up
+
+The clarified design replaces the first placeholder with a display-only text overlay of exactly
+20 literal asterisks in normal foreground color on the existing input. Render it only when
+`saved.has_api_key` is true and the input is empty/unfocused; hide it during focus and typing and
+restore it on empty blur. Use pointer-events-none and aria-hidden so it neither intercepts editing
+nor replaces the existing accessible label/help. Align to the current Input padding/font without
+changing the shared primitive or global styles. Keep the real input type password and RHF's actual
+`api_key` empty until a replacement is typed. Focus state is ephemeral UI state, not form data.
+No display sentinel or secret enters the payload/cache, and endpoint-change validation is unchanged.

@@ -77,7 +77,7 @@ const searchRunListSchema = z.strictObject({
   runs: z.array(searchRunSummarySchema),
   next_before_id: positiveSafeIntegerSchema.nullable(),
 })
-const searchResultSchema = z
+export const searchResultSchema = z
   .strictObject({
     id: positiveSafeIntegerSchema,
     platform: searchPlatformSchema,
@@ -228,7 +228,7 @@ export function isActiveSearchRun(status: SearchRunStatus) {
   return activeStatuses.includes(status as (typeof activeStatuses)[number])
 }
 
-function isValidSearchContentUrl(
+export function isValidSearchContentUrl(
   platform: SearchPlatform,
   platformContentId: string,
   value: string,

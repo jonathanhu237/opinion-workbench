@@ -2,7 +2,7 @@
   "id": "multimodal-opinion-analysis",
   "name": "multimodal-opinion-analysis",
   "title": "多模态舆情分析与汇总",
-  "description": "监控对象与可选舆情关键词组合已实现并验收；不设独立 AI 筛选，媒体获取和手动汇总留待后续子任务。",
+  "description": "AI 配置与监控规则组合已交付；按真实视频实测结论收敛媒体获取、逐条证据复用和手动汇总计划，不设独立 AI 筛选。",
   "status": "planning",
   "dev_type": "fullstack",
   "scope": null,
@@ -27,6 +27,11 @@
   ],
   "parent": null,
   "relatedFiles": [],
-  "notes": "2026-08-27: rule-composition Q1–Q6 implemented, independently reviewed and UI-verified after final ok approval; backend353/frontend164 gates pass. Rule child remains uncommitted, no media/summary activated. AI configuration remains implemented/checked with one earlier live text test. Standalone screening stays deferred. Rule implementation made no provider/platform calls or user runtime changes.",
-  "meta": {}
+  "notes": "2026-08-27: rule-composition Q1–Q6 implemented/checked and subsequently committed/archived; AI configuration implemented/checked. 2026-08-28: user approved media then manual full-run summary implementation. Summary is now the active child: v11 persistence, reusable item analysis and text-only report UI independently checked (backend596/frontend281 plus isolated fake-browser acceptance). Real-source/provider acceptance and five-platform full-media readiness remain open in the summary/media children; standalone screening deferred. No new paid call or commit/push/archive authorization in the summary round.",
+  "meta": {
+    "planning_revision": "2026-08-28-post-media-probe",
+    "final_review_status": "approved",
+    "implementation_approval": "2026-08-28: user replied 来 after the final single-run media/reuse/summary planning review; implement media first, summary after checked dependency. No commit/push authorization.",
+    "readiness": "research/product-integration-readiness.md"
+  }
 }

@@ -2,6 +2,8 @@
 
 Inspected locally on 2026-08-27. This is repository research for planning, not a claim that media extraction or model integration has been implemented or live-tested.
 
+Historical record: the later search-first decision supersedes the separate `AI 筛选`/re-screen actions below. The approved implementation uses one `生成汇总` action, with per-item analysis/reuse inside it. Configuration and two-list rules have since shipped; schema is v10. Read the current parent PRD/design and `product-integration-readiness.md` for authoritative scope/baseline; preserve these old anchors as evidence, not current implementation instructions.
+
 ## Verified Current Behavior
 
 - `backend/src/longtian_api/search_platforms.py:6` defines the five supported search platforms: Toutiao, Weibo, Kuaishou, Douyin, and Xiaohongshu.

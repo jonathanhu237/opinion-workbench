@@ -301,6 +301,21 @@ Create detailed flow docs when:
 
 ## Event Log / Projection Boundary
 
+For durable asynchronous workflows, also check what can be observed **between** commits:
+
+- Can a child finish before its parent projection changes? Test that real read window, not only
+  hand-built steady-state fixtures. A consistent read snapshot can still contain a valid transition.
+- Does a missing completion proof fail closed, or get mistaken for work that never happened?
+  Separate trusted progress from readonly diagnostic history; an unavailable checkpoint must not
+  make cancel/skip disappear behind a stricter unrelated decoder.
+- Does cancelling a coroutine actually stop its DB thread? Drain owned writes before releasing
+  exclusive resources, and test exception cleanup after each durable boundary.
+- Does a delayed callback belong to the current resource generation? Capture its original session
+  identity rather than looking up the newest mutable session when the callback fires.
+
+The concrete protocol, SQLite guards and regression cases for these checks are in
+[Batch Search](../backend/batch-search-guidelines.md), not duplicated in UI reducers.
+
 Append-only logs are cross-layer contracts. A single event travels through:
 
 ```
@@ -325,3 +340,14 @@ state correctly, but several commands still re-parsed event payload fields with
 local casts. The fix was to make the core event layer own `ThreadChannelEvent`
 and `isThreadEvent`, make `reduceChannelMetadata` the only channel metadata
 projection, and make `reduceThreads` the only thread replay reducer.
+
+## Lossy Source Projection
+
+- Does upstream normalization turn malformed data into null/empty data that the
+  next layer treats as proven absence?
+- Do tests exercise the real source projection before strict downstream validation,
+  or only hand-built already-normalized objects?
+- Can valid entries coexist with unknown entries without becoming complete input?
+
+See [Media Projection Fidelity](../backend/media-projection-guidelines.md) for the
+concrete source-shape, completeness and regression contracts.

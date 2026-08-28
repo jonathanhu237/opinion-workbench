@@ -20,6 +20,7 @@ from longtian_api.schemas.ai_settings import (
 )
 from longtian_api.services.ai_client import (
     AIClient,
+    AICompletion,
     AIConfiguration,
     normalize_base_url,
 )
@@ -35,6 +36,16 @@ class AIClientProtocol(Protocol):
     async def test_connection(self, configuration: AIConfiguration) -> None: ...
 
     async def aclose(self) -> None: ...
+
+    async def complete(
+        self,
+        configuration: AIConfiguration,
+        *,
+        messages: list[dict[str, object]],
+        max_tokens: int,
+        deadline: float,
+        include_usage: bool = True,
+    ) -> AICompletion: ...
 
 
 class AISettingsService:
@@ -174,6 +185,25 @@ class AISettingsService:
         async with self.operation(revision) as configuration:
             await self._client.test_connection(configuration)
             return AIConnectionResult(revision=configuration.revision)
+
+    async def complete(
+        self,
+        configuration: AIConfiguration,
+        *,
+        messages: list[dict[str, object]],
+        max_tokens: int,
+        deadline: float,
+    ) -> AICompletion:
+        """Use the existing client inside the caller's stable operation lease."""
+        if not self._active.is_set():
+            raise AIError("ai_operation_active")
+        return await self._client.complete(
+            configuration,
+            messages=messages,
+            max_tokens=max_tokens,
+            deadline=deadline,
+            include_usage=True,
+        )
 
     @staticmethod
     def _projection(record: AISettingsRecord) -> AISettings:

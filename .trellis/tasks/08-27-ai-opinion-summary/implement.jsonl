@@ -9,3 +9,7 @@
 {"file":".trellis/tasks/08-27-multimodal-opinion-analysis/research/current-input-boundary.md","reason":"Immutable source context and repeat-content/cache evidence."}
 {"file":".trellis/tasks/08-27-multimodal-opinion-analysis/research/model-transport-contract.md","reason":"Bounded explicit model transport, media envelope and validated outputs."}
 {"file":".trellis/tasks/08-27-platform-media-enrichment/design.md","reason":"Use the checked internal media contract; no duplicate browser/download implementation."}
+{"file":".trellis/tasks/08-27-multimodal-opinion-analysis/research/product-integration-readiness.md","reason":"Strict fenced JSON, product verdicts, per-attempt usage, cache accounting and current schema/recovery compatibility."}
+{"file":".trellis/tasks/08-27-ai-opinion-summary/research/implementation-boundary.md","reason":"Approved integration sequencing, ownership and explicit live-acceptance exclusions."}
+{"file":".trellis/spec/backend/media-projection-guidelines.md","reason":"Incomplete or unknown media must never be treated as complete AI input."}
+{"file":".trellis/spec/backend/ai-summary-guidelines.md","reason":"Preserve the implemented manual summary, stable source references, compatible reuse and no-auto-call contracts."}

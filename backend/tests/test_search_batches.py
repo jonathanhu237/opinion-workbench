@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from schema_fixtures import create_legacy_schema
 
 from longtian_api.database import CURRENT_DATABASE_VERSION, Database
 from longtian_api.main import create_app
@@ -21,6 +22,7 @@ from longtian_api.services.browser_operations import (
     BrowserOperationOwner,
 )
 from longtian_api.services.media_crawler_auth_worker import (
+    ManualPageWorkerResult,
     OpenResultWorkerResult,
     SearchWorkerItem,
     SearchWorkerResult,
@@ -47,6 +49,7 @@ class PlannedSearchWorker:
         max_results_per_term: int,
         on_progress: Callable[[int, int], Awaitable[None]],
         on_item: Callable[[int, SearchWorkerItem], Awaitable[None]],
+        on_term_completed: Callable[[int, int], Awaitable[None]],
     ) -> SearchWorkerResult:
         del request_id, max_results_per_term, on_item
         self.calls.append(platform)
@@ -56,7 +59,20 @@ class PlannedSearchWorker:
         self.counts[platform] += 1
         plan = self.outcomes.get(platform, ["completed_empty"])
         outcome = plan[min(index, len(plan) - 1)]
+        if outcome == "completed_empty":
+            await on_term_completed(0, 0)
+            for position in range(1, len(terms)):
+                await on_progress(position, len(terms))
+                await on_term_completed(position, 0)
         return SearchWorkerResult(outcome)  # type: ignore[arg-type]
+
+    async def manual_page(self, *, action, **kwargs):
+        return ManualPageWorkerResult(
+            "opened_existing" if action == "show" else "closed"
+        )
+
+    async def discard_session(self):
+        pass
 
     async def open_result(self, **_kwargs: object) -> OpenResultWorkerResult:
         return OpenResultWorkerResult("opened")
@@ -112,6 +128,18 @@ def _wait_for_batch(
     raise AssertionError("search batch did not reach the expected status")
 
 
+def _control(client, batch_id):
+    batch = client.get(f"/api/v1/search-batches/{batch_id}").json()
+    item = batch["items"][batch["current_item_position"]]
+    return {
+        "item_position": item["position"],
+        "expected_revision": batch["control_revision"],
+        "expected_run_id": item["latest_attempt"]["run"]["id"]
+        if item["latest_attempt"]
+        else None,
+    }
+
+
 def test_version_seven_migration_and_batch_constraints(tmp_path: Path) -> None:
     database = Database(tmp_path / "batch.sqlite3")
     database.initialize()
@@ -159,32 +187,19 @@ def test_version_six_upgrade_preserves_existing_runs_and_is_idempotent(
     tmp_path: Path,
 ) -> None:
     database = Database(tmp_path / "version-six.sqlite3")
-    runs = SearchRunRepository(database)
-    runs.initialize()
-    existing = runs.create_run(
-        monitoring_rule_id=1,
-        platform="xhs",
-        rule_name="迁移前任务",
-        terms=("龙田街道",),
-        max_results_per_term=5,
-    )
-    runs.finish(existing.id, "completed_empty")
+    create_legacy_schema(database, 6)
     with database.connect() as connection:
-        for table in (
-            "monitoring_rule_issue_terms",
-            "ai_settings",
-            "search_batch_attempts",
-            "search_batch_items",
-            "search_batch_terms",
-            "search_batches",
-        ):
-            connection.execute(f"DROP TABLE {table}")
-        connection.execute("PRAGMA user_version = 6")
+        connection.execute("""INSERT INTO search_runs
+            (id, monitoring_rule_id, platform, rule_name, max_results_per_term,
+             status, current_term_position, created_at, started_at, finished_at)
+            VALUES (1, 1, 'xhs', '迁移前任务', 5, 'completed_empty', 0,
+                    '2026-08-01T00:00:00Z','2026-08-01T00:00:00Z','2026-08-01T00:00:01Z')""")
+        connection.execute("INSERT INTO search_run_terms VALUES (1, 0, '龙田街道')")
 
     database.initialize()
     database.initialize()
 
-    assert SearchRunRepository(database).get(existing.id).platform == "xhs"
+    assert SearchRunRepository(database).get(1).platform == "xhs"
     with database.connect() as connection:
         assert (
             connection.execute("PRAGMA user_version").fetchone()[0]
@@ -200,17 +215,9 @@ def test_version_seven_migration_rolls_back_every_partial_schema_change(
     tmp_path: Path,
 ) -> None:
     database = Database(tmp_path / "migration-rollback.sqlite3")
-    database.initialize()
+    create_legacy_schema(database, 6)
     with database.connect() as connection:
-        for table in (
-            "search_batch_attempts",
-            "search_batch_items",
-            "search_batch_terms",
-            "search_batches",
-        ):
-            connection.execute(f"DROP TABLE {table}")
         connection.execute("CREATE TABLE search_batch_terms (sentinel TEXT)")
-        connection.execute("PRAGMA user_version = 6")
 
     with pytest.raises(sqlite3.Error):
         database.initialize()
@@ -291,9 +298,17 @@ def test_http_batch_orders_platforms_and_hides_attempts_from_primary_history(
             },
         )
         assert response.status_code == 202
-        batch = _wait_for_batch(
-            client, response.json()["id"], {"completed_with_failures"}
+        batch_id = response.json()["id"]
+        _wait_for_batch(client, batch_id, {"paused_for_manual_action"})
+        assert worker.calls == ["toutiao", "wb"]
+        assert (
+            client.post(
+                f"/api/v1/search-batches/{batch_id}/skip",
+                json=_control(client, batch_id),
+            ).status_code
+            == 202
         )
+        batch = _wait_for_batch(client, batch_id, {"completed_with_failures"})
         assert worker.calls == ["toutiao", "wb", "xhs"]
         assert [item["platform"] for item in batch["items"]] == [
             "toutiao",
@@ -302,7 +317,7 @@ def test_http_batch_orders_platforms_and_hides_attempts_from_primary_history(
         ]
         assert [item["status"] for item in batch["items"]] == [
             "completed",
-            "failed",
+            "skipped",
             "completed",
         ]
         assert batch["terminal_item_count"] == 3
@@ -349,7 +364,10 @@ def test_composed_batch_snapshot_survives_rule_edits_and_deletion(
             == 200
         )
         assert (
-            client.post(f"/api/v1/search-batches/{batch_id}/continue").status_code
+            client.post(
+                f"/api/v1/search-batches/{batch_id}/continue",
+                json=_control(client, batch_id),
+            ).status_code
             == 202
         )
         completed = _wait_for_batch(client, batch_id, {"completed"})
@@ -427,13 +445,19 @@ def test_manual_challenge_pauses_and_continue_creates_a_new_attempt(
         assert worker.calls == ["toutiao", "wb"]
         assert paused["items"][1]["attempt_count"] == 1
 
-        continued = client.post(f"/api/v1/search-batches/{batch_id}/continue")
+        continued = client.post(
+            f"/api/v1/search-batches/{batch_id}/continue",
+            json=_control(client, batch_id),
+        )
         assert continued.status_code == 202
         paused_again = _wait_for_batch(client, batch_id, {"paused_for_manual_action"})
         assert worker.calls == ["toutiao", "wb", "wb"]
         assert paused_again["items"][1]["attempt_count"] == 2
 
-        continued_again = client.post(f"/api/v1/search-batches/{batch_id}/continue")
+        continued_again = client.post(
+            f"/api/v1/search-batches/{batch_id}/continue",
+            json=_control(client, batch_id),
+        )
         assert continued_again.status_code == 202
         completed = _wait_for_batch(client, batch_id, {"completed"})
         assert worker.calls == ["toutiao", "wb", "wb", "wb", "ks"]
@@ -478,7 +502,10 @@ def test_cancel_batch_stops_current_attempt_and_never_starts_later_platforms(
         )
         assert standalone_run.status_code == 409
         assert standalone_run.json()["detail"]["code"] == "browser_operation_active"
-        cancel = client.post(f"/api/v1/search-batches/{batch_id}/cancel")
+        cancel = client.post(
+            f"/api/v1/search-batches/{batch_id}/cancel",
+            json={"expected_revision": _control(client, batch_id)["expected_revision"]},
+        )
         assert cancel.status_code == 202
         assert cancel.json()["status"] == "cancelled"
         assert worker.calls == ["toutiao"]
@@ -518,7 +545,11 @@ def test_cancel_releases_owner_when_runner_was_cancelled_before_start(
         service._active_owner = owner
         service._current_task = runner
 
-        cancelled = await service.cancel_batch(batch.id)
+        from longtian_api.schemas.search_batches import SearchBatchCancel
+
+        cancelled = await service.cancel_batch(
+            batch.id, SearchBatchCancel(expected_revision=batch.control_revision)
+        )
 
         assert cancelled.status == "cancelled"
         contender = BrowserOperationOwner("search_run", uuid4())
@@ -527,7 +558,7 @@ def test_cancel_releases_owner_when_runner_was_cancelled_before_start(
     asyncio.run(scenario())
 
 
-def test_restart_recovers_after_interrupted_attempt_and_continues_queue(
+def test_restart_pauses_interrupted_attempt_without_continuing_queue(
     tmp_path: Path,
 ) -> None:
     database_path = tmp_path / "restart.sqlite3"
@@ -550,13 +581,13 @@ def test_restart_recovers_after_interrupted_attempt_and_continues_queue(
 
     resumed_worker = PlannedSearchWorker({"wb": ["completed_empty"]})
     with TestClient(_app(database_path, resumed_worker)) as client:
-        recovered = _wait_for_batch(client, batch_id, {"completed_with_failures"})
+        recovered = _wait_for_batch(client, batch_id, {"paused_for_manual_action"})
 
     assert interrupted_worker.cancelled == 1
-    assert resumed_worker.calls == ["wb"]
+    assert resumed_worker.calls == []
     assert [item["status"] for item in recovered["items"]] == [
-        "failed",
-        "completed",
+        "paused_for_manual_action",
+        "queued",
     ]
 
 

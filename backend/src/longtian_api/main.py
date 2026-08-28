@@ -8,7 +8,11 @@ from starlette.concurrency import run_in_threadpool
 
 from longtian_api.api.router import api_router
 from longtian_api.database import Database
+from longtian_api.repositories.search_runs import SearchRunRepository
 from longtian_api.services.ai_settings import AISettingsService
+from longtian_api.services.ai_summaries import SummaryService
+from longtian_api.services.content_enrichment import ContentEnrichmentService
+from longtian_api.services.enrichment_staging import MediaSpool
 from longtian_api.services.monitoring_rules import MonitoringRuleService
 from longtian_api.services.platform_connections import PlatformConnectionService
 from longtian_api.services.search_batches import SearchBatchService
@@ -29,6 +33,10 @@ def create_app(
     ] = MonitoringRuleService,
     search_run_service_factory: SearchRunServiceFactory | None = None,
     ai_settings_service_factory: Callable[[Database], AISettingsService] | None = None,
+    content_enrichment_service_factory: Callable[
+        [Database, PlatformConnectionService], ContentEnrichmentService
+    ]
+    | None = None,
     ai_frontend_origins: tuple[str, ...] = (),
 ) -> FastAPI:
     """Create the product API and lifespan-owned local services."""
@@ -76,24 +84,54 @@ def create_app(
                 else AISettingsService(batch_database)
             )
             await run_in_threadpool(ai_settings_service.initialize)
+            enrichment_service = (
+                content_enrichment_service_factory(batch_database, platform_service)
+                if content_enrichment_service_factory is not None
+                else ContentEnrichmentService(
+                    repository=SearchRunRepository(batch_database),
+                    worker=platform_service.worker,
+                    browser_operations=platform_service.browser_operations,
+                    spool=MediaSpool(batch_database.path.parent / "media"),
+                )
+            )
+            summary_service = SummaryService(
+                database=batch_database,
+                ai_settings=ai_settings_service,
+                enrichment=enrichment_service,
+            )
+            await run_in_threadpool(summary_service.initialize)
             application.state.platform_connection_service = platform_service
             application.state.monitoring_rule_service = monitoring_rule_service
             application.state.search_run_service = search_run_service
             application.state.search_batch_service = search_batch_service
             application.state.ai_settings_service = ai_settings_service
+            application.state.content_enrichment_service = enrichment_service
+            application.state.ai_summary_service = summary_service
             await search_batch_service.resume_after_startup()
             yield
         finally:
             try:
-                if "ai_settings_service" in locals():
-                    await ai_settings_service.shutdown()
+                if "summary_service" in locals():
+                    await summary_service.shutdown()
             finally:
-                # An AI client close failure must not skip existing cleanup.
-                if "search_batch_service" in locals():
-                    await search_batch_service.shutdown()
-                if "search_run_service" in locals():
-                    await search_run_service.shutdown()
-                await platform_service.shutdown()
+                try:
+                    if "enrichment_service" in locals():
+                        await enrichment_service.shutdown()
+                finally:
+                    try:
+                        if "ai_settings_service" in locals():
+                            await ai_settings_service.shutdown()
+                    finally:
+                        # Every owner is drained, even when an earlier close fails.
+                        try:
+                            if "search_batch_service" in locals():
+                                await search_batch_service.shutdown()
+                        finally:
+                            try:
+                                if "search_run_service" in locals():
+                                    await search_run_service.shutdown()
+                            finally:
+                                await platform_service.shutdown()
 
     application = FastAPI(
         title="Longtian Public Opinion API",

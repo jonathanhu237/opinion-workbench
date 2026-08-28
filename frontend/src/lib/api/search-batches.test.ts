@@ -1,11 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+import { searchRunSummarySchema } from '@/lib/api/search-runs'
 import {
   cancelSearchBatch,
   continueSearchBatch,
   fetchSearchBatch,
   fetchSearchBatchAttempts,
   fetchSearchBatches,
+  fetchSearchBatchResults,
+  showSearchBatchManualPage,
+  skipSearchBatchPlatform,
+  recoverSearchBatchPlatform,
   isActiveSearchBatch,
   SearchBatchApiError,
   startSearchBatch,
@@ -31,6 +36,7 @@ const run = {
 
 const batch: SearchBatchDetail = {
   id: 4,
+  control_revision: 7,
   monitoring_rule_id: 1,
   rule_name: '龙田街道及四个社区',
   term_count: 1,
@@ -42,6 +48,16 @@ const batch: SearchBatchDetail = {
   terms: ['龙田街道'],
   items: [
     {
+      completed_term_count: 1,
+      remaining_term_count: 0,
+      next_term_position: null,
+      checkpoint_basis: 'explicit',
+      recovery_available: true,
+      pause_reason: null,
+      completion_basis: 'attempt_success',
+      new_count: 0,
+      repeated_count: 0,
+      total_count: 0,
       position: 0,
       platform: 'toutiao',
       status: 'completed',
@@ -67,6 +83,11 @@ const queuedBatch: SearchBatchDetail = {
     status: 'queued',
     attempt_count: 0,
     latest_attempt: null,
+    completed_term_count: 0,
+    remaining_term_count: 1,
+    next_term_position: 0,
+    checkpoint_basis: 'unknown',
+    completion_basis: null,
     started_at: null,
     finished_at: null,
   })),
@@ -75,6 +96,7 @@ const queuedBatch: SearchBatchDetail = {
 }
 
 const fetchMock = vi.fn<typeof fetch>()
+const control = { item_position: 0, expected_run_id: 21, expected_revision: 7 }
 
 describe('search batch API boundary', () => {
   beforeEach(() => {
@@ -221,7 +243,7 @@ describe('search batch API boundary', () => {
         { status: 409 },
       ),
     )
-    await expect(continueSearchBatch(4)).rejects.toEqual(
+    await expect(continueSearchBatch(4, control)).rejects.toEqual(
       new SearchBatchApiError(
         '该批采集任务当前不需要继续操作。',
         'search_batch_not_paused',
@@ -234,7 +256,9 @@ describe('search batch API boundary', () => {
         status: 202,
       }),
     )
-    await expect(cancelSearchBatch(4)).resolves.toMatchObject({
+    await expect(
+      cancelSearchBatch(4, { expected_revision: 7 }),
+    ).resolves.toMatchObject({
       status: 'cancelled',
     })
   })
@@ -244,5 +268,401 @@ describe('search batch API boundary', () => {
     expect(isActiveSearchBatch('running')).toBe(true)
     expect(isActiveSearchBatch('paused_for_manual_action')).toBe(false)
     expect(isActiveSearchBatch('completed_with_failures')).toBe(false)
+  })
+
+  it('sends versioned control bodies and preserves the abort signal', async () => {
+    const signal = new AbortController().signal
+    for (let index = 0; index < 4; index += 1)
+      fetchMock.mockResolvedValueOnce(
+        new Response(JSON.stringify(batch), { status: 202 }),
+      )
+    await continueSearchBatch(4, control, signal)
+    await skipSearchBatchPlatform(4, control, signal)
+    await recoverSearchBatchPlatform(
+      4,
+      0,
+      { expected_run_id: 21, expected_revision: 7 },
+      signal,
+    )
+    await cancelSearchBatch(4, { expected_revision: 7 }, signal)
+    const routes = ['continue', 'skip', 'items/0/recover', 'cancel']
+    const bodies = [
+      control,
+      control,
+      { expected_run_id: 21, expected_revision: 7 },
+      { expected_revision: 7 },
+    ]
+    routes.forEach((route, index) =>
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        index + 1,
+        `/api/v1/search-batches/4/${route}`,
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify(bodies[index]),
+          signal,
+        }),
+      ),
+    )
+  })
+
+  it.each([
+    'opened_existing',
+    'opened_homepage',
+    'browser_unavailable',
+    'navigation_failed',
+    'internal_error',
+    'cancelled',
+  ])('accepts only fixed manual-page outcome %s', async (outcome) => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ outcome }), { status: 200 }),
+    )
+    await expect(showSearchBatchManualPage(4, control)).resolves.toEqual({
+      outcome,
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/search-batches/4/manual-page',
+      expect.objectContaining({ body: JSON.stringify(control) }),
+    )
+  })
+
+  it.each([
+    ['search_batch_state_changed', '采集任务状态已变化，请刷新后重试。'],
+    [
+      'search_batch_recovery_unavailable',
+      '无法确认可靠的续采位置，请跳过此平台或取消批次。',
+    ],
+    ['search_batch_item_not_recoverable', '该平台当前不能重新处理。'],
+  ])(
+    'uses exact conflict %s and rejects changed messages',
+    async (code, message) => {
+      fetchMock.mockResolvedValueOnce(
+        new Response(JSON.stringify({ detail: { code, message } }), {
+          status: 409,
+        }),
+      )
+      await expect(continueSearchBatch(4, control)).rejects.toMatchObject({
+        code,
+        message,
+        status: 409,
+      })
+      fetchMock.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ detail: { code, message: `${message}extra` } }),
+          { status: 409 },
+        ),
+      )
+      await expect(continueSearchBatch(4, control)).rejects.toMatchObject({
+        code: 'invalid_response',
+      })
+    },
+  )
+
+  it('accepts queued-with-old-attempt and confirmed-terms completion without relabeling the failed run', async () => {
+    const failed = { ...run, status: 'internal_error' }
+    const queued = {
+      ...batch,
+      status: 'running',
+      terminal_item_count: 0,
+      finished_at: null,
+      items: [
+        {
+          ...batch.items[0],
+          status: 'queued',
+          completion_basis: null,
+          finished_at: null,
+          latest_attempt: { attempt_number: 1, run: failed },
+        },
+      ],
+    }
+    const confirmed = {
+      ...batch,
+      items: [
+        {
+          ...batch.items[0],
+          completion_basis: 'confirmed_terms',
+          latest_attempt: { attempt_number: 1, run: failed },
+        },
+      ],
+    }
+    for (const payload of [queued, confirmed]) {
+      fetchMock.mockResolvedValueOnce(
+        new Response(JSON.stringify(payload), { status: 200 }),
+      )
+      await expect(
+        fetchSearchBatch(4, new AbortController().signal),
+      ).resolves.toEqual(payload)
+    }
+  })
+
+  it('distinguishes reliable empty progress from unavailable corrupt progress', async () => {
+    for (const available of [true, false]) {
+      const payload = {
+        ...queuedBatch,
+        status: 'paused_for_manual_action',
+        current_item_position: 0,
+        items: [
+          {
+            ...queuedBatch.items[0],
+            status: 'paused_for_manual_action',
+            pause_reason: 'process_interrupted',
+            recovery_available: available,
+            next_term_position: available ? 0 : null,
+          },
+        ],
+      }
+      fetchMock.mockResolvedValueOnce(
+        new Response(JSON.stringify(payload), { status: 200 }),
+      )
+      await expect(
+        fetchSearchBatch(4, new AbortController().signal),
+      ).resolves.toEqual(payload)
+    }
+  })
+
+  it.each([0, 1])(
+    'keeps a corrupt child snapshot with %s rows readable without trusting it',
+    async (termCount) => {
+      const payload = {
+        ...batch,
+        term_count: 2,
+        terms: ['词一', '词二'],
+        status: 'paused_for_manual_action',
+        terminal_item_count: 0,
+        current_item_position: 0,
+        finished_at: null,
+        items: [
+          {
+            ...batch.items[0],
+            status: 'paused_for_manual_action',
+            pause_reason: 'attempt_failed',
+            completion_basis: null,
+            finished_at: null,
+            completed_term_count: 0,
+            remaining_term_count: 2,
+            next_term_position: null,
+            checkpoint_basis: 'unknown',
+            recovery_available: false,
+            latest_attempt: {
+              attempt_number: 1,
+              run: {
+                ...run,
+                status: 'structure_changed',
+                current_term_position: null,
+                term_count: termCount,
+              },
+            },
+          },
+        ],
+      }
+      fetchMock.mockResolvedValueOnce(
+        new Response(JSON.stringify(payload), { status: 200 }),
+      )
+      await expect(
+        fetchSearchBatch(4, new AbortController().signal),
+      ).resolves.toEqual(payload)
+      fetchMock.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ attempts: [payload.items[0].latest_attempt] }),
+          { status: 200 },
+        ),
+      )
+      await expect(
+        fetchSearchBatchAttempts(4, 0, new AbortController().signal),
+      ).resolves.toEqual({ attempts: [payload.items[0].latest_attempt] })
+      if (termCount === 0)
+        expect(
+          searchRunSummarySchema.safeParse(payload.items[0].latest_attempt.run)
+            .success,
+        ).toBe(false)
+      fetchMock.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            ...payload,
+            items: [
+              {
+                ...payload.items[0],
+                recovery_available: true,
+                next_term_position: 0,
+              },
+            ],
+          }),
+          { status: 200 },
+        ),
+      )
+      await expect(
+        fetchSearchBatch(4, new AbortController().signal),
+      ).rejects.toMatchObject({ code: 'invalid_response' })
+    },
+  )
+
+  it.each(['completed_empty', 'structure_changed', 'cancelled'])(
+    'accepts the persisted %s attempt before the running item is finalized',
+    async (status) => {
+      const payload = {
+        ...batch,
+        status: 'running',
+        terminal_item_count: 0,
+        current_item_position: 0,
+        finished_at: null,
+        items: [
+          {
+            ...batch.items[0],
+            status: 'running',
+            completion_basis: null,
+            finished_at: null,
+            latest_attempt: { attempt_number: 1, run: { ...run, status } },
+          },
+        ],
+      }
+      fetchMock.mockResolvedValueOnce(
+        new Response(JSON.stringify(payload), { status: 200 }),
+      )
+      await expect(
+        fetchSearchBatch(4, new AbortController().signal),
+      ).resolves.toEqual(payload)
+    },
+  )
+
+  it('keeps an out-of-range historical position readable only as unavailable recovery', async () => {
+    const payload = {
+      ...batch,
+      status: 'paused_for_manual_action',
+      terminal_item_count: 0,
+      current_item_position: 0,
+      finished_at: null,
+      items: [
+        {
+          ...batch.items[0],
+          status: 'paused_for_manual_action',
+          pause_reason: 'attempt_failed',
+          completion_basis: null,
+          finished_at: null,
+          completed_term_count: 0,
+          remaining_term_count: 1,
+          next_term_position: null,
+          checkpoint_basis: 'unknown',
+          recovery_available: false,
+          latest_attempt: {
+            attempt_number: 1,
+            run: {
+              ...run,
+              status: 'internal_error',
+              current_term_position: 20,
+            },
+          },
+        },
+      ],
+    }
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify(payload), { status: 200 }),
+    )
+    await expect(
+      fetchSearchBatch(4, new AbortController().signal),
+    ).resolves.toEqual(payload)
+    expect(
+      searchRunSummarySchema.safeParse(payload.items[0].latest_attempt.run)
+        .success,
+    ).toBe(false)
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          ...payload,
+          items: [
+            {
+              ...payload.items[0],
+              recovery_available: true,
+              next_term_position: 0,
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+    )
+    await expect(
+      fetchSearchBatch(4, new AbortController().signal),
+    ).rejects.toMatchObject({ code: 'invalid_response' })
+  })
+
+  it.each([
+    { completed_term_count: 0 },
+    { next_term_position: 0 },
+    { recovery_available: false },
+    { completion_basis: null },
+    { checkpoint_basis: 'unknown' },
+    { total_count: 1 },
+    { pause_reason: 'attempt_failed' },
+  ])('rejects inconsistent recovery fields %j', async (fields) => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ ...batch, items: [{ ...batch.items[0], ...fields }] }),
+        { status: 200 },
+      ),
+    )
+    await expect(
+      fetchSearchBatch(4, new AbortController().signal),
+    ).rejects.toMatchObject({ code: 'invalid_response' })
+  })
+
+  it('rejects unknown manual outcomes and unexpected fields', async () => {
+    for (const payload of [
+      { outcome: 'logged_in' },
+      { outcome: 'opened_existing', url: 'https://example.test' },
+    ]) {
+      fetchMock.mockResolvedValueOnce(
+        new Response(JSON.stringify(payload), { status: 200 }),
+      )
+      await expect(showSearchBatchManualPage(4, control)).rejects.toMatchObject(
+        { code: 'invalid_response' },
+      )
+    }
+  })
+
+  it('loads an aggregate page using source-run provenance and rejects missing or unsafe fields', async () => {
+    const result = {
+      id: 3,
+      source_run_id: 21,
+      platform: 'toutiao',
+      platform_content_id: '123',
+      content_type: 'article',
+      title: '结果',
+      snippet: '',
+      creator_hash: '',
+      publisher_name: '',
+      published_at_text: '',
+      content_url: 'https://www.toutiao.com/article/123/',
+      kind: 'new',
+      matched_terms: ['龙田街道'],
+      first_seen_at: run.created_at,
+      last_seen_at: run.created_at,
+      first_observed_at: run.created_at,
+      last_observed_at: run.created_at,
+    }
+    const payload = { results: [result], total: 51, limit: 50, offset: 50 }
+    const signal = new AbortController().signal
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify(payload), { status: 200 }),
+    )
+    await expect(
+      fetchSearchBatchResults(4, 0, 'new', 50, signal),
+    ).resolves.toEqual(payload)
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/api/v1/search-batches/4/items/0/results?kind=new&limit=50&offset=50',
+      expect.objectContaining({ signal }),
+    )
+    for (const invalid of [
+      { ...result, source_run_id: undefined },
+      { ...result, source_run_id: 0 },
+      { ...result, content_url: 'https://evil.test/' },
+      { ...result, publisher_name: 'unmasked' },
+    ]) {
+      fetchMock.mockResolvedValueOnce(
+        new Response(JSON.stringify({ ...payload, results: [invalid] }), {
+          status: 200,
+        }),
+      )
+      await expect(
+        fetchSearchBatchResults(4, 0, 'all', 0, signal),
+      ).rejects.toMatchObject({ code: 'invalid_response' })
+    }
   })
 })

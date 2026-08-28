@@ -6,3 +6,7 @@
 {"file":".trellis/tasks/08-27-multimodal-opinion-analysis/research/current-input-boundary.md","reason":"Immutable source context and repeat-content/cache evidence."}
 {"file":".trellis/tasks/08-27-multimodal-opinion-analysis/research/model-transport-contract.md","reason":"Bounded explicit model transport, media envelope and validated outputs."}
 {"file":".trellis/tasks/08-27-platform-media-enrichment/design.md","reason":"Verify full media fidelity, browser ownership and bounded per-item processing."}
+{"file":".trellis/tasks/08-27-multimodal-opinion-analysis/research/product-integration-readiness.md","reason":"Validate no repair calls, usage retained on local failure, no copied historical usage, no raw diagnostic response and no media reupload."}
+{"file":".trellis/tasks/08-27-ai-opinion-summary/research/implementation-boundary.md","reason":"Check the approved integration slice without claiming five-platform live acceptance."}
+{"file":".trellis/spec/backend/media-projection-guidelines.md","reason":"Reject false-ready media and implicit title-only fallback."}
+{"file":".trellis/spec/backend/ai-summary-guidelines.md","reason":"Checked full-run summary, immutable analysis cache, strict model/UI boundaries and separate live-acceptance contract."}

@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from longtian_api.schemas.search_runs import SearchRunSummary
+from longtian_api.schemas.search_runs import SearchResult, SearchRunSummary
 from longtian_api.search_platforms import SearchPlatform
 
 SearchBatchStatus = Literal[
@@ -23,6 +23,7 @@ SearchBatchItemStatus = Literal[
     "paused_for_manual_action",
     "completed",
     "failed",
+    "skipped",
     "cancelled",
 ]
 SearchBatchErrorCode = Literal[
@@ -34,8 +35,43 @@ SearchBatchErrorCode = Literal[
     "search_batch_not_found",
     "search_batch_not_active",
     "search_batch_not_paused",
+    "search_batch_state_changed",
+    "search_batch_recovery_unavailable",
+    "search_batch_item_not_recoverable",
     "search_storage_unavailable",
 ]
+
+CheckpointBasis = Literal["explicit", "legacy_inferred", "mixed", "unknown"]
+PauseReason = Literal["attempt_failed", "process_interrupted"]
+CompletionBasis = Literal["attempt_success", "confirmed_terms"]
+ManualPageOutcome = Literal[
+    "opened_existing",
+    "opened_homepage",
+    "browser_unavailable",
+    "navigation_failed",
+    "internal_error",
+    "cancelled",
+]
+
+
+class SearchBatchCancel(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    expected_revision: int = Field(ge=0, le=9_223_372_036_854_775_807)
+
+
+class SearchBatchRecover(SearchBatchCancel):
+    expected_run_id: int | None = Field(ge=1, le=9_223_372_036_854_775_807)
+
+
+class SearchBatchControl(SearchBatchRecover):
+    item_position: int = Field(ge=0, le=4)
+
+
+class SearchBatchManualPageResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    outcome: ManualPageOutcome
 
 
 class SearchBatchCreate(BaseModel):
@@ -67,6 +103,16 @@ class SearchBatchItem(BaseModel):
     status: SearchBatchItemStatus
     attempt_count: int = Field(ge=0)
     latest_attempt: SearchBatchAttempt | None
+    completed_term_count: int = Field(ge=0)
+    remaining_term_count: int = Field(ge=0)
+    next_term_position: int | None = Field(ge=0)
+    checkpoint_basis: CheckpointBasis
+    recovery_available: bool
+    pause_reason: PauseReason | None
+    completion_basis: CompletionBasis | None
+    new_count: int = Field(ge=0)
+    repeated_count: int = Field(ge=0)
+    total_count: int = Field(ge=0)
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
@@ -83,6 +129,7 @@ class SearchBatchSummary(BaseModel):
     terminal_item_count: int
     max_results_per_term: int
     status: SearchBatchStatus
+    control_revision: int = Field(ge=0)
     current_item_position: int | None
     created_at: datetime
     started_at: datetime | None
@@ -105,6 +152,19 @@ class SearchBatchAttemptListResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     attempts: list[SearchBatchAttempt]
+
+
+class SearchBatchResult(SearchResult):
+    source_run_id: int = Field(ge=1)
+
+
+class SearchBatchResultListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    results: list[SearchBatchResult]
+    total: int
+    limit: int
+    offset: int
 
 
 class SearchBatchErrorDetail(BaseModel):

@@ -24,14 +24,16 @@ frontend, and migration changes.
 
 ### 2. Signatures
 
-Database version 6 owns:
+The single-run schema (introduced in version 6, extended in version 10) owns:
 
 ```text
 search_runs(
   id, monitoring_rule_id, platform, rule_name, max_results_per_term, status,
-  current_term_position, created_at, started_at, finished_at
+  current_term_position, execution_start_term_position, search_protocol_version,
+  created_at, started_at, finished_at
 )
 search_run_terms(run_id, position, value)
+search_run_term_completions(run_id, term_position, proof, result_count, completed_at, recorded_at)
 search_contents(
   id, platform, platform_content_id, content_type, title, snippet, creator_hash,
   publisher_name, published_at_text, content_url, first_seen_at, last_seen_at
@@ -86,19 +88,25 @@ manual_challenge_required | platform_blocked_or_rate_limited | structure_changed
 browser_unavailable | timed_out | cancelled | internal_error
 ```
 
-The worker keeps the existing auth v2 frames unchanged and adds a separate strict search protocol:
+The worker keeps existing auth-v2 frames unchanged and uses separate strict search-v2 frames.
+Backend and derivative are one rollout unit; do not silently fall back to search v1:
 
 ```text
-__MEDIACRAWLER_SEARCH_COMMAND__{"version":1,"type":"command","command":"search","request_id":"<uuid4>","platform":"wb","terms":["..."],"max_results_per_term":10}
-__MEDIACRAWLER_SEARCH_EVENT__{"version":1,"type":"event","event":"progress","request_id":"<uuid4>","platform":"wb","phase":"term_started","term_position":0,"term_count":5}
-__MEDIACRAWLER_SEARCH_EVENT__{"version":1,"type":"event","event":"item","request_id":"<uuid4>","platform":"wb","term_position":0,"item":{...}}
-__MEDIACRAWLER_SEARCH_EVENT__{"version":1,"type":"event","event":"result","request_id":"<uuid4>","platform":"wb","outcome":"completed_with_results"}
-__MEDIACRAWLER_SEARCH_COMMAND__{"version":1,"type":"command","command":"open_result","request_id":"<uuid4>","platform":"xhs","term":"...","content_id":"<24-hex>"}
-__MEDIACRAWLER_SEARCH_EVENT__{"version":1,"type":"event","event":"open_result","request_id":"<uuid4>","platform":"xhs","outcome":"opened"}
+__MEDIACRAWLER_SEARCH_COMMAND__{"version":2,"type":"command","command":"search","request_id":"<uuid4>","platform":"wb","terms":["..."],"max_results_per_term":10}
+__MEDIACRAWLER_SEARCH_EVENT__{"version":2,"type":"event","event":"progress","request_id":"<uuid4>","platform":"wb","phase":"term_started","term_position":0,"term_count":1}
+__MEDIACRAWLER_SEARCH_EVENT__{"version":2,"type":"event","event":"item","request_id":"<uuid4>","platform":"wb","term_position":0,"item":{...}}
+__MEDIACRAWLER_SEARCH_EVENT__{"version":2,"type":"event","event":"term_completed","request_id":"<uuid4>","platform":"wb","term_position":0,"item_count":1}
+__MEDIACRAWLER_SEARCH_EVENT__{"version":2,"type":"event","event":"result","request_id":"<uuid4>","platform":"wb","outcome":"completed_with_results"}
+__MEDIACRAWLER_SEARCH_COMMAND__{"version":2,"type":"command","command":"open_result","request_id":"<uuid4>","platform":"xhs","term":"...","content_id":"<24-hex>"}
+__MEDIACRAWLER_SEARCH_EVENT__{"version":2,"type":"event","event":"open_result","request_id":"<uuid4>","platform":"xhs","outcome":"opened"}
+__MEDIACRAWLER_SEARCH_COMMAND__{"version":2,"type":"command","command":"manual_page","request_id":"<uuid4>","platform":"wb","action":"show"}
+__MEDIACRAWLER_SEARCH_EVENT__{"version":2,"type":"event","event":"manual_page","request_id":"<uuid4>","platform":"wb","action":"show","outcome":"opened_existing"}
 ```
 
 Search cancellation uses the search-command prefix with exact `command="cancel"` and matching
 `request_id`. Worker shutdown remains the existing lifecycle command.
+Manual-page `show|close`, fixed outcomes, time budgets and ownership follow
+[`batch-search-guidelines.md`](./batch-search-guidelines.md). It never accepts a URL or runs search/auth.
 
 ### 3. Contracts
 
@@ -112,7 +120,8 @@ Search cancellation uses the search-command prefix with exact `command="cancel"`
 - Background execution moves `queued -> running -> exactly one terminal status`. Terminal rows are
   immutable except for repository repair of a stale active row during the next startup.
 - Startup changes leftover `queued` or `running` rows to `internal_error` with a finished timestamp.
-  It does not retry or resume them.
+  It does not retry or resume them. The batch owner then reconciles its child/items into a pause
+  without starting the worker; already-terminal successful attempts remain successful.
 - Run list order is `id DESC` with cursor-style `before_id`; result order is `new` before `repeated`,
   then current-run `first_observed_at DESC`, then stable content ID. Counts are derived from
   `search_run_contents`, not maintained as independent mutable counters.
@@ -145,6 +154,10 @@ Search cancellation uses the search-command prefix with exact `command="cancel"`
   date into a fabricated exact timestamp.
 - The product repository is the only source of truth for run history and cross-run deduplication.
   The worker does not invoke MediaCrawler JSONL/SQLite stores for product search.
+- Store the full immutable run snapshot and execution offset. Only the run service maps suffix-local
+  progress/items/completions to original positions; repositories store original positions. Completion
+  is a separate durable proof, not inferred from a result count or a started term. The batch spec
+  defines legacy backfill, contiguous-prefix validation, no-work continuation and aggregate provenance.
 
 #### Worker and borrowed browser
 
@@ -252,10 +265,14 @@ Search cancellation uses the search-command prefix with exact `command="cancel"`
 - Search command frames are at most 32 KiB and search event lines at most 64 KiB. Decode UTF-8,
   reject duplicate JSON keys/unknown fields/wrong types, correlate exact UUID/platform, and fail the
   request on protocol drift. Never retain or log raw stdout/stderr.
-- Progress positions are exactly sequential from zero, item events belong only to the current term
-  and cannot exceed its requested hard limit, and successful completion follows progress for every
-  term. `completed_empty` carries no items, `completed_with_results` carries at least one item, and
-  `cancelled` is accepted only after the matching request was cancelled.
+- Progress positions are exactly sequential from zero within the command's suffix. The strict
+  sequence is start -> zero or more items -> `term_completed` -> next start/result. Completion count
+  must equal accepted items and cannot exceed the requested cap. Await each durable callback before
+  reading another event. Reject post-completion items, duplicate/skipped completion, and successful
+  results before every requested term completes. `completed_empty` carries no items,
+  `completed_with_results` carries at least one item, and `cancelled` is accepted only after the
+  matching request was cancelled. A failed/cancelled term never emits completion, including after
+  partial item delivery. Busy disconnect must be correlated, not an unscoped session event.
 - A non-empty creator hash is exactly the lowercase 16-hex anonymous digest produced by the adapter;
   its publisher label must be present and match the fixed masked nickname forms. Empty publisher
   fields remain paired. Raw publisher identifiers or labels fail the protocol boundary.
@@ -274,9 +291,11 @@ Search cancellation uses the search-command prefix with exact `command="cancel"`
   `https://www.xiaohongshu.com/explore/<matching-lowercase-24-hex-platform-content-id>` is valid;
   hostname case variants, explicit ports, queries, fragments, credentials, uppercase/non-hex IDs,
   and mismatched IDs are rejected. Search-result tokens never cross the adapter boundary.
-- Normal completion and cancellation close the task-owned search page. Login/challenge outcomes may
-  leave that one official page visible for manual action; it remains registered and is closed before
-  the next task-owned operation or worker shutdown. Pre-existing pages are never cleanup targets.
+- Normal completion and cancellation close the task-owned search page. Any non-success/non-cancel
+  outcome retains a usable trusted current-generation owned page for manual handling. Show focuses
+  it without reload/search/probe; missing handles fall back only to an explicit fixed-homepage open.
+  Narrow close/next search/shutdown may clear owned pages, never pre-existing user tabs. Disconnect
+  callbacks from an old session must not invalidate a new session's page or connection.
 
 #### UI contract
 
@@ -352,7 +371,7 @@ Chinese guidance.
 
 ### 6. Tests Required
 
-1. Migration: version 1→2→3→4→5→6, direct version 5→6, fresh version 6, repeated initialization,
+1. Migration: supported historical versions through version 10, exact v9→v10 and fresh v10, repeated initialization,
    forward-version rejection, foreign keys/indexes, active-row reconciliation, preservation of all
    Toutiao IDs/relations/timestamps, and same content ID isolation across platforms.
 2. Repository: run snapshots, stable history pagination, state transitions, transactional item
@@ -363,9 +382,10 @@ Chinese guidance.
    operation conflicts, cancellation, all terminal mappings, timeout, shutdown, OpenAPI models, and
    sanitized 404/409/422/503 responses, exact no-body open, all open outcomes, contention, storage
    failure, timeout, cancellation and shutdown with no orphan operation.
-4. Worker protocol: strict command/item/progress/result/cancel frames, duplicate-key/extra-field/
+4. Worker protocol: strict command/item/progress/term-completed/result/cancel frames, duplicate-key/extra-field/
    size/UUID/platform rejection, structured term array, term-position correlation, stderr drain, and
-   no raw-frame logging, plus exact secret-free open command/result frames and cancellation recycle.
+   no raw-frame logging, awaited persistence/order/count checks, suffix-position mapping, exact
+   secret-free open/manual-page frames, no-launch close, and cancellation recycle.
 5. Borrowed Chrome: reuse one CDP/default context, task-page registration, no context-wide scripts,
    no close of browser/context/pre-existing pages, challenge-page lifecycle, cancellation, disconnect,
    and worker recycle.

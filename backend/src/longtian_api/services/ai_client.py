@@ -8,14 +8,23 @@ import asyncio
 import codecs
 import ipaddress
 import json
+import math
 import re
 import socket
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from typing import Annotated, Literal, Self
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
-from pydantic import SecretStr
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    ValidationError,
+    model_validator,
+)
 
 from longtian_api.services.ai_errors import AIError
 
@@ -25,6 +34,8 @@ READ_TIMEOUT_SECONDS = 30.0
 TEST_MAX_TOKENS = 32
 MAX_RESPONSE_TEXT_BYTES = 64 * 1024
 MAX_STREAM_BYTES = 1024 * 1024
+MAX_REQUEST_BYTES = 9_000_000
+MAX_USAGE_TOKENS = 2**53 - 1
 _HOST_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
 _BASE_PATH = re.compile(r"(?:/[A-Za-z0-9._~-]+)*\Z")
 
@@ -35,6 +46,107 @@ class AIConfiguration:
     model: str
     revision: int
     api_key: SecretStr = field(repr=False)
+
+
+TokenDetail = Literal[
+    "text_tokens", "image_tokens", "video_tokens", "audio_tokens", "cached_tokens"
+]
+TokenCount = Annotated[int, Field(ge=0, le=MAX_USAGE_TOKENS)]
+_TOKEN_DETAILS = (
+    "text_tokens",
+    "image_tokens",
+    "video_tokens",
+    "audio_tokens",
+    "cached_tokens",
+)
+
+
+class AIUsage(BaseModel):
+    """Only validated provider accounting, never estimated or arbitrary metadata."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+    prompt_tokens: TokenCount
+    completion_tokens: TokenCount
+    total_tokens: TokenCount
+    prompt_tokens_details: dict[TokenDetail, TokenCount] | None = None
+    completion_tokens_details: dict[TokenDetail, TokenCount] | None = None
+
+    @model_validator(mode="after")
+    def validate_totals(self) -> Self:
+        if self.prompt_tokens + self.completion_tokens != self.total_tokens:
+            raise ValueError("invalid token total")
+        for total, details in (
+            (self.prompt_tokens, self.prompt_tokens_details),
+            (self.completion_tokens, self.completion_tokens_details),
+        ):
+            if details is not None and (
+                any(value > total for value in details.values())
+                or sum(
+                    value for key, value in details.items() if key != "cached_tokens"
+                )
+                > total
+            ):
+                # Cached tokens overlap modalities; missing modalities remain unknown.
+                raise ValueError("invalid token detail total")
+        return self
+
+
+@dataclass(frozen=True, slots=True)
+class AICompletion:
+    text: str = field(repr=False)
+    usage: AIUsage | None = None
+
+
+def decode_model_json(text: str) -> object:
+    """Shared strict JSON syntax for SSE and final answers, no repair/coercion."""
+
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("duplicate JSON key")
+            result[key] = value
+        return result
+
+    def reject_constant(_value):
+        raise ValueError("invalid JSON constant")
+
+    return json.loads(text, object_pairs_hook=unique, parse_constant=reject_constant)
+
+
+def encode_completion_request(
+    configuration: AIConfiguration,
+    *,
+    messages: list[dict[str, object]],
+    max_tokens: int,
+    include_usage: bool = True,
+) -> bytes:
+    """The bytes checked here are exactly the bytes sent, before DNS/provider work."""
+    if (
+        type(max_tokens) is not int
+        or not 1 <= max_tokens <= 4096
+        or type(include_usage) is not bool
+        or type(messages) is not list
+    ):
+        raise AIError("ai_unsupported_input")
+    payload = {
+        "model": configuration.model,
+        "messages": messages,
+        "stream": True,
+        "modalities": ["text"],
+        "max_tokens": max_tokens,
+    }
+    if include_usage:
+        payload["stream_options"] = {"include_usage": True}
+    try:
+        data = json.dumps(
+            payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+        ).encode("utf-8")
+    except (ValueError, TypeError, UnicodeError, RecursionError):
+        raise AIError("ai_unsupported_input") from None
+    if len(data) >= MAX_REQUEST_BYTES:
+        raise AIError("ai_request_too_large")
+    return data
 
 
 def is_public_address(value: str) -> bool:
@@ -127,6 +239,8 @@ class _TextStream:
         self._content: list[str] = []
         self._finished = False
         self._done = False
+        self._usage: AIUsage | None = None
+        self._usage_invalid = False
 
     def feed(self, chunk: bytes, *, final: bool = False) -> None:
         self._wire_bytes += len(chunk)
@@ -165,16 +279,21 @@ class _TextStream:
                 raise AIError("ai_invalid_response")
             self._done = True
             return
-        payload = json.loads(data)
+        payload = decode_model_json(data)
         if not isinstance(payload, dict) or "error" in payload:
             raise AIError("ai_invalid_response")
+        self._observe_usage(payload.get("usage"))
         choices = payload.get("choices")
         if choices == []:
             return  # Optional usage-only event.
         if not isinstance(choices, list) or len(choices) != 1:
             raise AIError("ai_invalid_response")
         choice = choices[0]
-        if not isinstance(choice, dict) or choice.get("index") != 0:
+        if (
+            not isinstance(choice, dict)
+            or type(choice.get("index")) is not int
+            or choice["index"] != 0
+        ):
             raise AIError("ai_invalid_response")
         delta = choice.get("delta")
         if not isinstance(delta, dict):
@@ -199,6 +318,38 @@ class _TextStream:
             if finish != "stop" or self._finished:
                 raise AIError("ai_invalid_response")
             self._finished = True
+
+    def _observe_usage(self, value: object) -> None:
+        if value is None or self._usage_invalid:
+            return
+        try:
+            if type(value) is not dict:
+                raise ValueError
+            data = {
+                name: value[name]
+                for name in ("prompt_tokens", "completion_tokens", "total_tokens")
+            }
+            for name in ("prompt_tokens_details", "completion_tokens_details"):
+                details = value.get(name)
+                if details is not None:
+                    if type(details) is not dict:
+                        raise ValueError
+                    data[name] = {
+                        key: details[key] for key in _TOKEN_DETAILS if key in details
+                    }
+            usage = AIUsage.model_validate(data)
+            if self._usage is not None and self._usage != usage:
+                raise ValueError
+            self._usage = usage
+        except (KeyError, TypeError, ValueError, ValidationError):
+            # Malformed/conflicting accounting does not make successful text a
+            # transport failure, but never becomes zero or an invented merge.
+            self._usage = None
+            self._usage_invalid = True
+
+    @property
+    def usage(self) -> AIUsage | None:
+        return self._usage if not self._usage_invalid else None
 
     def result(self) -> str:
         text = "".join(self._content)
@@ -263,6 +414,36 @@ class AIClient:
         max_tokens: int,
         deadline: float,
     ) -> str:
+        result = await self.complete(
+            configuration,
+            messages=messages,
+            max_tokens=max_tokens,
+            deadline=deadline,
+            include_usage=False,
+        )
+        return result.text
+
+    async def complete(
+        self,
+        configuration: AIConfiguration,
+        *,
+        messages: list[dict[str, object]],
+        max_tokens: int,
+        deadline: float,
+        include_usage: bool = True,
+    ) -> AICompletion:
+        if (
+            type(deadline) not in (int, float)
+            or not math.isfinite(deadline)
+            or not 0 < deadline <= 180
+        ):
+            raise AIError("ai_unsupported_input")
+        body = encode_completion_request(
+            configuration,
+            messages=messages,
+            max_tokens=max_tokens,
+            include_usage=include_usage,
+        )
         try:
             async with asyncio.timeout(deadline):
                 endpoint = httpx.URL(
@@ -286,15 +467,10 @@ class AIClient:
                         "Host": endpoint.netloc.decode("ascii"),
                         "Accept": "text/event-stream",
                         "Accept-Encoding": "identity",
+                        "Content-Type": "application/json",
                     },
                     extensions={"sni_hostname": endpoint.host},
-                    json={
-                        "model": configuration.model,
-                        "messages": messages,
-                        "stream": True,
-                        "modalities": ["text"],
-                        "max_tokens": max_tokens,
-                    },
+                    content=body,
                 ) as response:
                     self._check_status(response.status_code)
                     if (
@@ -311,7 +487,7 @@ class AIClient:
                     async for chunk in response.aiter_raw():
                         stream.feed(chunk)
                     stream.feed(b"", final=True)
-                    return stream.result()
+                    return AICompletion(stream.result(), stream.usage)
         except AIError:
             raise
         except (TimeoutError, httpx.TimeoutException):

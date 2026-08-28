@@ -2,6 +2,8 @@
 
 Use parent design section B and `../08-27-multimodal-opinion-analysis/research/platform-media-plan.md`. The report's per-platform source facts are candidates, not live-support claims. Model envelope constraints come from `research/model-transport-contract.md` in that same parent.
 
+Post-probe design refresh: also read the parent's `research/product-integration-readiness.md`. The Douyin exact canonical-page heading/player approach is now the first bounded implementation candidate; it needs a pure extractor, source-ID/full-caption checks, fixture coverage and product live acceptance. The probe does not authorize browser-storage extraction, generic detail endpoints, automatic fallbacks, extra searches or a hard-coded CDN URL. Other platforms retain their independently validated narrow paths.
+
 ## Boundary
 
 Create a dedicated enrichment command/protocol owner within the fork's `tools/` product-worker integration, with narrow platform projections next to existing product adapters. Backend `services/media_crawler_auth_worker.py` validates the new command/result and a new `services/content_enrichment.py` owns repository identity lookup, browser ownership and temporary asset validation. Do not alter normalized search-item schemas to carry media.
@@ -19,5 +21,7 @@ Ordinary search/catalog state remains unchanged. `EnrichedContent` is an interna
 ## Compatibility
 
 Add the new browser-operation owner to the shared coordinator and keep mutual exclusion with search, batch, login and XHS-open. Preserve protocol validation, request matching, cancellation and owned-tab cleanup. Existing worker clients must fail clearly on unsupported protocol revisions, not interpret enrichment as search/auth success.
+
+Re-read the current manual-recovery integration before changing the persistent worker or browser owner; the original audit's search-v1 assumptions are historical. Preserve recovery's paused ownership, checkpoint proofs and existing page handoff. The new internal enrichment result must not be misread as a search-resume callback. The current schema is v10 but this child adds no migration.
 
 Fork changes must be versioned separately and reachable remotely before a future parent gitlink publication. No vendor source copying. This planning child does not authorize a commit/push by itself.

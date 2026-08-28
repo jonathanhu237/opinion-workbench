@@ -113,11 +113,13 @@ function ActiveBatch({ batch }: { batch: SearchBatchSummary }) {
               />
             )}
             <p className="font-medium">
-              {paused ? '采集正在等待安全验证' : `正在采集“${batch.rule_name}”`}
+              {paused
+                ? '采集已暂停，等待人工处理'
+                : `正在采集“${batch.rule_name}”`}
             </p>
           </div>
           <p className="mt-1 text-sm text-muted-foreground">
-            已完成 {batch.terminal_item_count} / {batch.platform_count} 个平台
+            已结束 {batch.terminal_item_count} / {batch.platform_count} 个平台
           </p>
         </div>
         <Link

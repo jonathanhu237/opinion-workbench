@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -13,7 +14,10 @@ from longtian_api.services.ai_client import (
     TEST_DEADLINE_SECONDS,
     TEST_MAX_TOKENS,
     AIClient,
+    AICompletion,
     AIConfiguration,
+    AIUsage,
+    encode_completion_request,
     normalize_base_url,
 )
 from longtian_api.services.ai_errors import AIError
@@ -405,3 +409,223 @@ def test_default_transport_disables_proxies_redirects_retries_and_pool_reuse(
     assert client._http.follow_redirects is False
     assert client._http.trust_env is False
     asyncio.run(client.aclose())
+
+
+def usage_event(usage):
+    return b"data: " + json.dumps({"choices": [], "usage": usage}).encode() + b"\n\n"
+
+
+USAGE = {
+    "prompt_tokens": 30,
+    "completion_tokens": 4,
+    "total_tokens": 34,
+    "prompt_tokens_details": {"text_tokens": 2, "audio_tokens": 3, "video_tokens": 25},
+    "completion_tokens_details": {"text_tokens": 4},
+}
+
+
+def typed_completion(chunks):
+    calls, stream = [], Chunks(chunks)
+
+    def respond(request):
+        calls.append(request)
+        return httpx.Response(
+            200, headers={"Content-Type": "text/event-stream"}, stream=stream
+        )
+
+    async def run():
+        client = AIClient(
+            transport=httpx.MockTransport(respond), resolver=public_resolver
+        )
+        try:
+            return await client.complete(
+                CONFIGURATION,
+                messages=[{"role": "user", "content": "测试"}],
+                max_tokens=2048,
+                deadline=180,
+            )
+        finally:
+            await client.aclose()
+
+    return asyncio.run(run()), calls, stream
+
+
+def test_typed_completion_retains_valid_usage_and_requests_it_without_metadata(caplog):
+    extra = {**USAGE, "provider_debug": KEY}
+    extra["prompt_tokens_details"] = {**USAGE["prompt_tokens_details"], "private": KEY}
+    body = event({"content": "已完成", "reasoning_content": KEY}) + event(finish="stop")
+    body += usage_event(extra) + usage_event(USAGE) + b"data: [DONE]\n\n"
+    with caplog.at_level(logging.DEBUG):
+        result, calls, stream = typed_completion(
+            [body[i : i + 1] for i in range(len(body))]
+        )
+    assert result.text == "已完成" and result.usage == AIUsage.model_validate(USAGE)
+    assert "已完成" not in repr(result) and KEY not in repr(result)
+    assert KEY not in result.usage.model_dump_json() and KEY not in caplog.text
+    assert len(calls) == 1 and stream.closed
+    assert json.loads(calls[0].content)["stream_options"] == {"include_usage": True}
+    assert calls[0].content == encode_completion_request(
+        CONFIGURATION,
+        messages=[{"role": "user", "content": "测试"}],
+        max_tokens=2048,
+    )
+
+
+@pytest.mark.parametrize(
+    "events",
+    [
+        [],
+        [None],
+        [{"total_tokens": 34}],
+        [{**USAGE, "prompt_tokens": True}],
+        [{**USAGE, "prompt_tokens": "30"}],
+        [{**USAGE, "total_tokens": 35}],
+        [{**USAGE, "completion_tokens": -1}],
+        [{**USAGE, "total_tokens": 2**53}],
+        [{**USAGE, "prompt_tokens_details": {"video_tokens": True}}],
+        [{**USAGE, "prompt_tokens_details": {"video_tokens": 31}}],
+        [{**USAGE, "prompt_tokens_details": {"video_tokens": 25, "audio_tokens": 10}}],
+        [{**USAGE, "completion_tokens_details": []}],
+        [USAGE, {"prompt_tokens": 40, "completion_tokens": 4, "total_tokens": 44}],
+        [USAGE, {"prompt_tokens": 30, "completion_tokens": 4, "total_tokens": 34}],
+        [USAGE, {}, USAGE],
+        [{}, USAGE],
+    ],
+)
+def test_missing_malformed_or_conflicting_usage_is_unknown_not_zero_or_failed_text(
+    events,
+):
+    body = event({"content": "OK"}) + event(finish="stop")
+    body += b"".join(usage_event(value) for value in events) + b"data: [DONE]\n\n"
+    result, calls, stream = typed_completion([body])
+    assert result == AICompletion("OK", None) and len(calls) == 1 and stream.closed
+
+
+def test_partial_modality_counts_remain_sparse_and_cache_tokens_can_overlap():
+    raw = {
+        "prompt_tokens": 10,
+        "completion_tokens": 2,
+        "total_tokens": 12,
+        "prompt_tokens_details": {"video_tokens": 6, "cached_tokens": 9},
+    }
+    result, _, _ = typed_completion(
+        [
+            event({"content": "OK"})
+            + event(finish="stop")
+            + usage_event(raw)
+            + b"data: [DONE]\n\n"
+        ]
+    )
+    assert result.usage.prompt_tokens_details == {"video_tokens": 6, "cached_tokens": 9}
+    assert result.usage.completion_tokens_details is None
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        event({"content": "partial"}) + usage_event(USAGE),
+        event({"content": "partial"}) + usage_event(USAGE) + b"data: [DONE]\n\n",
+        event({"content": "partial"})
+        + event(finish="length")
+        + usage_event(USAGE)
+        + b"data: [DONE]\n\n",
+        b'data: {"choices":[],"choices":[]}\n\n' + COMPLETE,
+        b'data: {"choices":[{"index":false,"delta":{"content":"x"}}]}\n\n' + COMPLETE,
+    ],
+)
+def test_valid_usage_never_turns_partial_or_duplicate_key_stream_into_success(body):
+    with pytest.raises(AIError, match="ai_invalid_response"):
+        typed_completion([body])
+
+
+@pytest.mark.parametrize("difference", [-1, 0, 1])
+def test_exact_encoded_request_byte_limit_is_checked_before_dns(difference):
+    messages = [{"role": "user", "content": ""}]
+    base = encode_completion_request(CONFIGURATION, messages=messages, max_tokens=2048)
+    messages[0]["content"] = "x" * (
+        ai_client.MAX_REQUEST_BYTES - len(base) + difference
+    )
+    requests = []
+    resolver = AsyncMock(return_value=("8.8.8.8",))
+
+    def respond(request):
+        requests.append(request)
+        assert len(request.content) == ai_client.MAX_REQUEST_BYTES + difference
+        return httpx.Response(
+            200,
+            headers={"Content-Type": "text/event-stream"},
+            stream=Chunks([COMPLETE]),
+        )
+
+    async def run():
+        client = AIClient(transport=httpx.MockTransport(respond), resolver=resolver)
+        try:
+            if difference < 0:
+                assert (
+                    await client.complete(
+                        CONFIGURATION, messages=messages, max_tokens=2048, deadline=180
+                    )
+                ).text == "OK"
+            else:
+                with pytest.raises(AIError, match="ai_request_too_large"):
+                    await client.complete(
+                        CONFIGURATION, messages=messages, max_tokens=2048, deadline=180
+                    )
+        finally:
+            await client.aclose()
+
+    asyncio.run(run())
+    assert len(requests) == (1 if difference < 0 else 0)
+    if difference >= 0:
+        resolver.assert_not_awaited()
+
+
+def test_multibyte_request_size_is_utf8_bytes_not_python_characters(monkeypatch):
+    messages = [{"role": "user", "content": "测试"}]
+    encoded = encode_completion_request(
+        CONFIGURATION, messages=messages, max_tokens=2048
+    )
+    monkeypatch.setattr(ai_client, "MAX_REQUEST_BYTES", len(encoded))
+    with pytest.raises(AIError, match="ai_request_too_large"):
+        encode_completion_request(CONFIGURATION, messages=messages, max_tokens=2048)
+
+
+def test_cancelled_typed_completion_closes_stream_and_does_not_retry():
+    calls = []
+
+    async def run():
+        ready = asyncio.Event()
+
+        class WaitingStream(Chunks):
+            async def __aiter__(self):
+                yield event({"content": "partial"})
+                ready.set()
+                await asyncio.Event().wait()
+
+        stream = WaitingStream([])
+
+        def respond(request):
+            calls.append(request)
+            return httpx.Response(
+                200, headers={"Content-Type": "text/event-stream"}, stream=stream
+            )
+
+        client = AIClient(
+            transport=httpx.MockTransport(respond), resolver=public_resolver
+        )
+        try:
+            task = asyncio.create_task(
+                client.complete(
+                    CONFIGURATION, messages=[], max_tokens=2048, deadline=180
+                )
+            )
+            await ready.wait()
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            assert stream.closed
+        finally:
+            await client.aclose()
+
+    asyncio.run(run())
+    assert len(calls) == 1

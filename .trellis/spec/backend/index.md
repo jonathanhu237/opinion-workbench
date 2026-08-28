@@ -24,8 +24,10 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Visible Browser Search Adapter](./browser-search-adapter-guidelines.md) | Search-only browser lifecycle, DOM/link contracts, storage, and live validation | Active |
 | [Platform Connection](./platform-connection-guidelines.md) | Authentication-only subprocess protocol, product state, and borrowed-Chrome ownership | Active |
 | [Product Search](./product-search-guidelines.md) | Borrowed-Chrome collection runs, product SQLite deduplication, API/worker contracts, and validation | Active |
-| [Batch Search](./batch-search-guidelines.md) | Durable multi-platform batches, serial ownership, attempts, recovery, and UI/API contracts | Active |
+| [Batch Search](./batch-search-guidelines.md) | Serial batches, v10 proof checkpoints, guarded manual recovery, merged results and UI/API contracts | Active |
 | [AI Configuration](./ai-configuration-guidelines.md) | Single-model settings, protected credentials, exclusive operations, text testing, and secret-safe UI/API contracts | Active |
+| [Manual AI Summaries](./ai-summary-guidelines.md) | Full-run snapshots, reusable item analysis, text-only reports, explicit consent, usage and cross-layer validation | Active |
+| [Media Projection Fidelity](./media-projection-guidelines.md) | Preserve absent versus malformed media across minimized source projections; prevent false-ready input | Active |
 
 ---
 
