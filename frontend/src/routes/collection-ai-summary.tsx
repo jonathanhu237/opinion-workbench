@@ -226,8 +226,9 @@ function AnalysisRecord({
 
 export function CollectionAISummary({
   run,
+  historyOnly = false,
   ...controls
-}: { run: SearchRunDetail } & SourceControls) {
+}: { run: SearchRunDetail; historyOnly?: boolean } & SourceControls) {
   const queryClient = useQueryClient()
   const [params, setParams] = useSearchParams()
   const [confirmation, setConfirmation] = useState<{
@@ -241,6 +242,7 @@ export function CollectionAISummary({
   const settingsQuery = useQuery({
     queryKey: AI_SETTINGS_QUERY_KEY,
     queryFn: ({ signal }) => fetchAISettings(signal),
+    enabled: !historyOnly,
     retry: false,
   })
   const historyQuery = useInfiniteQuery({
@@ -429,22 +431,42 @@ export function CollectionAISummary({
           id="ai-summary-title"
           className="font-display text-xl font-semibold"
         >
-          AI 汇总
+          AI 汇总（旧版分析）
         </h2>
-        <Button
-          className="min-h-11 sm:min-h-8"
-          disabled={!canStart}
-          onClick={() => {
-            if (!settings || !canStart) return
-            startMutation.reset()
-            intent.current = null
-            setConfirmation({ settings, sourceCount: run.total_count })
-          }}
-        >
-          生成汇总
-        </Button>
+        {historyOnly ? (
+          <Link
+            to="/results"
+            className={buttonVariants({ className: 'min-h-11 sm:min-h-8' })}
+          >
+            前往结果与分析
+          </Link>
+        ) : (
+          <Button
+            className="min-h-11 sm:min-h-8"
+            disabled={!canStart}
+            onClick={() => {
+              if (!settings || !canStart) return
+              startMutation.reset()
+              intent.current = null
+              setConfirmation({ settings, sourceCount: run.total_count })
+            }}
+          >
+            生成汇总
+          </Button>
+        )}
       </div>
-      {admissionMessage && (
+      <p className="text-sm leading-6 text-muted-foreground">
+        旧版分析按本次采集范围判断，历史报告继续保留。
+        <Link to="/results" className="ml-1 underline underline-offset-4">
+          前往结果与分析查看独立初步分析
+        </Link>
+      </p>
+      {historyOnly && (
+        <p className="text-sm text-muted-foreground">
+          这里只查看旧版报告及引用；新分析请前往共享结果库。已有旧版任务仍可取消，不会再次生成旧版分析。
+        </p>
+      )}
+      {!historyOnly && admissionMessage && (
         <p className="text-sm text-muted-foreground">
           {admissionMessage}
           {!settingsQuery.isPending && !settings?.has_api_key && (
@@ -736,7 +758,7 @@ export function CollectionAISummary({
         )
       )}
 
-      {confirmation && (
+      {!historyOnly && confirmation && (
         <CollectionSummaryConfirmation
           sourceCount={confirmation.sourceCount}
           settings={confirmation.settings}

@@ -188,11 +188,29 @@ coverage是应用计算的采集内容数量，不是事件数量；无关、不
 def build_analysis_messages(
     configuration: AIConfiguration, item: EnrichmentItem, context: AnalysisContext
 ) -> list[dict[str, object]]:
+    try:
+        context = AnalysisContext.model_validate(context.model_dump())
+    except (AttributeError, TypeError, ValueError):
+        raise AIAnalysisError("input", "input_incomplete") from None
+    return build_content_messages(
+        configuration,
+        item,
+        system_prompt=_ANALYSIS_PROMPT,
+        context_payload={"monitoring_scope": context.model_dump()},
+    )
+
+
+def build_content_messages(
+    configuration: AIConfiguration,
+    item: EnrichmentItem,
+    *,
+    system_prompt: str,
+    context_payload: dict[str, object] | None = None,
+) -> list[dict[str, object]]:
     """No files, URLs, browser or model requests; consume checked in-memory bytes."""
     if not isinstance(item, EnrichmentItem) or not item.ready or item.content is None:
         raise AIAnalysisError("input", "input_incomplete")
     try:
-        context = AnalysisContext.model_validate(context.model_dump())
         content = validate_content(
             item.content.model_dump(),
             platform=item.source.platform,
@@ -234,7 +252,7 @@ def build_analysis_messages(
             "type": "text",
             "text": json.dumps(
                 {
-                    "monitoring_scope": context.model_dump(),
+                    **(context_payload or {}),
                     "source": {
                         "platform": content.platform,
                         "title": content.text.title,
@@ -261,7 +279,7 @@ def build_analysis_messages(
                 {"type": "video_url", "video_url": {"url": f"data:;base64,{encoded}"}}
             )
     messages: list[dict[str, object]] = [
-        {"role": "system", "content": _ANALYSIS_PROMPT},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": parts if content.assets else parts[0]["text"]},
     ]
     _check_encoded_size(configuration, messages, ANALYSIS_MAX_TOKENS)
@@ -327,7 +345,7 @@ def build_summary_messages(
     ]
 
 
-def _check_credential(text: str, api_key: SecretStr, usage: AIUsage | None):
+def check_credential(text: str, api_key: SecretStr, usage: AIUsage | None):
     key = api_key.get_secret_value()
     if not key:
         raise AIAnalysisError("credentials", "credential_leakage", usage)
@@ -349,12 +367,12 @@ def _check_credential(text: str, api_key: SecretStr, usage: AIUsage | None):
         raise AIAnalysisError("credentials", "credential_leakage", usage)
 
 
-def _answer_object(completion: AICompletion, api_key: SecretStr) -> object:
+def answer_object(completion: AICompletion, api_key: SecretStr) -> object:
     text, usage = completion.text, completion.usage
     try:
         if type(text) is not str or len(text.encode("utf-8")) > MAX_RESPONSE_TEXT_BYTES:
             raise ValueError
-        _check_credential(text, api_key, usage)
+        check_credential(text, api_key, usage)
         text = text.strip()
         if fenced := _JSON_FENCE.fullmatch(text):
             text = fenced[1]
@@ -364,20 +382,20 @@ def _answer_object(completion: AICompletion, api_key: SecretStr) -> object:
 
 
 def parse_analysis(completion: AICompletion, api_key: SecretStr) -> ItemAnalysis:
-    value = _answer_object(completion, api_key)
+    value = answer_object(completion, api_key)
     try:
         result = ItemAnalysis.model_validate(value)
     except (ValidationError, ValueError, UnicodeError):
         raise AIAnalysisError("schema", "invalid_schema", completion.usage) from None
     for text in (result.reason, result.evidence_summary):
-        _check_credential(text, api_key, completion.usage)
+        check_credential(text, api_key, completion.usage)
     return result
 
 
 def parse_summary(
     completion: AICompletion, allowed_source_ids: set[int], api_key: SecretStr
 ) -> SummaryDocument:
-    value = _answer_object(completion, api_key)
+    value = answer_object(completion, api_key)
     try:
         result = SummaryDocument.model_validate(value)
     except (ValidationError, ValueError, UnicodeError):
@@ -397,5 +415,5 @@ def parse_summary(
     ):
         raise AIAnalysisError("schema", "invalid_citations", completion.usage)
     for text in (result.overview, *(item.text for item in result.items)):
-        _check_credential(text, api_key, completion.usage)
+        check_credential(text, api_key, completion.usage)
     return result

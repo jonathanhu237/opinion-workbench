@@ -11,12 +11,17 @@ from longtian_api.database import Database
 from longtian_api.repositories.search_runs import SearchRunRepository
 from longtian_api.services.ai_settings import AISettingsService
 from longtian_api.services.ai_summaries import SummaryService
+from longtian_api.services.analysis_settings import AnalysisSettingsService
+from longtian_api.services.collection_schedules import CollectionScheduleService
+from longtian_api.services.content_analyses import ContentAnalysisService
 from longtian_api.services.content_enrichment import ContentEnrichmentService
 from longtian_api.services.enrichment_staging import MediaSpool
 from longtian_api.services.monitoring_rules import MonitoringRuleService
 from longtian_api.services.platform_connections import PlatformConnectionService
+from longtian_api.services.results import ResultsService
 from longtian_api.services.search_batches import SearchBatchService
 from longtian_api.services.search_runs import SearchRunService
+from longtian_api.services.topic_reports import TopicReportService
 
 SearchRunServiceFactory = Callable[
     [MonitoringRuleService, PlatformConnectionService], SearchRunService
@@ -38,6 +43,21 @@ def create_app(
     ]
     | None = None,
     ai_frontend_origins: tuple[str, ...] = (),
+    analysis_automation_available: bool = True,
+    collection_automation_available: bool = True,
+    topic_reports_available: bool = True,
+    topic_report_service_factory: Callable[
+        [Database, AISettingsService], TopicReportService
+    ]
+    | None = None,
+    collection_schedule_service_factory: Callable[
+        [Database, SearchBatchService], CollectionScheduleService
+    ]
+    | None = None,
+    content_analysis_service_factory: Callable[
+        [Database, AISettingsService, ContentEnrichmentService], ContentAnalysisService
+    ]
+    | None = None,
 ) -> FastAPI:
     """Create the product API and lifespan-owned local services."""
 
@@ -100,6 +120,48 @@ def create_app(
                 enrichment=enrichment_service,
             )
             await run_in_threadpool(summary_service.initialize)
+            analysis_settings_service = AnalysisSettingsService(
+                batch_database,
+                ai_settings_service,
+                available=analysis_automation_available,
+            )
+            content_analysis_service = (
+                content_analysis_service_factory(
+                    batch_database, ai_settings_service, enrichment_service
+                )
+                if content_analysis_service_factory is not None
+                else ContentAnalysisService(
+                    database=batch_database,
+                    ai_settings=ai_settings_service,
+                    enrichment=enrichment_service,
+                    available=analysis_automation_available,
+                )
+            )
+            await run_in_threadpool(content_analysis_service.initialize)
+            topic_report_service = (
+                topic_report_service_factory(batch_database, ai_settings_service)
+                if topic_report_service_factory is not None
+                else TopicReportService(
+                    database=batch_database,
+                    ai_settings=ai_settings_service,
+                    available=topic_reports_available,
+                )
+            )
+            await run_in_threadpool(topic_report_service.initialize)
+            if topic_reports_available:
+                content_analysis_service.on_job_finished = (
+                    topic_report_service.initial_analysis_finished
+                )
+            search_run_service.on_collection_finished = (
+                content_analysis_service.collection_finished
+            )
+            search_batch_service.on_collection_finished = (
+                content_analysis_service.collection_finished
+            )
+            application.state.results_service = ResultsService(batch_database)
+            application.state.analysis_settings_service = analysis_settings_service
+            application.state.content_analysis_service = content_analysis_service
+            application.state.topic_report_service = topic_report_service
             application.state.platform_connection_service = platform_service
             application.state.monitoring_rule_service = monitoring_rule_service
             application.state.search_run_service = search_run_service
@@ -108,30 +170,36 @@ def create_app(
             application.state.content_enrichment_service = enrichment_service
             application.state.ai_summary_service = summary_service
             await search_batch_service.resume_after_startup()
+            collection_schedule_service = (
+                collection_schedule_service_factory(
+                    batch_database, search_batch_service
+                )
+                if collection_schedule_service_factory is not None
+                else CollectionScheduleService(
+                    batch_database,
+                    search_batch_service,
+                    available=collection_automation_available,
+                )
+            )
+            application.state.collection_schedule_service = collection_schedule_service
+            await collection_schedule_service.start()
             yield
         finally:
-            try:
-                if "summary_service" in locals():
-                    await summary_service.shutdown()
-            finally:
-                try:
-                    if "enrichment_service" in locals():
-                        await enrichment_service.shutdown()
-                finally:
-                    try:
-                        if "ai_settings_service" in locals():
-                            await ai_settings_service.shutdown()
-                    finally:
-                        # Every owner is drained, even when an earlier close fails.
-                        try:
-                            if "search_batch_service" in locals():
-                                await search_batch_service.shutdown()
-                        finally:
-                            try:
-                                if "search_run_service" in locals():
-                                    await search_run_service.shutdown()
-                            finally:
-                                await platform_service.shutdown()
+            # Stop timer admission first; drain every owner even after a failure.
+            scope = locals()
+            await _shutdown_services(
+                [
+                    scope.get("collection_schedule_service"),
+                    scope.get("content_analysis_service"),
+                    scope.get("topic_report_service"),
+                    scope.get("summary_service"),
+                    scope.get("enrichment_service"),
+                    scope.get("ai_settings_service"),
+                    scope.get("search_batch_service"),
+                    scope.get("search_run_service"),
+                    platform_service,
+                ]
+            )
 
     application = FastAPI(
         title="Longtian Public Opinion API",
@@ -145,6 +213,19 @@ def create_app(
     application.state.ai_frontend_origins = ai_frontend_origins
     application.include_router(api_router)
     return application
+
+
+async def _shutdown_services(services: list) -> None:
+    failure = None
+    for service in services:
+        if service is not None:
+            try:
+                await service.shutdown()
+            except BaseException as error:
+                if failure is None:
+                    failure = error
+    if failure is not None:
+        raise failure
 
 
 async def _request_validation_error_handler(

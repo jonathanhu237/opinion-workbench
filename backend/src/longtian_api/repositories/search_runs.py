@@ -419,6 +419,13 @@ class SearchRunRepository:
                     """,
                     (run_id, content_id, term_position, item.observed_at),
                 )
+            if created:
+                connection.execute(
+                    """INSERT INTO content_analysis_claims
+                       (content_id,eligibility_origin,discovery_run_id)
+                       VALUES (?,'new',?)""",
+                    (content_id, run_id),
+                )
 
     def finish(self, run_id: int, status: SearchRunStatus) -> SearchRunRecord:
         if status in {"queued", "running"}:

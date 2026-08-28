@@ -14,7 +14,7 @@ import {
 export const SEARCH_BATCHES_QUERY_KEY = ['search-batches'] as const
 
 const activeStatuses = ['queued', 'running'] as const
-const searchBatchStatusSchema = z.enum([
+export const searchBatchStatusSchema = z.enum([
   ...activeStatuses,
   'paused_for_manual_action',
   'completed',

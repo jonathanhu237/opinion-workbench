@@ -56,6 +56,7 @@ import {
   searchPlatformPresenters,
   searchRunStatusLabel,
 } from '@/routes/search-run-presenters'
+import { CollectionSchedules } from '@/routes/collection-schedules'
 
 const startSchema = z.object({
   ruleId: z.string().min(1, '请选择监控规则。'),
@@ -497,6 +498,8 @@ export function CollectionRuns() {
       </section>
 
       {openBatch && <ActiveBatch batch={openBatch} />}
+
+      <CollectionSchedules />
 
       <section aria-labelledby="collection-history-title">
         <h2

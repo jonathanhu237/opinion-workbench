@@ -31,6 +31,13 @@ import {
 } from './lib/api/platform-connections'
 import { fetchSearchRuns } from './lib/api/search-runs'
 
+vi.mock('./lib/api/collection-schedules', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./lib/api/collection-schedules')>()),
+  fetchCollectionSchedules: vi
+    .fn()
+    .mockResolvedValue({ schedules: [], next_before_id: null }),
+}))
+
 vi.mock('./lib/api/health', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./lib/api/health')>()
 
@@ -229,7 +236,7 @@ describe('Longtian public opinion application', () => {
     expect(mockedFetchMonitoringRules).not.toHaveBeenCalled()
   })
 
-  it('keeps only the five real navigation destinations and marks them exactly', async () => {
+  it('keeps only the six real navigation destinations and marks them exactly', async () => {
     const user = userEvent.setup()
     const { router } = renderRoute()
 
@@ -239,12 +246,13 @@ describe('Longtian public opinion application', () => {
     ).toBeInTheDocument()
     const navigation = screen.getByRole('navigation', { name: '主导航' })
     const links = within(navigation).getAllByRole('link')
-    expect(links).toHaveLength(5)
+    expect(links).toHaveLength(6)
     expect(links.map((link) => link.textContent)).toEqual([
       '工作台',
       '平台账号',
       '监控规则',
       '采集任务',
+      '结果与分析',
       'AI 配置',
     ])
     const workbenchLink = within(navigation).getByRole('link', {
@@ -377,12 +385,13 @@ describe('Longtian public opinion application', () => {
       name: '主导航',
     })
     const links = within(navigation).getAllByRole('link')
-    expect(links).toHaveLength(5)
+    expect(links).toHaveLength(6)
     expect(links.map((link) => link.textContent)).toEqual([
       '工作台',
       '平台账号',
       '监控规则',
       '采集任务',
+      '结果与分析',
       'AI 配置',
     ])
     expect(within(dialog).getAllByRole('separator')).toHaveLength(1)

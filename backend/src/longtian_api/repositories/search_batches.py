@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from typing import Literal, cast
 
 from longtian_api.database import Database
+from longtian_api.repositories.collection_schedules import _platforms, _rule
 from longtian_api.repositories.search_runs import (
     SearchResultRecord,
     SearchRunRecord,
@@ -15,6 +16,7 @@ from longtian_api.repositories.search_runs import (
     _read_run,
     assemble_result,
 )
+from longtian_api.schemas.monitoring_rules import MonitoringRule
 from longtian_api.schemas.search_batches import (
     CompletionBasis,
     PauseReason,
@@ -106,6 +108,10 @@ class SearchBatchRepositoryUnavailableError(SearchBatchRepositoryError):
     pass
 
 
+class ScheduledDispatchChangedError(SearchBatchRepositoryError):
+    pass
+
+
 # Every result/count/filter consumes this grouping. Earliest attempt owns kind/source.
 _RESULTS = """
 WITH observations AS (
@@ -186,30 +192,80 @@ class SearchBatchRepository:
         max_results_per_term: int,
     ) -> SearchBatchRecord:
         with self._connection(write=True) as connection:
-            timestamp = _utc_timestamp()
-            cursor = connection.execute(
-                """INSERT INTO search_batches
-                   (monitoring_rule_id, rule_name, max_results_per_term, status,
-                   created_at)
-                   VALUES (?, ?, ?, 'queued', ?)""",
-                (monitoring_rule_id, rule_name, max_results_per_term, timestamp),
+            return _insert_batch(
+                connection,
+                monitoring_rule_id=monitoring_rule_id,
+                rule_name=rule_name,
+                terms=terms,
+                platforms=platforms,
+                max_results_per_term=max_results_per_term,
             )
-            batch_id = int(cursor.lastrowid)
-            connection.executemany(
-                "INSERT INTO search_batch_terms (batch_id, position, value) VALUES (?, "
-                "?, ?)",
-                ((batch_id, position, value) for position, value in enumerate(terms)),
+
+    def scheduled_batch(self, dispatch_token: str) -> SearchBatchRecord | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT batch_id FROM collection_occurrences WHERE dispatch_token=?",
+                (dispatch_token,),
+            ).fetchone()
+            return (
+                _read_batch(connection, row[0])
+                if row is not None and row[0] is not None
+                else None
             )
-            connection.executemany(
-                """INSERT INTO search_batch_items (batch_id, position, platform,
-                status, created_at)
-                   VALUES (?, ?, ?, 'queued', ?)""",
-                (
-                    (batch_id, position, platform, timestamp)
-                    for position, platform in enumerate(platforms)
-                ),
+
+    def create_scheduled_batch(
+        self,
+        dispatch_token: str,
+        rule: MonitoringRule,
+        *,
+        timestamp: str,
+    ) -> tuple[SearchBatchRecord, bool]:
+        """Existing batch + terms + items + occurrence link commit atomically."""
+        with self._connection(write=True) as connection:
+            occurrence = connection.execute(
+                "SELECT * FROM collection_occurrences WHERE dispatch_token=?",
+                (dispatch_token,),
+            ).fetchone()
+            if occurrence is None:
+                raise ScheduledDispatchChangedError
+            if occurrence["batch_id"] is not None:
+                return _read_batch(connection, occurrence["batch_id"]), False
+            schedule = connection.execute(
+                "SELECT * FROM collection_schedules WHERE id=?",
+                (occurrence["schedule_id"],),
+            ).fetchone()
+            if (
+                occurrence["status"] != "claimed"
+                or not schedule["enabled"]
+                or schedule["revision"] != occurrence["schedule_revision"]
+            ):
+                raise ScheduledDispatchChangedError
+            current = _rule(connection, schedule["monitoring_rule_id"])
+            if (
+                current is None
+                or not current.enabled
+                or current.id != rule.id
+                or current.name != rule.name
+                or current.monitoring_objects != tuple(rule.monitoring_objects)
+                or current.issue_keywords != tuple(rule.issue_keywords)
+            ):
+                raise ScheduledDispatchChangedError
+            platforms = _platforms(connection, schedule["id"])
+            record = _insert_batch(
+                connection,
+                monitoring_rule_id=rule.id,
+                rule_name=rule.name,
+                terms=tuple(rule.terms),
+                platforms=platforms,
+                max_results_per_term=schedule["max_results_per_term"],
             )
-            return _read_batch(connection, batch_id)
+            connection.execute(
+                """UPDATE collection_occurrences
+                SET batch_id=?,status='dispatched',dispatched_at=?
+                WHERE id=? AND status='claimed'""",
+                (record.id, timestamp, occurrence["id"]),
+            )
+            return record, True
 
     def mark_running(self, batch_id: int) -> SearchBatchRecord:
         with self._connection(write=True) as connection:
@@ -225,6 +281,12 @@ class SearchBatchRepository:
             ):
                 _batch_row(connection, batch_id)
                 raise SearchBatchNotActiveError
+            connection.execute(
+                """UPDATE collection_occurrences
+                SET launch_started_at=COALESCE(launch_started_at,?)
+              WHERE batch_id=? AND status='dispatched'""",
+                (_utc_timestamp(), batch_id),
+            )
             return _read_batch(connection, batch_id)
 
     def next_queued_item(self, batch_id: int) -> SearchBatchItemRecord | None:
@@ -619,6 +681,39 @@ class SearchBatchRepository:
                 connection.close()
         except (OSError, sqlite3.Error):
             raise SearchBatchRepositoryUnavailableError from None
+
+
+def _insert_batch(
+    connection: sqlite3.Connection,
+    *,
+    monitoring_rule_id: int,
+    rule_name: str,
+    terms: Sequence[str],
+    platforms: Sequence[SearchPlatform],
+    max_results_per_term: int,
+) -> SearchBatchRecord:
+    """One insertion owner shared by manual and occurrence-backed admission."""
+    timestamp = _utc_timestamp()
+    cursor = connection.execute(
+        """INSERT INTO search_batches
+          (monitoring_rule_id,rule_name,max_results_per_term,status,created_at)
+          VALUES (?,?,?,'queued',?)""",
+        (monitoring_rule_id, rule_name, max_results_per_term, timestamp),
+    )
+    batch_id = int(cursor.lastrowid)
+    connection.executemany(
+        "INSERT INTO search_batch_terms(batch_id,position,value) VALUES (?,?,?)",
+        ((batch_id, position, value) for position, value in enumerate(terms)),
+    )
+    connection.executemany(
+        """INSERT INTO search_batch_items(batch_id,position,platform,status,created_at)
+      VALUES (?,?,?,'queued',?)""",
+        (
+            (batch_id, position, platform, timestamp)
+            for position, platform in enumerate(platforms)
+        ),
+    )
+    return _read_batch(connection, batch_id)
 
 
 def _batch_row(connection: sqlite3.Connection, batch_id: int) -> sqlite3.Row:

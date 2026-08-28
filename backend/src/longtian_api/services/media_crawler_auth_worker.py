@@ -309,6 +309,22 @@ class PersistentAuthWorkerClient:
         self._wait_task: asyncio.Task[None] | None = None
         self._shutdown_generation: int | None = None
         self._closed = False
+        self._browser_session_available = False
+
+    @property
+    def browser_session_available(self) -> bool:
+        """Conservative validated-session evidence, with no process/browser I/O.
+
+        A new backend needs an explicit manual check/search first. Worker readiness
+        alone is not evidence of Chrome connectivity or platform authentication.
+        """
+        return (
+            self._browser_session_available
+            and not self._closed
+            and self._process is not None
+            and self._process.returncode is None
+            and self._generation not in self._failed_generations
+        )
 
     @property
     def command(self) -> tuple[str, ...]:
@@ -932,6 +948,7 @@ class PersistentAuthWorkerClient:
             # request. Once request progress has started, the strict busy
             # contract remains result(failed/browser_disconnected) -> session.
             affected_request_id = self._completed_request_id if active is None else None
+            self._browser_session_available = False
             await self._on_session_disconnected(affected_request_id)
             return
 
@@ -979,6 +996,12 @@ class PersistentAuthWorkerClient:
                 except EnrichmentValidationError:
                     raise AuthWorkerError from None
             active.enrichment_terminal = True
+            if event["outcome"] in {
+                "browser_unavailable",
+                "browser_disconnected",
+                "internal_error",
+            }:
+                self._browser_session_available = False
             self._active = None
             active.result.set_result(
                 EnrichmentWorkerResult(
@@ -1050,6 +1073,14 @@ class PersistentAuthWorkerClient:
                     active.search_item_count > 0
                 ):
                     raise AuthWorkerError
+            self._browser_session_available = outcome in {
+                "completed_with_results",
+                "completed_empty",
+                "login_required",
+                "manual_challenge_required",
+                "platform_blocked_or_rate_limited",
+                "structure_changed",
+            }
             self._active = None
             active.result.set_result(SearchWorkerResult(outcome))
             return
@@ -1064,6 +1095,10 @@ class PersistentAuthWorkerClient:
             ):
                 raise AuthWorkerError
             self._active = None
+            if event["outcome"] in {"opened_existing", "opened_homepage"}:
+                self._browser_session_available = True
+            elif event["outcome"] in {"browser_unavailable", "internal_error"}:
+                self._browser_session_available = False
             active.result.set_result(
                 ManualPageWorkerResult(cast(ManualPageOutcome, event["outcome"]))
             )
@@ -1075,6 +1110,10 @@ class PersistentAuthWorkerClient:
             if active.result.done():
                 raise AuthWorkerError
             self._active = None
+            if event["outcome"] == "opened":
+                self._browser_session_available = True
+            elif event["outcome"] in {"browser_unavailable", "internal_error"}:
+                self._browser_session_available = False
             active.result.set_result(
                 OpenResultWorkerResult(cast(OpenResultOutcome, event["outcome"]))
             )
@@ -1104,6 +1143,7 @@ class PersistentAuthWorkerClient:
         if active.result.done():
             raise AuthWorkerError
         self._active = None
+        self._browser_session_available = outcome in {"connected", "disconnected"}
         self._completed_request_id = active.request_id
         active.result.set_result(AuthWorkerResult(outcome, reason))
 
@@ -1173,6 +1213,7 @@ class PersistentAuthWorkerClient:
         await _settle_tasks(tasks, exclude=current)
 
     def _clear_generation(self) -> None:
+        self._browser_session_available = False
         self._process = None
         self._ready = None
         self._stopped = None

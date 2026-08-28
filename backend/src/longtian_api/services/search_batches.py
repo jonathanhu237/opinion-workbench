@@ -1,13 +1,15 @@
 """Orchestrate durable serial multi-platform search batches."""
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Literal, Protocol, cast
 from uuid import uuid4
 
 from longtian_api.database import Database
+from longtian_api.repositories.collection_schedules import OccurrenceClaim
 from longtian_api.repositories.search_batches import (
+    ScheduledDispatchChangedError,
     SearchBatchAttemptRecord,
     SearchBatchItemNotRecoverableError,
     SearchBatchItemRecord,
@@ -22,6 +24,8 @@ from longtian_api.repositories.search_batches import (
     SearchBatchStateChangedError,
 )
 from longtian_api.repositories.search_runs import SearchRunRecord, SearchRunStatus
+from longtian_api.schemas.collection_schedules import OccurrenceReason
+from longtian_api.schemas.monitoring_rules import MonitoringRule
 from longtian_api.schemas.search_batches import (
     ManualPageOutcome,
     SearchBatchAttempt,
@@ -115,6 +119,18 @@ class SearchBatchRepositoryProtocol(Protocol):
 
     def active_or_paused(self) -> SearchBatchRecord | None: ...
 
+    def scheduled_batch(self, dispatch_token: str) -> SearchBatchRecord | None: ...
+
+    def create_scheduled_batch(
+        self, dispatch_token: str, rule: MonitoringRule, *, timestamp: str
+    ) -> tuple[SearchBatchRecord, bool]: ...
+
+
+class ScheduledAdmissionError(Exception):
+    def __init__(self, reason: OccurrenceReason):
+        super().__init__(reason)
+        self.reason = reason
+
 
 class SearchBatchError(Exception):
     """Expected batch product error translated by the HTTP route."""
@@ -160,6 +176,7 @@ class SearchBatchService:
         self._manual_task: asyncio.Task | None = None
         self._control_task: asyncio.Task | None = None
         self._cancelling = False
+        self.on_collection_finished = None
 
     def initialize(self) -> None:
         self._repository.initialize()
@@ -187,8 +204,40 @@ class SearchBatchService:
         return await settle(self._start_batch(payload))
 
     async def _start_batch(self, payload: SearchBatchCreate) -> SearchBatchDetail:
+        rule = await self._load_rule(payload.monitoring_rule_id)
+        requested = set(payload.platforms)
+        platforms = tuple(
+            platform for platform in SEARCH_PLATFORMS if platform in requested
+        )
+        owner = BrowserOperationOwner("search_batch", uuid4())
+        async with self._lock:
+            if self._shutdown_started or self._active_batch_id is not None:
+                raise _browser_operation_active()
+            if not await self._browser_operations.try_claim(owner):
+                raise _browser_operation_active()
+            try:
+                record = await database_call(
+                    self._repository.create_batch,
+                    monitoring_rule_id=rule.id,
+                    rule_name=rule.name,
+                    terms=tuple(rule.terms),
+                    platforms=platforms,
+                    max_results_per_term=payload.max_results_per_term,
+                )
+            except SearchBatchRepositoryUnavailableError:
+                await self._browser_operations.release(owner)
+                raise _storage_unavailable() from None
+            except BaseException:
+                await self._browser_operations.release(owner)
+                raise
+            self._active_batch_id = record.id
+            self._active_owner = owner
+            self._current_task = self._create_runner(record.id, owner)
+        return _to_detail(record)
+
+    async def _load_rule(self, rule_id: int) -> MonitoringRule:
         try:
-            rule = await self._search_runs.load_rule(payload.monitoring_rule_id)
+            rule = await self._search_runs.load_rule(rule_id)
         except SearchRunError as error:
             if error.code == "monitoring_rule_not_found":
                 raise SearchBatchError(
@@ -209,31 +258,71 @@ class SearchBatchService:
                 code="too_many_search_terms",
                 message="一次最多采集 20 个搜索词，请拆分监控规则后重试。",
             )
-        requested = set(payload.platforms)
-        platforms = tuple(
-            platform for platform in SEARCH_PLATFORMS if platform in requested
+        return rule
+
+    async def start_scheduled_batch(
+        self,
+        claim: OccurrenceClaim,
+        *,
+        timestamp: str,
+        admission_allowed: Callable[[], bool],
+    ) -> SearchBatchDetail:
+        return await settle(
+            self._start_scheduled_batch(
+                claim, timestamp=timestamp, admission_allowed=admission_allowed
+            )
         )
+
+    async def _start_scheduled_batch(
+        self,
+        claim: OccurrenceClaim,
+        *,
+        timestamp: str,
+        admission_allowed: Callable[[], bool],
+    ) -> SearchBatchDetail:
+        existing = await database_call(
+            self._repository.scheduled_batch, claim.dispatch_token
+        )
+        if existing is not None:
+            # Replay never schedules a runner, including a paused/restarted link.
+            return _to_detail(existing)
+        if claim.monitoring_rule_id is None:
+            raise ScheduledAdmissionError("monitoring_rule_not_found")
+        rule = await self._load_rule(claim.monitoring_rule_id)
         owner = BrowserOperationOwner("search_batch", uuid4())
         async with self._lock:
-            if self._shutdown_started or self._active_batch_id is not None:
+            existing = await database_call(
+                self._repository.scheduled_batch, claim.dispatch_token
+            )
+            if existing is not None:
+                return _to_detail(existing)
+            if self._shutdown_started or not admission_allowed():
+                raise ScheduledAdmissionError("dispatch_interrupted")
+            if self._active_batch_id is not None:
                 raise _browser_operation_active()
             if not await self._browser_operations.try_claim(owner):
                 raise _browser_operation_active()
             try:
-                record = await asyncio.to_thread(
-                    self._repository.create_batch,
-                    monitoring_rule_id=rule.id,
-                    rule_name=rule.name,
-                    terms=tuple(rule.terms),
-                    platforms=platforms,
-                    max_results_per_term=payload.max_results_per_term,
+                if not self._search_runs.browser_session_available:
+                    raise ScheduledAdmissionError("browser_unavailable")
+                record, created = await database_call(
+                    self._repository.create_scheduled_batch,
+                    claim.dispatch_token,
+                    rule,
+                    timestamp=timestamp,
                 )
+            except ScheduledDispatchChangedError:
+                await self._browser_operations.release(owner)
+                raise ScheduledAdmissionError("schedule_changed") from None
             except SearchBatchRepositoryUnavailableError:
                 await self._browser_operations.release(owner)
                 raise _storage_unavailable() from None
-            except Exception:
+            except BaseException:
                 await self._browser_operations.release(owner)
                 raise
+            if not created:
+                await self._browser_operations.release(owner)
+                return _to_detail(record)
             self._active_batch_id = record.id
             self._active_owner = owner
             self._current_task = self._create_runner(record.id, owner)
@@ -454,6 +543,7 @@ class SearchBatchService:
         finally:
             if owner is not None:
                 await self._release_owner(owner)
+
             self._cancelling = False
         return _to_detail(await self._get_record(batch_id))
 
@@ -562,6 +652,12 @@ class SearchBatchService:
                 and not self._shutdown_started
             ):
                 await self._release_owner(owner)
+                if self.on_collection_finished is not None:
+                    try:
+                        await self.on_collection_finished("batch", batch_id)
+                    except Exception:
+                        # Collection success is independent of downstream analysis.
+                        pass
 
     async def _release_owner(self, owner: BrowserOperationOwner) -> None:
         await self._browser_operations.release(owner)

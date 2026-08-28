@@ -1,0 +1,732 @@
+"""Atomic uncapped admissions, immutable evidence and once-per-task settlement."""
+
+from typing import get_args
+
+from longtian_api.repositories.ai_summaries import fingerprint
+from longtian_api.repositories.analysis_settings import read_prompt
+from longtian_api.repositories.analysis_shared import (
+    AnalysisRepository,
+    date,
+    source_snapshot,
+    timestamp,
+)
+from longtian_api.repositories.results import NEVER_STARTED_SQL
+from longtian_api.schemas.ai_summaries import SummaryFailure, SummarySource, TokenUsage
+from longtian_api.schemas.analysis_evidence import AnalysisSource, SavedInput
+from longtian_api.schemas.content_analyses import (
+    AnalysisAdmission,
+    AnalysisAttempt,
+    AnalysisAttemptList,
+    AnalysisCounts,
+    AnalysisCreate,
+    AnalysisJob,
+    AnalysisJobList,
+    AnalysisUsage,
+    AttemptStatus,
+    Understanding,
+)
+from longtian_api.services.ai_analysis import MODEL_INPUT_VERSION
+from longtian_api.services.ai_client import MAX_USAGE_TOKENS
+from longtian_api.services.ai_errors import AIError
+from longtian_api.services.analysis_errors import AnalysisError
+from longtian_api.services.summary_errors import failure
+
+ACTIVE_ATTEMPTS = ("queued", "acquiring", "analysing")
+
+
+def observation_hash(source: SummarySource) -> str:
+    # Neutral content understanding is independent of collection rule and origin.
+    # Relative publication labels and new matched terms do not make content new.
+    return fingerprint(
+        source.model_dump(
+            exclude={"source_run_id", "matched_terms", "published_at_text"}
+        )
+    )
+
+
+class ContentAnalysisRepository(AnalysisRepository):
+    def initialize(self) -> None:
+        self.database.initialize()
+        with self.connection(write=True) as connection:
+            for row in connection.execute(
+                """SELECT id FROM content_analysis_jobs WHERE status IN
+                  ('queued','running')"""
+            ).fetchall():
+                self._finish(connection, row[0], "interrupted")
+
+    def _require_job(self, connection, job_id):
+        row = connection.execute(
+            "SELECT * FROM content_analysis_jobs WHERE id=?", (job_id,)
+        ).fetchone()
+        if row is None:
+            raise AnalysisError("content_analysis_not_found")
+        return row
+
+    def _read(self, connection, job_id) -> AnalysisJob:
+        row = self._require_job(connection, job_id)
+        counts = dict.fromkeys(get_args(AttemptStatus), 0)
+        counts["reused"] = 0
+        attempted = accounted = prompt = completion = total_tokens = 0
+        for item in connection.execute(
+            """SELECT status,reused_from_attempt_id,attempted,usage_json FROM
+              content_analysis_attempts WHERE job_id=? ORDER BY position""",
+            (job_id,),
+        ):
+            counts[item["status"]] += 1
+            counts["reused"] += int(item["reused_from_attempt_id"] is not None)
+            attempted += item["attempted"]
+            if item["usage_json"] is not None:
+                usage = TokenUsage.model_validate_json(item["usage_json"])
+                accounted += 1
+                prompt += usage.prompt_tokens
+                completion += usage.completion_tokens
+                total_tokens += usage.total_tokens
+        unknown = (attempted > 0 and accounted == 0) or total_tokens > MAX_USAGE_TOKENS
+        event = connection.execute(
+            "SELECT id FROM analysis_completion_events WHERE job_id=?", (job_id,)
+        ).fetchone()
+        return AnalysisJob(
+            id=job_id,
+            request_id=row["request_id"],
+            trigger=row["trigger"],
+            status=row["status"],
+            configuration_revision=row["configuration_revision"],
+            base_url=row["base_url"],
+            model=row["model"],
+            initial_prompt=read_prompt(connection, row["initial_prompt_version_id"]),
+            report_prompt=read_prompt(connection, row["report_prompt_version_id"]),
+            force_refresh=bool(row["force_refresh"]),
+            counts=AnalysisCounts(
+                total=sum(v for k, v in counts.items() if k != "reused"), **counts
+            ),
+            usage=AnalysisUsage(
+                attempted_requests=attempted,
+                accounted_requests=accounted,
+                complete=not unknown and attempted == accounted,
+                prompt_tokens=None if unknown else prompt,
+                completion_tokens=None if unknown else completion,
+                total_tokens=None if unknown else total_tokens,
+            ),
+            queue_reason=row["queue_reason"],
+            completion_event_id=event[0] if event else None,
+            created_at=date(row["created_at"]),
+            started_at=date(row["started_at"]),
+            finished_at=date(row["finished_at"]),
+        )
+
+    def read(self, job_id) -> AnalysisJob:
+        with self.connection() as connection:
+            return self._read(connection, job_id)
+
+    def list(self, *, limit=20, before_id=None) -> AnalysisJobList:
+        with self.connection() as connection:
+            rows = connection.execute(
+                """SELECT id FROM content_analysis_jobs WHERE (? IS NULL OR id<?)
+                  ORDER BY id DESC LIMIT ?""",
+                (before_id, before_id, limit + 1),
+            ).fetchall()
+            return AnalysisJobList(
+                jobs=[self._read(connection, r[0]) for r in rows[:limit]],
+                next_before_id=rows[limit - 1][0] if len(rows) > limit else None,
+            )
+
+    def _attempt(self, row) -> AnalysisAttempt:
+        return AnalysisAttempt(
+            id=row["id"],
+            job_id=row["job_id"],
+            position=row["position"],
+            source=AnalysisSource.model_validate_json(row["source_json"]),
+            first_seen_at=date(row["first_seen_at"]),
+            status=row["status"],
+            output=Understanding.model_validate_json(row["output_json"])
+            if row["output_json"]
+            else None,
+            input=SavedInput.model_validate_json(row["input_json"])
+            if row["input_json"]
+            else None,
+            input_fingerprint=row["input_fingerprint"],
+            reused_from_attempt_id=row["reused_from_attempt_id"],
+            attempted=bool(row["attempted"]),
+            usage=TokenUsage.model_validate_json(row["usage_json"])
+            if row["usage_json"]
+            else None,
+            error=SummaryFailure.model_validate_json(row["error_json"])
+            if row["error_json"]
+            else None,
+            created_at=date(row["created_at"]),
+            started_at=date(row["started_at"]),
+            finished_at=date(row["finished_at"]),
+        )
+
+    def attempt(self, attempt_id) -> AnalysisAttempt:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM content_analysis_attempts WHERE id=?", (attempt_id,)
+            ).fetchone()
+            if row is None:
+                raise AnalysisError("content_analysis_not_found")
+            return self._attempt(row)
+
+    def items(
+        self, job_id=None, *, result_id=None, limit=50, offset=0
+    ) -> AnalysisAttemptList:
+        with self.connection() as connection:
+            if job_id is not None:
+                self._require_job(connection, job_id)
+                where, value, order = "job_id=?", job_id, "position"
+            else:
+                source_snapshot(connection, result_id)
+                where, value, order = "content_id=?", result_id, "id DESC"
+            total = connection.execute(
+                f"SELECT COUNT(*) FROM content_analysis_attempts WHERE {where}",
+                (value,),
+            ).fetchone()[0]
+            rows = connection.execute(
+                f"""SELECT * FROM content_analysis_attempts WHERE {where} ORDER BY
+                  {order} LIMIT ? OFFSET ?""",
+                (value, limit, offset),
+            )
+            return AnalysisAttemptList(
+                items=[self._attempt(r) for r in rows],
+                total=total,
+                limit=limit,
+                offset=offset,
+            )
+
+    def _replay(self, connection, payload):
+        row = connection.execute(
+            "SELECT * FROM content_analysis_requests WHERE request_id=?",
+            (payload.request_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        if row["intent_hash"] != fingerprint(payload.model_dump()):
+            raise AnalysisError("content_analysis_request_conflict")
+        return AnalysisAdmission(
+            job=self._read(connection, row["job_id"]) if row["job_id"] else None,
+            admitted_count=row["admitted_count"],
+            already_active_count=row["already_active_count"],
+        )
+
+    def replay(self, payload: AnalysisCreate):
+        with self.connection() as connection:
+            return self._replay(connection, payload)
+
+    def create(self, payload: AnalysisCreate) -> AnalysisAdmission:
+        with self.connection(write=True) as connection:
+            replay = self._replay(connection, payload)
+            if replay is not None:
+                return replay
+            settings = connection.execute(
+                "SELECT * FROM analysis_settings WHERE id=1"
+            ).fetchone()
+            if (
+                settings["initial_prompt_version_id"],
+                settings["report_prompt_version_id"],
+            ) != (
+                payload.initial_prompt_version_id,
+                payload.report_prompt_version_id,
+            ):
+                raise AnalysisError("analysis_prompt_changed")
+            provider = self._provider(connection, payload.configuration_revision)
+            connection.execute(
+                "CREATE TEMP TABLE selected_contents(id INTEGER PRIMARY KEY)"
+            )
+            if payload.selection.kind == "all_never_started":
+                connection.execute(
+                    f"""INSERT INTO selected_contents SELECT content_id FROM
+                      content_analysis_claims cl WHERE {NEVER_STARTED_SQL}"""
+                )
+                active = connection.execute(
+                    """SELECT COUNT(*) FROM content_analysis_claims WHERE
+                      active_job_id IS NOT NULL OR active_legacy_summary_id IS NOT
+                      NULL"""
+                ).fetchone()[0]
+            else:
+                active = 0
+                for content_id in payload.selection.result_ids:
+                    claim = connection.execute(
+                        """SELECT cl.*,a.status AS latest_status FROM
+                          content_analysis_claims cl
+                      LEFT JOIN content_analysis_attempts a ON
+                        a.id=cl.latest_attempt_id WHERE cl.content_id=?""",
+                        (content_id,),
+                    ).fetchone()
+                    if claim is None:
+                        raise AnalysisError("result_not_found")
+                    if claim["active_job_id"] or claim["active_legacy_summary_id"]:
+                        active += 1
+                        continue
+                    kind = payload.selection.kind
+                    valid = (
+                        (
+                            kind == "explicit"
+                            and claim["first_attempt_id"] is None
+                            and claim["legacy_state"] is None
+                        )
+                        or (
+                            kind == "retry"
+                            and (
+                                claim["latest_status"]
+                                in (
+                                    "input_incomplete",
+                                    "unsupported",
+                                    "failed",
+                                    "cancelled",
+                                    "interrupted",
+                                )
+                                or (
+                                    claim["latest_status"] is None
+                                    and claim["legacy_state"] == "legacy_attempted"
+                                )
+                            )
+                        )
+                        or (
+                            kind == "reanalysis"
+                            and (
+                                claim["latest_status"] == "completed"
+                                or (
+                                    claim["latest_status"] is None
+                                    and claim["legacy_state"] == "legacy_completed"
+                                )
+                            )
+                        )
+                    )
+                    if not valid:
+                        raise AnalysisError("content_analysis_selection_conflict")
+                    connection.execute(
+                        "INSERT INTO selected_contents VALUES (?)", (content_id,)
+                    )
+            result = self._admit(
+                connection,
+                settings,
+                provider,
+                request_id=payload.request_id,
+                force_refresh=payload.force_refresh,
+                active=active,
+            )
+            connection.execute(
+                "INSERT INTO content_analysis_requests VALUES (?,?,?,?,?)",
+                (
+                    payload.request_id,
+                    fingerprint(payload.model_dump()),
+                    result.job.id if result.job else None,
+                    result.admitted_count,
+                    result.already_active_count,
+                ),
+            )
+            return result
+
+    def _provider(self, connection, revision):
+        row = connection.execute(
+            "SELECT base_url,model,revision FROM ai_settings WHERE id=1"
+        ).fetchone()
+        if row is None:
+            raise AIError("ai_configuration_required")
+        if row["revision"] != revision:
+            raise AIError("ai_configuration_changed")
+        return row
+
+    def _admit(
+        self,
+        connection,
+        settings,
+        provider,
+        *,
+        request_id=None,
+        origin=None,
+        force_refresh=False,
+        active=0,
+    ):
+        count = connection.execute("SELECT COUNT(*) FROM selected_contents").fetchone()[
+            0
+        ]
+        if not count:
+            return AnalysisAdmission(
+                job=None, admitted_count=0, already_active_count=active
+            )
+        now = timestamp()
+        job_id = connection.execute(
+            """INSERT INTO content_analysis_jobs(request_id,trigger,automatic_origin,
+          configuration_revision,base_url,model,initial_prompt_version_id,report_prompt_version_id,
+          force_refresh,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,'queued',?)""",
+            (
+                request_id,
+                "automatic" if origin else "manual",
+                origin,
+                provider["revision"],
+                provider["base_url"],
+                provider["model"],
+                settings["initial_prompt_version_id"],
+                settings["report_prompt_version_id"],
+                int(force_refresh),
+                now,
+            ),
+        ).lastrowid
+        prompt = read_prompt(connection, settings["initial_prompt_version_id"])
+        for position, selected in enumerate(
+            connection.execute("SELECT id FROM selected_contents ORDER BY id")
+        ):
+            content_id = selected[0]
+            source, row = source_snapshot(connection, content_id)
+            observation = observation_hash(source)
+            cache_key = fingerprint(
+                {
+                    "observation": observation,
+                    "prompt": prompt.content_hash,
+                    "schema": prompt.schema_version,
+                    "configuration_revision": provider["revision"],
+                    "base_url": provider["base_url"],
+                    "model": provider["model"],
+                    "input": MODEL_INPUT_VERSION,
+                    "extractor": f"{source.platform}-enrichment-v1",
+                }
+            )
+            attempt_id = connection.execute(
+                """INSERT INTO
+                  content_analysis_attempts(job_id,content_id,source_run_id,
+              position,source_json,first_seen_at,observation_hash,cache_key,status,created_at)
+              VALUES (?,?,?,?,?,?,?,?,'queued',?)""",
+                (
+                    job_id,
+                    content_id,
+                    source.source_run_id,
+                    position,
+                    source.model_dump_json(),
+                    row["first_seen_at"],
+                    observation,
+                    cache_key,
+                    now,
+                ),
+            ).lastrowid
+            updated = connection.execute(
+                """UPDATE content_analysis_claims SET active_job_id=?,
+              first_attempt_id=COALESCE(first_attempt_id,?),latest_attempt_id=?
+                WHERE content_id=?
+              AND active_job_id IS NULL AND active_legacy_summary_id IS NULL""",
+                (job_id, attempt_id, attempt_id, content_id),
+            )
+            if updated.rowcount != 1:
+                raise AnalysisError("content_analysis_selection_conflict")
+        return AnalysisAdmission(
+            job=self._read(connection, job_id),
+            admitted_count=count,
+            already_active_count=active,
+        )
+
+    def collection_finished(
+        self, kind: str, identity: int, *, available: bool
+    ) -> AnalysisAdmission | None:
+        """Called after browser release, never by GET/startup; preserve backlog."""
+        with self.connection(write=True) as connection:
+            if kind == "run":
+                row = connection.execute(
+                    "SELECT status FROM search_runs WHERE id=?", (identity,)
+                ).fetchone()
+                if row is None or row[0] in ("queued", "running", "cancelled"):
+                    return None
+                if connection.execute(
+                    "SELECT 1 FROM search_batch_attempts WHERE search_run_id=?",
+                    (identity,),
+                ).fetchone():
+                    return None
+                origins = [identity]
+            elif kind == "batch":
+                row = connection.execute(
+                    "SELECT status FROM search_batches WHERE id=?", (identity,)
+                ).fetchone()
+                if row is None or row[0] in (
+                    "queued",
+                    "running",
+                    "paused_for_manual_action",
+                    "cancelled",
+                ):
+                    return None
+                origins = [
+                    r[0]
+                    for r in connection.execute(
+                        """SELECT search_run_id FROM search_batch_attempts WHERE
+                          batch_id=? ORDER BY search_run_id""",
+                        (identity,),
+                    )
+                ]
+            else:
+                raise ValueError("invalid collection kind")
+            origin = f"{kind}:{identity}"
+            previous = connection.execute(
+                "SELECT job_id FROM collection_analysis_handoffs WHERE origin=?",
+                (origin,),
+            ).fetchone()
+            if previous is not None:
+                return None
+            if previous is None:
+                connection.execute(
+                    """INSERT INTO collection_analysis_handoffs(origin,created_at)
+                      VALUES (?,?)""",
+                    (origin, timestamp()),
+                )
+            for run_id in origins:
+                connection.execute(
+                    """UPDATE content_analysis_claims SET auto_ready=1 WHERE
+                      eligibility_origin='new' AND discovery_run_id=?""",
+                    (run_id,),
+                )
+            # Recover the crash between a collector's terminal commit and its
+            # callback, only on a later ordinary collection completion. Startup,
+            # old history and failed/interrupted analysis remain excluded.
+            connection.execute("""UPDATE content_analysis_claims SET auto_ready=1
+              WHERE eligibility_origin='new' AND auto_ready=0 AND EXISTS (
+                SELECT 1 FROM search_runs r WHERE r.id=discovery_run_id
+                  AND r.status NOT IN ('queued','running','cancelled')
+                  AND NOT EXISTS (SELECT 1 FROM search_batch_attempts a
+                    JOIN search_batches b ON b.id=a.batch_id
+                    WHERE a.search_run_id=r.id AND b.status IN
+                      ('queued','running','paused_for_manual_action','cancelled')))
+            """)
+            settings = connection.execute(
+                "SELECT * FROM analysis_settings WHERE id=1"
+            ).fetchone()
+            if not available or not settings["enabled"]:
+                return None
+            try:
+                provider = self._provider(
+                    connection, settings["approved_configuration_revision"]
+                )
+            except AIError:
+                # Durable candidates remain visible; never use a new destination.
+                return None
+            connection.execute(
+                "CREATE TEMP TABLE selected_contents(id INTEGER PRIMARY KEY)"
+            )
+            connection.execute(f"""INSERT INTO selected_contents
+              SELECT content_id FROM content_analysis_claims cl
+              WHERE {NEVER_STARTED_SQL} AND eligibility_origin='new' AND
+                auto_ready=1""")
+            result = self._admit(connection, settings, provider, origin=origin)
+            if result.job:
+                connection.execute(
+                    "UPDATE collection_analysis_handoffs SET job_id=? WHERE origin=?",
+                    (result.job.id, origin),
+                )
+            return result
+
+    def next_job(self) -> AnalysisJob | None:
+        with self.connection() as connection:
+            row = connection.execute(
+                """SELECT id FROM content_analysis_jobs WHERE status IN
+                  ('queued','running') ORDER BY id LIMIT 1"""
+            ).fetchone()
+            return self._read(connection, row[0]) if row else None
+
+    def next_attempt(self, job_id) -> AnalysisAttempt | None:
+        with self.connection() as connection:
+            row = connection.execute(
+                """SELECT * FROM content_analysis_attempts WHERE job_id=? AND
+                  status='queued' ORDER BY position LIMIT 1""",
+                (job_id,),
+            ).fetchone()
+            return self._attempt(row) if row else None
+
+    def queue(self, job_id, reason) -> None:
+        with self.connection(write=True) as connection:
+            connection.execute(
+                """UPDATE content_analysis_jobs SET queue_reason=? WHERE id=? AND
+                  status IN ('queued','running')""",
+                (reason, job_id),
+            )
+
+    def start(self, job_id) -> None:
+        with self.connection(write=True) as connection:
+            connection.execute(
+                """UPDATE content_analysis_jobs SET
+                  status='running',started_at=COALESCE(started_at,?),queue_reason=NULL
+                  WHERE id=? AND status IN ('queued','running')""",
+                (timestamp(), job_id),
+            )
+
+    def _active(self, connection, attempt_id):
+        row = connection.execute(
+            """SELECT a.* FROM content_analysis_attempts a JOIN
+              content_analysis_jobs j ON j.id=a.job_id
+          JOIN content_analysis_claims cl ON cl.content_id=a.content_id AND
+            cl.active_job_id=a.job_id AND cl.latest_attempt_id=a.id
+          WHERE a.id=? AND j.status IN ('queued','running') AND a.status IN
+            ('queued','acquiring','analysing')""",
+            (attempt_id,),
+        ).fetchone()
+        if row is None:
+            raise AnalysisError("content_analysis_selection_conflict")
+        return row
+
+    def begin(self, attempt_id):
+        with self.connection(write=True) as connection:
+            row = self._active(connection, attempt_id)
+            if row["status"] != "queued":
+                raise AnalysisError("content_analysis_selection_conflict")
+            connection.execute(
+                """UPDATE content_analysis_attempts SET
+                  status='acquiring',started_at=? WHERE id=?""",
+                (timestamp(), attempt_id),
+            )
+
+    def save_input(self, attempt_id, content: SavedInput, input_fingerprint):
+        with self.connection(write=True) as connection:
+            row = self._active(connection, attempt_id)
+            connection.execute(
+                """UPDATE content_analysis_attempts SET
+                  input_json=?,input_fingerprint=? WHERE id=?""",
+                (content.model_dump_json(), input_fingerprint, attempt_id),
+            )
+            if input_fingerprint is not None:
+                connection.execute(
+                    """UPDATE content_analysis_claims SET known_input_fingerprint=?
+                      WHERE content_id=?""",
+                    (input_fingerprint, row["content_id"]),
+                )
+
+    def mark_attempt(self, attempt_id):
+        with self.connection(write=True) as connection:
+            row = self._active(connection, attempt_id)
+            if row["attempted"] or row["status"] != "acquiring":
+                raise AnalysisError("content_analysis_selection_conflict")
+            connection.execute(
+                """UPDATE content_analysis_attempts SET
+                  status='analysing',attempted=1 WHERE id=?""",
+                (attempt_id,),
+            )
+
+    def finish_attempt(
+        self, attempt_id, status, *, output=None, error=None, usage=None
+    ):
+        if status in ACTIVE_ATTEMPTS:
+            raise ValueError("terminal status required")
+        with self.connection(write=True) as connection:
+            self._active(connection, attempt_id)
+            connection.execute(
+                """UPDATE content_analysis_attempts SET
+                  status=?,output_json=?,error_json=?,usage_json=?,finished_at=?
+                  WHERE id=?""",
+                (
+                    status,
+                    output.model_dump_json() if output else None,
+                    error.model_dump_json() if error else None,
+                    usage.model_dump_json() if usage else None,
+                    timestamp(),
+                    attempt_id,
+                ),
+            )
+
+    def reuse(self, attempt_id) -> bool:
+        with self.connection(write=True) as connection:
+            row = self._active(connection, attempt_id)
+            current_source, _ = source_snapshot(connection, row["content_id"])
+            if observation_hash(current_source) != row["observation_hash"]:
+                return False
+            cached = connection.execute(
+                """SELECT a.* FROM content_analysis_attempts a
+              JOIN content_analysis_claims cl ON cl.content_id=a.content_id
+              WHERE a.cache_key=? AND a.id<? AND a.status='completed' AND
+                a.reused_from_attempt_id IS NULL
+                AND a.input_fingerprint=cl.known_input_fingerprint ORDER BY a.id
+                  DESC LIMIT 1""",
+                (row["cache_key"], attempt_id),
+            ).fetchone()
+            if cached is None:
+                return False
+            validated = self._attempt(cached)
+            if (
+                validated.input is None
+                or validated.input.extractor_version
+                != f"{validated.source.platform}-enrichment-v1"
+            ):
+                return False
+            connection.execute(
+                """UPDATE content_analysis_attempts SET
+                  status='completed',input_json=?,input_fingerprint=?,
+              output_json=?,reused_from_attempt_id=?,started_at=?,finished_at=?
+                WHERE id=?""",
+                (
+                    cached["input_json"],
+                    cached["input_fingerprint"],
+                    cached["output_json"],
+                    cached["id"],
+                    timestamp(),
+                    timestamp(),
+                    attempt_id,
+                ),
+            )
+            return True
+
+    def _finish(self, connection, job_id, status):
+        row = self._require_job(connection, job_id)
+        if row["status"] not in ("queued", "running"):
+            return
+        now = timestamp()
+        if status == "completed":
+            if connection.execute(
+                """SELECT 1 FROM content_analysis_attempts WHERE job_id=? AND status
+                  IN ('queued','acquiring','analysing')""",
+                (job_id,),
+            ).fetchone():
+                raise AnalysisError("content_analysis_selection_conflict")
+        else:
+            terminal = "cancelled" if status == "cancelled" else "interrupted"
+            connection.execute(
+                """UPDATE content_analysis_attempts SET
+                  status=?,error_json=?,finished_at=?
+              WHERE job_id=? AND status IN ('queued','acquiring','analysing')""",
+                (
+                    terminal,
+                    failure("execution", terminal).model_dump_json(),
+                    now,
+                    job_id,
+                ),
+            )
+        connection.execute(
+            """UPDATE content_analysis_jobs SET
+              status=?,finished_at=?,queue_reason=NULL WHERE id=?""",
+            (status, now, job_id),
+        )
+        connection.execute(
+            """UPDATE content_analysis_claims SET active_job_id=NULL WHERE
+              active_job_id=?""",
+            (job_id,),
+        )
+        if status == "completed":
+            connection.execute(
+                """INSERT INTO analysis_completion_events(job_id,settled_at) VALUES
+                  (?,?)""",
+                (job_id, now),
+            )
+
+    def finish(self, job_id, status):
+        with self.connection(write=True) as connection:
+            self._finish(connection, job_id, status)
+
+    def completion_events(self, *, after_id=0, limit=100):
+        with self.connection() as connection:
+            events = []
+            for row in connection.execute(
+                """SELECT * FROM analysis_completion_events WHERE id>? ORDER BY id
+                  LIMIT ?""",
+                (after_id, limit),
+            ):
+                job = self._read(connection, row["job_id"])
+                successful = [
+                    r[0]
+                    for r in connection.execute(
+                        """SELECT id FROM content_analysis_attempts WHERE job_id=?
+                          AND status='completed' ORDER BY position""",
+                        (job.id,),
+                    )
+                ]
+                events.append(
+                    {
+                        "id": row["id"],
+                        "job": job,
+                        "settled_at": date(row["settled_at"]),
+                        "state": row["state"],
+                        "successful_attempt_ids": successful,
+                    }
+                )
+            return events

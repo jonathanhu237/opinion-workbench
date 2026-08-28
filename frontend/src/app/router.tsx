@@ -44,6 +44,18 @@ export const appRoutes: RouteObject[] = [
         },
       },
       {
+        path: 'results',
+        hydrateFallbackElement: (
+          <p role="status" className="text-sm text-muted-foreground">
+            正在加载结果与分析…
+          </p>
+        ),
+        lazy: async () => {
+          const { Results } = await import('@/routes/results')
+          return { Component: Results }
+        },
+      },
+      {
         path: 'collection-runs',
         hydrateFallbackElement: (
           <p role="status" className="text-sm text-muted-foreground">

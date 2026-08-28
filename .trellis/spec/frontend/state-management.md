@@ -123,7 +123,29 @@ and cross-layer tests live in [Batch Search](../backend/batch-search-guidelines.
 
 ---
 
-## Manual AI Summary State
+## Independent Results and Initial Analysis State
+
+The `/results` route follows [Independent Initial Analysis](../backend/initial-analysis-guidelines.md).
+Its global bulk action is independent of URL filters/pagination. TanStack Query
+owns saved evidence and job progress, URL state owns selected IDs, and RHF owns
+the two separately saved prompt drafts. Confirmation retains one immutable
+UUID/provider/prompt intent; neither polling nor route entry starts analysis.
+Preserve drafts on compare-and-swap conflict and require explicit adoption of a
+new version before a separate save. Do not apply the legacy source cap below.
+
+Initial/report prompt saves and authorization saves return a whole settings
+projection but may finish out of order. Merge each prompt by its own version ID
+and authorization by its revision; never replace a newer sibling with an older
+response. Cancel in-flight settings GETs around successful writes so a read that
+started before or during the save cannot later roll the cache back. Test both
+save-response orders and late GET responses, not only one successful form.
+
+The page-level Refresh action covers selected-result details, saved attempts,
+origins and legacy history as well as list/settings/job queries. A failed detail
+read must have a visible recovery action without losing selection or requiring
+full page navigation. Test all failed selected-source queries through that action.
+
+## Legacy Manual AI Summary State
 
 - Keep versions and item analyses in TanStack Query; reads/polling never create or resume a summary.
   The server freezes the full run, regardless of the collection page's `kind` or `offset`.

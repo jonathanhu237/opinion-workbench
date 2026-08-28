@@ -361,6 +361,16 @@ export type AISummaryRequest = {
   configuration_revision: number
 }
 
+// Shared evidence contracts are also consumed by independent initial analysis.
+// Keep the legacy bounds/validation unchanged when reusing these primitives.
+export {
+  boundedText as boundedAnalysisText,
+  failureSchema as summaryFailureSchema,
+  inputIssueSchema,
+  sourceSchema as summarySourceSchema,
+  tokenUsageSchema,
+}
+
 export const SUMMARY_ERROR_CONTRACTS = {
   ...AI_ERROR_CONTRACTS,
   search_run_not_found: { status: 404, message: '采集任务不存在。' },

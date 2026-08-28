@@ -286,6 +286,7 @@ export function CollectionRunDetail() {
       <CollectionAISummary
         key={run.id}
         run={run}
+        historyOnly
         openPending={openMutation.isPending}
         activeOpenResultId={activeOpenResultId}
         openFeedback={openFeedback}

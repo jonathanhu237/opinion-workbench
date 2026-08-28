@@ -238,18 +238,22 @@ def _insert_terms(
     )
 
 
-def _read_record(connection: sqlite3.Connection, rule_id: int) -> MonitoringRuleRecord:
+def _read_record(
+    connection: sqlite3.Connection, rule_id: int, *, require_objects: bool = True
+) -> MonitoringRuleRecord:
     rows = connection.execute(
         _RULE_SELECT + " WHERE rules.id = ?" + _RULE_ORDER,
         (rule_id,),
     ).fetchall()
-    records = _assemble_records(rows)
+    records = _assemble_records(rows, require_objects=require_objects)
     if not records:
         raise MonitoringRuleNotFoundError
     return records[0]
 
 
-def _assemble_records(rows: Sequence[sqlite3.Row]) -> tuple[MonitoringRuleRecord, ...]:
+def _assemble_records(
+    rows: Sequence[sqlite3.Row], *, require_objects: bool = True
+) -> tuple[MonitoringRuleRecord, ...]:
     collected: dict[int, tuple[str, bool, list[str], list[str]]] = {}
     for row in rows:
         rule_id = int(row["id"])
@@ -262,7 +266,7 @@ def _assemble_records(rows: Sequence[sqlite3.Row]) -> tuple[MonitoringRuleRecord
 
     records: list[MonitoringRuleRecord] = []
     for rule_id, (name, enabled, objects, issues) in collected.items():
-        if not objects:
+        if require_objects and not objects:
             raise sqlite3.DatabaseError("Monitoring rule has no terms")
         records.append(
             MonitoringRuleRecord(

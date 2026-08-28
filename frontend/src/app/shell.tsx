@@ -1,6 +1,7 @@
 import {
   CircleUserRound,
   ClipboardList,
+  FileSearch,
   ListChecks,
   Settings2,
   SlidersHorizontal,
@@ -46,6 +47,7 @@ const pageTitles: Record<string, string> = {
   '/platform-accounts': '平台账号',
   '/monitoring-rules': '监控规则',
   '/collection-runs': '采集任务',
+  '/results': '结果与分析',
   '/ai-settings': 'AI 配置',
 }
 
@@ -115,6 +117,12 @@ function PrimaryNavigation() {
       isActive:
         location.pathname.startsWith('/collection-runs') ||
         location.pathname.startsWith('/collection-batches'),
+    },
+    {
+      label: '结果与分析',
+      to: '/results',
+      icon: FileSearch,
+      isActive: location.pathname === '/results',
     },
     {
       label: 'AI 配置',

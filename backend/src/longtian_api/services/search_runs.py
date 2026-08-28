@@ -150,6 +150,7 @@ class SearchRunService:
         self._active_open_task: asyncio.Task[object] | None = None
         self._active_open_request_id: UUID | None = None
         self._shutdown_started = False
+        self.on_collection_finished = None
 
     @property
     def database(self) -> Database | None:
@@ -158,6 +159,11 @@ class SearchRunService:
 
     def initialize(self) -> None:
         self._repository.initialize()
+
+    @property
+    def browser_session_available(self) -> bool:
+        """No-I/O conservative session evidence; never launch a worker to probe."""
+        return getattr(self._worker, "browser_session_available", False) is True
 
     async def start_run(self, payload: SearchRunCreate) -> SearchRunDetail:
         rule = await self.load_rule(payload.monitoring_rule_id)
@@ -420,6 +426,16 @@ class SearchRunService:
                     self._active_run_id = None
                     self._active_request_id = None
                     self._current_task = None
+            if (
+                not self._shutdown_started
+                and not cancelled
+                and self.on_collection_finished is not None
+            ):
+                try:
+                    await self.on_collection_finished("run", record.id)
+                except Exception:
+                    # Committed discovery claims survive a downstream admission failure.
+                    pass
         if cancelled:
             raise asyncio.CancelledError
 

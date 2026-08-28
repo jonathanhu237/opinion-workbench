@@ -167,10 +167,10 @@ describe('manual collection summaries', () => {
       'href',
       result.content_url,
     )
-    expect(screen.getByRole('button', { name: '生成汇总' })).toHaveAttribute(
-      'data-slot',
-      'button',
-    )
+    expect(screen.queryByRole('button', { name: '生成汇总' })).toBeNull()
+    expect(
+      screen.getByRole('link', { name: '前往结果与分析' }),
+    ).toHaveAttribute('href', '/results')
     expect(mockedStart).not.toHaveBeenCalled()
     first.unmount()
     renderRun()
@@ -179,139 +179,81 @@ describe('manual collection summaries', () => {
     expect(mockedCancel).not.toHaveBeenCalled()
   })
 
-  it('confirms the full run and frozen configuration, blocks double clicks and preserves result filters', async () => {
+  it('preserves a full legacy run and result filters without offering new combined generation', async () => {
     mockedRun.mockResolvedValue({
       ...run,
       total_count: 67,
       new_count: 7,
       repeated_count: 60,
     })
-    let finish: ((value: AISummaryRun) => void) | undefined
-    mockedStart.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          finish = resolve
-        }),
-    )
-    const user = userEvent.setup()
-    const { client, router } = renderRun(
-      '/collection-runs/70?kind=new&offset=50',
-    )
-    await user.click(await screen.findByRole('button', { name: '生成汇总' }))
-    const dialog = screen.getByRole('dialog')
-    expect(dialog).toHaveAccessibleDescription(/全部 67 条/)
-    expect(within(dialog).getByText(savedSettings.base_url)).toBeVisible()
-    await act(async () => {
-      client.setQueryData(AI_SETTINGS_QUERY_KEY, {
-        ...savedSettings,
-        model: 'changed-model',
-        base_url: 'https://changed.example/v1',
-        revision: 4,
-      })
-    })
-    expect(within(dialog).queryByText('https://changed.example/v1')).toBeNull()
-    await user.click(within(dialog).getByRole('checkbox'))
-    await user.dblClick(
-      within(dialog).getByRole('button', { name: '开始生成' }),
-    )
-    expect(mockedStart).toHaveBeenCalledOnce()
-    const request = mockedStart.mock.calls[0][1]
-    expect(request).toEqual({
-      request_id: expect.stringMatching(
-        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
-      ),
-      force_refresh: true,
-      configuration_revision: 3,
-    })
-    expect(
-      within(dialog).getByRole('button', { name: '正在提交…' }),
-    ).toBeDisabled()
-    const queued = {
-      ...pendingSummaryFixture(),
-      request_id: request.request_id,
-      force_refresh: true,
-    }
-    loadVersion(queued, [pendingItemFixture()])
-    await act(async () => finish?.(queued))
+    loadVersion(summaryFixture(), [itemFixture()])
+    const { router } = renderRun('/collection-runs/70?kind=new&offset=50')
     await waitFor(() =>
       expect(router.state.location.search).toContain('summary=4'),
     )
     expect(router.state.location.search).toContain('kind=new')
     expect(router.state.location.search).toContain('offset=50')
     expect(screen.queryByRole('dialog')).toBeNull()
+    expect(screen.queryByRole('button', { name: '生成汇总' })).toBeNull()
+    expect(mockedStart).not.toHaveBeenCalled()
+    expect(mockedSettings).not.toHaveBeenCalled()
   })
 
-  it('retries an ambiguous submission with the same UUID and no automatic retry', async () => {
-    mockedStart.mockRejectedValue(new AISummaryApiError('service_unavailable'))
-    const user = userEvent.setup()
-    renderRun()
-    await user.click(await screen.findByRole('button', { name: '生成汇总' }))
-    await user.click(screen.getByRole('button', { name: '开始生成' }))
-    expect(await screen.findByRole('alert')).toHaveTextContent('同一请求')
-    expect(mockedStart).toHaveBeenCalledOnce()
-    expect(screen.getByRole('checkbox')).toHaveAttribute(
-      'aria-disabled',
-      'true',
-    )
-    await user.click(screen.getByRole('button', { name: '开始生成' }))
-    await waitFor(() => expect(mockedStart).toHaveBeenCalledTimes(2))
-    expect(mockedStart.mock.calls[0]).toEqual(mockedStart.mock.calls[1])
-  })
-
-  it('requires a new explicit confirmation when the saved configuration changes', async () => {
-    mockedStart.mockRejectedValue(
-      new AISummaryApiError('ai_configuration_changed', 409),
+  it('retries a failed legacy history read only, never an ambiguous generation', async () => {
+    mockedHistory.mockRejectedValueOnce(
+      new AISummaryApiError('service_unavailable'),
     )
     const user = userEvent.setup()
     renderRun()
-    await user.click(await screen.findByRole('button', { name: '生成汇总' }))
-    await user.click(screen.getByRole('button', { name: '开始生成' }))
-    expect(await screen.findByRole('alert')).toHaveTextContent(
-      '请关闭弹窗后重新确认',
+    await user.click(
+      await screen.findByRole('button', { name: '重新加载汇总' }),
     )
-    expect(screen.getByRole('button', { name: '开始生成' })).toBeDisabled()
-    mockedSettings.mockResolvedValue({
-      ...savedSettings,
-      revision: 4,
-      model: 'new-model',
+    expect(await screen.findByText('还没有生成汇总。')).toBeVisible()
+    expect(mockedHistory).toHaveBeenCalledTimes(2)
+    expect(mockedStart).not.toHaveBeenCalled()
+  })
+
+  it('does not rewrite saved legacy text after the shared configuration changes', async () => {
+    loadVersion(
+      summaryFixture({
+        document: {
+          overview: '冻结的旧版正文',
+          items: [{ text: '保存的历史段落', source_ids: [11] }],
+        },
+      }),
+      [itemFixture()],
+    )
+    const { client } = renderRun()
+    expect(await screen.findByText('冻结的旧版正文')).toBeVisible()
+    await act(async () => {
+      client.setQueryData(AI_SETTINGS_QUERY_KEY, {
+        ...savedSettings,
+        revision: 4,
+        model: 'new-model',
+      })
     })
-    await user.click(screen.getByRole('button', { name: '取消' }))
-    await waitFor(() => expect(mockedSettings).toHaveBeenCalledTimes(2))
-    await user.click(screen.getByRole('button', { name: '生成汇总' }))
-    expect(await screen.findByText('new-model')).toBeVisible()
-    await user.click(screen.getByRole('button', { name: '开始生成' }))
-    await waitFor(() => expect(mockedStart).toHaveBeenCalledTimes(2))
-    expect(mockedStart.mock.calls[1][1].configuration_revision).toBe(4)
-    expect(mockedStart.mock.calls[0][1].request_id).not.toBe(
-      mockedStart.mock.calls[1][1].request_id,
-    )
+    expect(screen.queryByText(/new-model/)).toBeNull()
+    expect(screen.getByText('冻结的旧版正文')).toBeVisible()
+    expect(mockedStart).not.toHaveBeenCalled()
+    expect(mockedSettings).not.toHaveBeenCalled()
   })
 
   it.each([
-    [
-      'active',
-      { ...run, status: 'running' as const, finished_at: null },
-      '采集结束后可生成汇总。',
-    ],
-    ['empty', { ...run, new_count: 0, total_count: 0 }, '本次采集暂无内容。'],
-    [
-      'too many',
-      { ...run, new_count: 101, total_count: 101 },
-      '一次最多汇总 100 条内容',
-    ],
-  ])(
-    'does not offer paid work for %s sources',
-    async (_label, source, message) => {
-      mockedRun.mockResolvedValue(source)
-      renderRun()
-      await screen.findByText(message, { exact: false })
-      expect(screen.getByRole('button', { name: '生成汇总' })).toBeDisabled()
-      expect(mockedStart).not.toHaveBeenCalled()
-      expect(screen.getByText('原始搜索结果')).toBeVisible()
-    },
-  )
+    ['active', { ...run, status: 'running' as const, finished_at: null }],
+    ['empty', { ...run, new_count: 0, total_count: 0 }],
+    ['too many', { ...run, new_count: 101, total_count: 101 }],
+  ])('does not offer paid work for %s sources', async (_label, source) => {
+    mockedRun.mockResolvedValue(source)
+    renderRun()
+    expect(
+      await screen.findByRole('link', { name: '前往结果与分析' }),
+    ).toHaveAttribute('href', '/results')
+    expect(screen.queryByRole('button', { name: '生成汇总' })).toBeNull()
+    expect(mockedStart).not.toHaveBeenCalled()
+    expect(screen.getByText('原始搜索结果')).toBeVisible()
+  })
 
-  it('points missing configuration to settings while preserving source access', async () => {
+  it('keeps legacy history and source access independent of current model configuration', async () => {
     mockedSettings.mockResolvedValue({
       base_url: null,
       model: null,
@@ -320,9 +262,10 @@ describe('manual collection summaries', () => {
     })
     renderRun()
     expect(
-      await screen.findByRole('link', { name: '前往 AI 配置' }),
-    ).toHaveAttribute('href', '/ai-settings')
-    expect(screen.getByRole('button', { name: '生成汇总' })).toBeDisabled()
+      await screen.findByRole('link', { name: '前往结果与分析' }),
+    ).toHaveAttribute('href', '/results')
+    expect(screen.queryByRole('button', { name: '生成汇总' })).toBeNull()
+    expect(mockedSettings).not.toHaveBeenCalled()
     expect(screen.getByRole('link', { name: '打开原文' })).toHaveAttribute(
       'href',
       result.content_url,

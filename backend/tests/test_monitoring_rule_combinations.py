@@ -110,6 +110,17 @@ def test_v8_upgrade_preserves_every_old_row_and_deleted_seed(tmp_path: Path) -> 
             == []
         )
         for table in old_tables:
+            if table == "sqlite_sequence":
+                # Additive migrations may seed new AUTOINCREMENT aggregates;
+                # every historical aggregate's counter must remain unchanged.
+                for previous in before[table]:
+                    assert (
+                        connection.execute(
+                            "SELECT * FROM sqlite_sequence WHERE name=?", (previous[0],)
+                        ).fetchone()
+                        == previous
+                    )
+                continue
             assert (
                 connection.execute(
                     f'SELECT {old_columns[table]} FROM "{table}" ORDER BY rowid'

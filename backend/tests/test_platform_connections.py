@@ -659,11 +659,16 @@ def test_malformed_protocol_recycles_worker_without_leaking_raw_output(
         second = FakeProcess(connected_plan)
         service, launcher, terminator = build_service(first, second)
         await service.start_attempt("wb")
+        attempt_task = service._current_task
         failed = await wait_for_terminal(service)
         assert failed["status"] == "failed"
         assert "credential-sentinel" not in str(failed)
         assert terminator.calls == [(first, 0.01)]
 
+        # Terminal publication precedes browser-owner release. This test checks
+        # reuse after the owned finalizer, not a request racing that finalizer.
+        assert attempt_task is not None
+        await attempt_task
         await service.start_attempt("ks")
         assert (await wait_for_terminal(service, "ks"))["status"] == "connected"
         assert len(launcher.calls) == 2

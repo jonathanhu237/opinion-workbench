@@ -6,8 +6,8 @@ from uuid import uuid4
 
 import pytest
 from pydantic import SecretStr
-from schema_fixtures import create_legacy_schema
-from summary_fixtures import BASE, KEY, MODEL, environment, finished, seed_run
+from schema_fixtures import create_legacy_schema, seed_historical_content
+from summary_fixtures import BASE, KEY, MODEL, environment, finished
 
 from longtian_api.database import CURRENT_DATABASE_VERSION, Database
 from longtian_api.repositories.ai_summaries import SummaryVersions
@@ -31,7 +31,7 @@ def request():
 def test_v11_appends_only_summary_tables_preserving_actual_v10_rows(tmp_path):
     database = Database(tmp_path / "old.sqlite3")
     create_legacy_schema(database, 10)
-    source = seed_run(database, 2)
+    source = seed_historical_content(database, 2)
     with database.connect() as connection:
         tables = [
             row[0]
@@ -53,7 +53,7 @@ def test_v11_appends_only_summary_tables_preserving_actual_v10_rows(tmp_path):
         assert (
             connection.execute("PRAGMA user_version").fetchone()[0]
             == CURRENT_DATABASE_VERSION
-            == 11
+            == 14
         )
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         for table, rows in before.items():

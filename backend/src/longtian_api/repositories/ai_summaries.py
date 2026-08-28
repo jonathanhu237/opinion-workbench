@@ -9,16 +9,14 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Literal
 
-from pydantic import Field, ValidationError
+from pydantic import ValidationError
 
 from longtian_api.database import Database
 from longtian_api.repositories.search_runs import SearchResultSourceRecord
 from longtian_api.schemas.ai_summaries import (
     Decision,
     ItemStatus,
-    StrictModel,
     SummaryCounts,
     SummaryCreate,
     SummaryDocument,
@@ -32,64 +30,11 @@ from longtian_api.schemas.ai_summaries import (
     SummaryUsage,
     TokenUsage,
 )
+from longtian_api.schemas.analysis_evidence import SavedInput as SavedInput
 from longtian_api.services.ai_client import MAX_USAGE_TOKENS, AIConfiguration
-from longtian_api.services.enrichment_models import (
-    EnrichedContent,
-    EnrichmentText,
-    IssueCode,
-    MediaMime,
-    Modality,
-)
+from longtian_api.services.ai_errors import AIError
 from longtian_api.services.monitoring_rules import MAX_TERMS_PER_RULE
 from longtian_api.services.summary_errors import SummaryError, failure
-
-
-class SavedAsset(StrictModel):
-    position: int = Field(ge=0, le=24)
-    kind: Literal["image", "video"]
-    status: Literal["ready", "unavailable", "unsupported", "failed"]
-    sha256: str | None
-    mime_type: MediaMime | None
-    byte_size: int | None
-    width: int | None
-    height: int | None
-    duration_ms: int | None
-    audio_track: Literal["present", "absent", "unknown", "not_applicable"]
-    coverage: Literal["complete", "partial", "unknown"]
-    issue_code: IssueCode | None
-
-
-class SavedInput(StrictModel):
-    """Content/coverage only; no opaque handles, paths, signed URLs or media bytes."""
-
-    schema_version: Literal[1]
-    extractor_version: str
-    acquired_at: int
-    status: Literal["ready", "partial", "unavailable", "unsupported"]
-    text: EnrichmentText
-    detected_modalities: list[Modality]
-    media_inventory_complete: bool
-    assets: list[SavedAsset]
-    issues: list[IssueCode]
-
-    @classmethod
-    def from_content(cls, content: EnrichedContent) -> SavedInput:
-        return cls(
-            schema_version=content.schema_version,
-            extractor_version=content.extractor_version,
-            acquired_at=content.acquired_at,
-            status=content.status,
-            text=content.text,
-            detected_modalities=content.detected_modalities,
-            media_inventory_complete=content.media_inventory_complete,
-            assets=[
-                SavedAsset.model_validate(
-                    asset.model_dump(exclude={"asset_id", "blob_ref", "role"})
-                )
-                for asset in content.assets
-            ],
-            issues=list(dict.fromkeys(issue.code for issue in content.issues)),
-        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -211,6 +156,13 @@ class SummaryRepository:
             ).fetchone()
             if source_run is None:
                 raise SummaryError("search_run_not_found")
+            if connection.execute(
+                """SELECT 1 FROM search_run_contents l JOIN content_analysis_claims c
+                   ON c.content_id=l.search_content_id
+                   WHERE l.run_id=? AND c.active_job_id IS NOT NULL""",
+                (source_run_id,),
+            ).fetchone():
+                raise AIError("ai_operation_active")
             active_parent = connection.execute(
                 """
                 SELECT 1 FROM search_batch_attempts a
@@ -426,6 +378,13 @@ class SummaryRepository:
             # A newer acquisition can prove changed media even if its model call
             # later failed. Never resurrect an older judgment in that case.
             if latest is not None and latest["input_hash"] != cached.input_hash:
+                return None
+            known = connection.execute(
+                "SELECT known_input_fingerprint FROM content_analysis_claims "
+                "WHERE content_id=?",
+                (record.item.source.result_id,),
+            ).fetchone()
+            if known and known[0] is not None and known[0] != cached.input_hash:
                 return None
             return cached
 

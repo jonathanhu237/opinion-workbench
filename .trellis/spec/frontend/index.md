@@ -26,6 +26,9 @@ The frontend is a single static Vite SPA under `frontend/`. React Router owns ro
 | [State Management](./state-management.md) | Server, URL, form, and local-state ownership | Established |
 | [Quality Guidelines](./quality-guidelines.md) | Package, format, lint, type, test, build, and smoke gates | Established |
 | [Type Safety](./type-safety.md) | Strict TypeScript and runtime-validation boundaries | Established |
+| [Results and Initial Analysis](../backend/initial-analysis-guidelines.md) | Cross-layer result library, prompt drafts, frozen bulk intent, history and progress | Active |
+| [Collection Schedules](../backend/collection-schedule-guidelines.md) | Rule-referenced interval forms, revision-safe saves, occurrence history and manual-batch boundaries | Active |
+| [Automatic Text Reports](../backend/topic-report-guidelines.md) | Automatic second-stage status, strict report decoding, frozen citations, version-safe retry and interval overrides | Active |
 
 ## Quality Check
 

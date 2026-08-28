@@ -2,6 +2,11 @@
 
 > Executable cross-layer contract for durable, serial multi-platform collection batches.
 
+The same batch executor also owns fixed-interval collection admitted through
+[Collection Schedules](./collection-schedule-guidelines.md). Its occurrence token
+and batch link must commit before launch; schedule disable does not cancel an
+already admitted batch or bypass the manual-recovery contract below.
+
 ## Scenario: Durable serial multi-platform collection batch
 
 ### 1. Scope / Trigger

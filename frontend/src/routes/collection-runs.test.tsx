@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { ReactNode } from 'react'
 import { createMemoryRouter } from 'react-router'
@@ -29,6 +29,14 @@ import {
 import { CollectionBatchDetail } from '@/routes/collection-batch-detail'
 import { CollectionRunDetail } from '@/routes/collection-run-detail'
 import { CollectionRuns } from '@/routes/collection-runs'
+import { startAISummary } from '@/lib/api/ai-summaries'
+
+vi.mock('@/lib/api/collection-schedules', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api/collection-schedules')>()),
+  fetchCollectionSchedules: vi
+    .fn()
+    .mockResolvedValue({ schedules: [], next_before_id: null }),
+}))
 
 vi.mock('@/lib/api/monitoring-rules', async (importOriginal) => {
   const actual =
@@ -51,6 +59,7 @@ vi.mock('@/lib/api/ai-summaries', async (importOriginal) => ({
   fetchAISummaries: vi
     .fn()
     .mockResolvedValue({ summaries: [], next_before_id: null }),
+  startAISummary: vi.fn(),
 }))
 
 vi.mock('@/lib/api/search-batches', async (importOriginal) => {
@@ -381,7 +390,7 @@ describe('multi-platform collection routes', () => {
     renderRoute()
 
     expect(await screen.findByText('3 / 3')).toBeVisible()
-    expect(screen.getByRole('link', { name: /查看/u })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: '查看' })).toHaveAttribute(
       'href',
       '/collection-batches/9',
     )
@@ -418,7 +427,7 @@ describe('multi-platform collection routes', () => {
     renderRoute()
 
     expect(await screen.findByText('之前的单平台任务')).toBeVisible()
-    expect(screen.getByRole('link', { name: /查看/u })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: '查看' })).toHaveAttribute(
       'href',
       '/collection-runs/70',
     )
@@ -431,6 +440,26 @@ describe('multi-platform collection routes', () => {
     expect(screen.getByText(rule.name)).toBeVisible()
     expect(screen.getByRole('heading', { name: '采集结果' })).toBeVisible()
     expect(mockedFetchRun).toHaveBeenCalledWith(70, expect.any(AbortSignal))
+  })
+
+  it('routes new analysis intent to shared results and never generates legacy summaries on entry or refresh', async () => {
+    const view = renderRoute('/collection-runs/70')
+    expect(
+      await screen.findByRole('heading', { name: 'AI 汇总（旧版分析）' }),
+    ).toBeVisible()
+    expect(
+      screen.getByRole('link', { name: '前往结果与分析' }),
+    ).toHaveAttribute('href', '/results')
+    expect(screen.queryByRole('button', { name: '生成汇总' })).toBeNull()
+    expect(startAISummary).not.toHaveBeenCalled()
+    await act(async () => {
+      await view.queryClient.invalidateQueries()
+    })
+    expect(startAISummary).not.toHaveBeenCalled()
+    view.unmount()
+    renderRoute('/collection-runs/70')
+    expect(await screen.findByText(/这里只查看旧版报告及引用/)).toBeVisible()
+    expect(startAISummary).not.toHaveBeenCalled()
   })
 
   it('keeps older standalone history reachable through its cursor', async () => {

@@ -4,7 +4,7 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
-CURRENT_DATABASE_VERSION = 11
+CURRENT_DATABASE_VERSION = 14
 DEFAULT_RULE_NAME = "龙田街道及四个社区"
 DEFAULT_RULE_TERMS = (
     "龙田街道",
@@ -85,6 +85,15 @@ class Database:
                 version = 10
             if version < 11:
                 _migrate_to_version_11(connection)
+                version = 11
+            if version < 12:
+                _migrate_to_version_12(connection)
+                version = 12
+            if version < 13:
+                _migrate_to_version_13(connection)
+                version = 13
+            if version < 14:
+                _migrate_to_version_14(connection)
         finally:
             connection.close()
 
@@ -94,6 +103,66 @@ def _read_user_version(connection: sqlite3.Connection) -> int:
     if row is None:
         raise sqlite3.DatabaseError("SQLite did not return user_version")
     return int(row[0])
+
+
+def _migrate_to_version_14(connection: sqlite3.Connection) -> None:
+    from longtian_api.migrations.topic_reports import migrate
+
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        version = _read_user_version(connection)
+        if version >= 14:
+            connection.execute("COMMIT")
+            return
+        if version != 13:
+            raise DatabaseVersionError("Unsupported database migration source version.")
+        migrate(connection)
+        connection.execute("PRAGMA user_version = 14")
+        connection.execute("COMMIT")
+    except BaseException:
+        if connection.in_transaction:
+            connection.execute("ROLLBACK")
+        raise
+
+
+def _migrate_to_version_13(connection: sqlite3.Connection) -> None:
+    from longtian_api.migrations.collection_schedules import migrate
+
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        version = _read_user_version(connection)
+        if version >= 13:
+            connection.execute("COMMIT")
+            return
+        if version != 12:
+            raise DatabaseVersionError("Unsupported database migration source version.")
+        migrate(connection)
+        connection.execute("PRAGMA user_version = 13")
+        connection.execute("COMMIT")
+    except BaseException:
+        if connection.in_transaction:
+            connection.execute("ROLLBACK")
+        raise
+
+
+def _migrate_to_version_12(connection: sqlite3.Connection) -> None:
+    from longtian_api.migrations.initial_analysis import migrate
+
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        version = _read_user_version(connection)
+        if version >= 12:
+            connection.execute("COMMIT")
+            return
+        if version != 11:
+            raise DatabaseVersionError("Unsupported database migration source version.")
+        migrate(connection)
+        connection.execute("PRAGMA user_version = 12")
+        connection.execute("COMMIT")
+    except BaseException:
+        if connection.in_transaction:
+            connection.execute("ROLLBACK")
+        raise
 
 
 def _migrate_to_version_11(connection: sqlite3.Connection) -> None:

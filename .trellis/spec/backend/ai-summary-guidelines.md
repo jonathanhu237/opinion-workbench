@@ -2,6 +2,11 @@
 
 ## 1. Scope / Trigger
 
+This is the legacy combined workflow. New shared results and independent initial
+understanding follow [Independent Initial Analysis](./initial-analysis-guidelines.md).
+Keep this compatibility contract readable; do not apply its 100-source cap or
+topic-specific item object to new analysis jobs.
+
 Use this contract when changing collection-run summaries, saved item analyses, media-to-model
 input, usage accounting, or their frontend. This is one explicit operation over one terminal run,
 not automatic screening, a cross-platform report, or a daily schedule. A model judgment is an
