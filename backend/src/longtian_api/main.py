@@ -22,6 +22,7 @@ from longtian_api.services.results import ResultsService
 from longtian_api.services.search_batches import SearchBatchService
 from longtian_api.services.search_runs import SearchRunService
 from longtian_api.services.topic_reports import TopicReportService
+from longtian_api.services.workbench import WorkbenchService
 
 SearchRunServiceFactory = Callable[
     [MonitoringRuleService, PlatformConnectionService], SearchRunService
@@ -162,6 +163,10 @@ def create_app(
             application.state.analysis_settings_service = analysis_settings_service
             application.state.content_analysis_service = content_analysis_service
             application.state.topic_report_service = topic_report_service
+            application.state.workbench_service = WorkbenchService(
+                batch_database,
+                schedules_available=collection_automation_available,
+            )
             application.state.platform_connection_service = platform_service
             application.state.monitoring_rule_service = monitoring_rule_service
             application.state.search_run_service = search_run_service

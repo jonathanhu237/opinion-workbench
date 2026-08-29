@@ -29,6 +29,7 @@ The frontend is a single static Vite SPA under `frontend/`. React Router owns ro
 | [Results and Initial Analysis](../backend/initial-analysis-guidelines.md) | Cross-layer result library, prompt drafts, frozen bulk intent, history and progress | Active |
 | [Collection Schedules](../backend/collection-schedule-guidelines.md) | Rule-referenced interval forms, revision-safe saves, occurrence history and manual-batch boundaries | Active |
 | [Automatic Text Reports](../backend/topic-report-guidelines.md) | Automatic second-stage status, strict report decoding, frozen citations, version-safe retry and interval overrides | Active |
+| [Homepage Workbench](../backend/workbench-guidelines.md) | Read-only duty signal, typed deep links, adaptive polling, stale/unknown semantics, and report-first layout | Active |
 
 ## Quality Check
 

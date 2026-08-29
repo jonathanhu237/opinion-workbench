@@ -12,7 +12,9 @@ export function isPlatformConnectionActive(connection: PlatformConnection) {
   )
 }
 
-export function usePlatformConnections() {
+export function usePlatformConnections(
+  idleRefetchInterval: number | false = false,
+) {
   return useQuery({
     queryKey: PLATFORM_CONNECTIONS_QUERY_KEY,
     queryFn: ({ signal }) => fetchPlatformConnections(signal),
@@ -20,6 +22,6 @@ export function usePlatformConnections() {
     refetchInterval: (query) =>
       query.state.data?.platforms.some(isPlatformConnectionActive)
         ? 1000
-        : false,
+        : idleRefetchInterval,
   })
 }

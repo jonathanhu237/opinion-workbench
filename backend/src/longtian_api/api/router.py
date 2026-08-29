@@ -16,6 +16,7 @@ from longtian_api.api.v1.results import router as results_router
 from longtian_api.api.v1.search_batches import router as search_batches_router
 from longtian_api.api.v1.search_runs import router as search_runs_router
 from longtian_api.api.v1.topic_reports import router as topic_reports_router
+from longtian_api.api.v1.workbench import router as workbench_router
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(health_router)
@@ -30,3 +31,4 @@ api_router.include_router(results_router)
 api_router.include_router(content_analyses_router)
 api_router.include_router(collection_schedules_router)
 api_router.include_router(topic_reports_router)
+api_router.include_router(workbench_router)

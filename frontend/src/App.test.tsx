@@ -30,6 +30,8 @@ import {
   type PlatformConnectionsResponse,
 } from './lib/api/platform-connections'
 import { fetchSearchRuns } from './lib/api/search-runs'
+import { fetchWorkbench } from './lib/api/workbench'
+import { workbenchFixture } from './lib/api/workbench.fixtures'
 
 vi.mock('./lib/api/collection-schedules', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./lib/api/collection-schedules')>()),
@@ -80,6 +82,11 @@ vi.mock('./lib/api/search-runs', async (importOriginal) => {
     ...actual,
     fetchSearchRuns: vi.fn(),
   }
+})
+
+vi.mock('./lib/api/workbench', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./lib/api/workbench')>()
+  return { ...actual, fetchWorkbench: vi.fn() }
 })
 
 const connectedResponse: HealthResponse = {
@@ -160,6 +167,7 @@ const mockedFetchPlatformConnections = vi.mocked(fetchPlatformConnections)
 const mockedStartAttempt = vi.mocked(startPlatformConnectionAttempt)
 const mockedFetchMonitoringRules = vi.mocked(fetchMonitoringRules)
 const mockedFetchSearchRuns = vi.mocked(fetchSearchRuns)
+const mockedFetchWorkbench = vi.mocked(fetchWorkbench)
 const defaultMatchMedia = window.matchMedia
 
 function renderRoute(initialEntry = '/') {
@@ -211,6 +219,7 @@ describe('Longtian public opinion application', () => {
     mockedStartAttempt.mockReset()
     mockedFetchMonitoringRules.mockReset()
     mockedFetchSearchRuns.mockReset()
+    mockedFetchWorkbench.mockReset().mockResolvedValue(workbenchFixture())
     mockedFetchHealth.mockResolvedValue(connectedResponse)
     mockedFetchPlatformConnections.mockResolvedValue(catalog())
     mockedFetchMonitoringRules.mockResolvedValue(monitoringRulesResponse)
@@ -220,19 +229,23 @@ describe('Longtian public opinion application', () => {
     })
   })
 
-  it('renders the empty workbench home through the application providers', () => {
+  it('renders the read-only workbench through the application providers', async () => {
     render(<App />)
 
     expect(
       screen.getByRole('heading', { name: '工作台', level: 1 }),
     ).toBeInTheDocument()
     expect(screen.getByRole('main')).toHaveAccessibleName('工作台')
-    expect(screen.queryByText('登录状态')).toBeNull()
-    expect(screen.queryByText('系统准备情况')).toBeNull()
-    expect(screen.queryByText('值守准备台账')).toBeNull()
-    expect(screen.queryByText('值守启用顺序')).toBeNull()
-    expect(screen.queryByText('今日采集')).toBeNull()
-    expect(mockedFetchPlatformConnections).not.toHaveBeenCalled()
+    expect(
+      await screen.findByRole('heading', { name: '当前状态尚未完全确认' }),
+    ).toBeInTheDocument()
+    expect(screen.getByText('还没有可阅读的舆情报告')).toBeInTheDocument()
+    expect(screen.getByText('平台准备情况')).toBeInTheDocument()
+    expect(screen.queryByText('今日发现', { exact: true })).toBeNull()
+    expect(screen.queryByText('待跟进', { exact: true })).toBeNull()
+    expect(screen.queryByText('已处理', { exact: true })).toBeNull()
+    expect(mockedFetchWorkbench).toHaveBeenCalledTimes(1)
+    expect(mockedFetchPlatformConnections).toHaveBeenCalledTimes(1)
     expect(mockedFetchMonitoringRules).not.toHaveBeenCalled()
   })
 
