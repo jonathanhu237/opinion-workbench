@@ -478,3 +478,25 @@ Delivered the reviewed AI settings and monitoring object/issue query composition
 ### Next Steps
 
 - Media enrichment and manual multimodal summary remain separate planned tasks; no implementation started in this delivery.
+
+
+## Session 21: Homepage duty workbench
+<!-- trellis-session: v=2 fp=64c6f72ba098ed0c -->
+
+**Date**: 2026-08-30
+**Task**: Homepage duty workbench
+**Branch**: `feat/homepage-workbench`
+
+### Summary
+
+Implemented and accepted a read-only homepage duty workbench with current attention, latest readable report, active pipeline stages, next valid collection schedule, platform readiness, strict API decoding, adaptive polling, tests, browser QA, and executable specs.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8fe8c90` | feat: add homepage duty workbench |
+
+### Status
+
+[OK] **Completed**
