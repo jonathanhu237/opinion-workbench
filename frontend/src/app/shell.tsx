@@ -46,7 +46,8 @@ const pageTitles: Record<string, string> = {
   '/': '工作台',
   '/platform-accounts': '平台账号',
   '/monitoring-rules': '监控规则',
-  '/collection-runs': '采集任务',
+  '/collection-runs': '手工采集',
+  '/automation-tasks': '自动任务',
   '/results': '结果与分析',
   '/ai-settings': 'AI 配置',
 }
@@ -111,7 +112,15 @@ function PrimaryNavigation() {
       isActive: location.pathname === '/monitoring-rules',
     },
     {
-      label: '采集任务',
+      label: '自动任务',
+      to: '/automation-tasks',
+      icon: ClipboardList,
+      isActive:
+        location.pathname.startsWith('/automation-tasks') ||
+        location.pathname.startsWith('/automation-runs'),
+    },
+    {
+      label: '手工采集',
       to: '/collection-runs',
       icon: ClipboardList,
       isActive:
@@ -213,7 +222,11 @@ export function AppShell() {
     ? '批次进度'
     : location.pathname.startsWith('/collection-runs/')
       ? '采集任务详情'
-      : (pageTitles[location.pathname] ?? '当前页面')
+      : location.pathname.startsWith('/automation-runs/')
+        ? '自动任务运行详情'
+        : location.pathname.startsWith('/automation-tasks/')
+          ? '自动任务运行记录'
+          : (pageTitles[location.pathname] ?? '当前页面')
 
   return (
     <SidebarProvider>

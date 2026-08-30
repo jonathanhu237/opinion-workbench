@@ -265,8 +265,8 @@ export function Results() {
             <p className="text-xs leading-5 [overflow-wrap:anywhere] text-muted-foreground">
               已保存模型：{provider.data.model} · 配置版本{' '}
               {provider.data.revision} · {provider.data.base_url}
-              。初步分析会发送正文与媒体，任务结束后自动进行文字判断与报告合成；两个阶段均可能消耗
-              API 额度，提交前可核对本次固定的两份提示词。
+              。初步分析会发送正文与媒体并消耗 API
+              额度；手动初步分析不会自动生成报告。
             </p>
           )}
           {provider.data && !provider.data.has_api_key && (

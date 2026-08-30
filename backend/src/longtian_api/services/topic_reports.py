@@ -58,6 +58,44 @@ class TopicReportService:
     async def create(self, payload):
         return await settle(self._admit("create", None, payload))
 
+    async def workflow_admit(
+        self, *, run_id: int, analysis_job_id: int | None, operation_key: str, snapshot
+    ):
+        """Admit a report explicitly from the workflow owner.
+
+        The operation key is persisted with the report, so replay is durable
+        across process restarts.  The task goal becomes the exact frozen report
+        instruction; generic initial understanding remains task-neutral.
+        """
+        async with self._admission:
+            if self._closed or not self.available:
+                raise TopicReportError("topic_report_unavailable")
+            required = (
+                snapshot.ai_configuration_revision,
+                snapshot.ai_base_url,
+                snapshot.ai_model,
+                snapshot.initial_prompt_version_id,
+                snapshot.report_prompt_version_id,
+            )
+            if any(value is None for value in required):
+                raise AIError("ai_configuration_required")
+            self._validate_override(snapshot.analysis_goal)
+            report = await database_call(
+                self.repository.create_workflow,
+                run_id=run_id,
+                analysis_job_id=analysis_job_id,
+                operation_key=operation_key,
+                analysis_goal=snapshot.analysis_goal,
+                configuration_revision=snapshot.ai_configuration_revision,
+                base_url=snapshot.ai_base_url,
+                model=snapshot.ai_model,
+                initial_prompt_version_id=snapshot.initial_prompt_version_id,
+                report_prompt_version_id=snapshot.report_prompt_version_id,
+            )
+            if report.status == "queued":
+                await self._launch()
+            return report
+
     async def retry(self, report_id, payload):
         return await settle(self._admit("retry", report_id, payload))
 

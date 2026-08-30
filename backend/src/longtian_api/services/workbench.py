@@ -15,10 +15,10 @@ class WorkbenchService:
         repository=None,
         clock=None,
         available=True,
-        schedules_available=True,
+        automation_available=True,
     ):
         self.repository = repository or WorkbenchRepository(
-            database, schedules_available=schedules_available
+            database, automation_available=automation_available
         )
         self._clock = clock or (lambda: datetime.now(UTC))
         self.available = available

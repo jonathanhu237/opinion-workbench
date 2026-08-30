@@ -31,8 +31,8 @@ body, environment key, migration, or write-side command.
 ```text
 observed_at: UTC timestamp
 attention: WorkbenchAttention[0..100]
-activity: { collection, initial_analysis, report }
-next_collection: earliest enabled, available, valid future schedule | null
+activity: { automation, collection, initial_analysis, report }
+next_automation: earliest enabled, available, valid future task | null
 latest_report: newest readable completed/empty report | null
 ```
 
@@ -41,7 +41,8 @@ Attention carries typed evidence (`kind`, `severity`, `status`, `reason`,
 or raw exception. The frontend owns these routes:
 
 ```text
-collection_schedule -> /collection-runs?schedule=:id
+automation_task     -> /automation-tasks/:id/runs
+automation_run      -> /automation-runs/:id
 collection_batch    -> /collection-batches/:id
 initial_analysis    -> /results?job=:id
 report              -> /results?report=:id
@@ -51,15 +52,16 @@ platform readiness  -> /platform-accounts
 Persistent projection rules:
 
 - Read every persistent section using one explicit SQLite read transaction.
-- An enabled schedule is attention when its current rule is missing, disabled,
-  invalid under `compose_monitoring_terms`, over `MAX_SEARCH_TERMS`, or its
-  latest occurrence for the current revision is skipped/missed/interrupted.
-- Do not present an invalid schedule as `next_collection`; continue searching
-  in due-time/ID order for the earliest valid schedule.
+- An enabled automation task is attention when its current rule is missing,
+  disabled, invalid under `compose_monitoring_terms`, over `MAX_SEARCH_TERMS`,
+  or its latest current-revision occurrence is skipped/missed/interrupted.
+- A failed, interrupted or configuration-blocked workflow run is attention.
+  Do not present an invalid task as `next_automation`; continue searching in
+  due-time/ID order for the earliest executable task.
 - A newer healthy terminal state clears an older unhealthy state for the same
   natural owner. A running successor does not yet clear the older terminal
   failure.
-- Cancelled work and intentionally disabled schedules are not attention.
+- Cancelled work and intentionally disabled tasks are not attention.
 - `latest_report` selects the newest `completed` or truthful `empty` report.
   A newer failed report is attention but does not replace the last readable
   report.
@@ -77,11 +79,11 @@ Controls are refresh or navigation only.
 | --- | --- |
 | Workbench service disabled | `503 workbench_unavailable` |
 | SQLite/read-model/strict document failure | bounded `503`; no private detail |
-| Missing or disabled schedule rule | schedule attention; exclude from next |
+| Missing or disabled automation rule | task attention; exclude from next |
 | Invalid composed rule | `invalid_monitoring_rule`; exclude from next |
 | More than `MAX_SEARCH_TERMS` | `too_many_search_terms`; exclude from next |
 | Newer report failed | report attention plus older readable report |
-| No readable report or schedule | truthful `null`; frontend explains empty state |
+| No readable report or automation task | truthful `null`; frontend explains empty state |
 | Platform endpoint unavailable | persistent snapshot still renders; readiness unknown |
 | Cached refetch fails | retain content, expose last `observed_at`, mark stale |
 | Protocol-invalid JSON | frontend invalid-response error; do not coerce values |
@@ -91,13 +93,13 @@ All responses use `Cache-Control: no-store`. Product errors use the standard
 
 ### 5. Good / Base / Bad Cases
 
-- Good: an enabled valid schedule and fully connected catalog produce a known
-  duty state and the globally earliest `next_collection`.
+- Good: an enabled valid automation task and fully connected catalog produce a
+  known duty state and the globally earliest `next_automation`.
 - Base: an empty database produces no attention, no activity, no report, and no
   next collection; the UI renders explanatory empty copy instead of zeros.
 - Good: a failed report is shown as attention while the previous completed or
   empty report stays readable.
-- Bad: a rule was edited into 21 effective search terms; the schedule must be
+- Bad: a rule was edited into 21 effective search terms; the task must be
   attention and cannot be shown as the next executable collection.
 - Bad: platform readiness is unknown; the UI must not say “当前运行正常”.
 
@@ -123,7 +125,7 @@ All responses use `Cache-Control: no-store`. Product errors use the standard
 
 ```python
 # Enabled alone does not mean executable.
-SELECT * FROM collection_schedules
+SELECT * FROM automation_tasks
 WHERE enabled = 1
 ORDER BY next_due_at
 LIMIT 1
@@ -139,9 +141,9 @@ const normal = attention.length === 0
 ```python
 # Inspect candidates in deterministic due order and return the first whose
 # current enabled rule composes successfully within MAX_SEARCH_TERMS.
-for schedule in enabled_future_schedules:
-    if current_rule_issue(schedule.monitoring_rule_id) is None:
-        return schedule
+for task in enabled_future_tasks:
+    if current_rule_issue(task.monitoring_rule_id) is None:
+        return task
 ```
 
 ```tsx
@@ -152,4 +154,3 @@ const fullyKnown =
   unknownPlatforms === 0 &&
   !stale
 ```
-

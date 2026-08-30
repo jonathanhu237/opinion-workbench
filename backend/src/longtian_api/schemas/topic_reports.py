@@ -97,6 +97,11 @@ class JobSelection(StrictModel):
     job_id: PositiveId
 
 
+class WorkflowSelection(StrictModel):
+    kind: Literal["workflow_run"]
+    run_id: PositiveId
+
+
 class RequestIntent(StrictModel):
     request_id: str = Field(min_length=36, max_length=36)
 
@@ -212,7 +217,10 @@ class ReportRun(StrictModel):
     initial_job_id: PositiveId | None
     completion_event_id: PositiveId | None
     parent_report_id: PositiveId | None
-    selection: Annotated[JobSelection | IntervalSelection, Field(discriminator="kind")]
+    selection: Annotated[
+        JobSelection | WorkflowSelection | IntervalSelection,
+        Field(discriminator="kind"),
+    ]
     status: ReportStatus
     revision: PositiveId
     configuration_revision: PositiveId
@@ -269,13 +277,14 @@ class ReportRun(StrictModel):
         ):
             raise ValueError("unsettled terminal report")
         if self.trigger == "automatic":
-            if (
-                self.request_id is not None
-                or self.completion_event_id is None
-                or self.parent_report_id is not None
-                or self.initial_job_id is None
-            ):
+            if self.request_id is not None or self.parent_report_id is not None:
                 raise ValueError("invalid automatic origin")
+            legacy = self.selection.kind == "initial_job"
+            workflow = self.selection.kind == "workflow_run"
+            if not (legacy or workflow) or legacy != (
+                self.completion_event_id is not None
+            ):
+                raise ValueError("invalid automatic selection")
         elif self.request_id is None or self.completion_event_id is not None:
             raise ValueError("invalid explicit origin")
         if (self.trigger == "retry") != (self.parent_report_id is not None):
@@ -285,6 +294,9 @@ class ReportRun(StrictModel):
         if self.selection.kind == "initial_job":
             if self.selection.job_id != self.initial_job_id:
                 raise ValueError("invalid job selection")
+        elif self.selection.kind == "workflow_run":
+            if self.completion_event_id is not None:
+                raise ValueError("invalid workflow selection")
         elif self.initial_job_id is not None:
             raise ValueError("invalid interval origin")
         elif datetime.fromisoformat(

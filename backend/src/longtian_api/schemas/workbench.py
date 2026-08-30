@@ -1,17 +1,27 @@
 """Strict, read-only projections used by the homepage workbench."""
 
+from __future__ import annotations
+
 from typing import Literal
 
 from pydantic import Field, model_validator
 
 from longtian_api.schemas.ai_summaries import StrictModel
 from longtian_api.schemas.analysis_settings import Count, PositiveId
+from longtian_api.schemas.automation_workflows import (
+    AutomationSchedule,
+    AutomationStageName,
+)
 from longtian_api.schemas.collection_schedules import UtcTimestamp
 from longtian_api.schemas.topic_reports import Coverage
 from longtian_api.search_platforms import SearchPlatform
 
 WorkbenchAttentionKind = Literal[
-    "collection_schedule", "collection_batch", "initial_analysis", "report"
+    "automation_task",
+    "automation_run",
+    "collection_batch",
+    "initial_analysis",
+    "report",
 ]
 WorkbenchAttentionSeverity = Literal["action_required", "warning", "error"]
 WorkbenchAttentionStatus = Literal[
@@ -25,6 +35,8 @@ WorkbenchAttentionStatus = Literal[
     "configuration_blocked",
     "failed",
     "unsuccessful_members",
+    "previous_run_active",
+    "configuration_unavailable",
 ]
 WorkbenchAttentionReason = Literal[
     "browser_operation_active",
@@ -83,7 +95,7 @@ class WorkbenchCollectionActivity(StrictModel):
     started_at: UtcTimestamp | None
 
     @model_validator(mode="after")
-    def valid_counts(self) -> "WorkbenchCollectionActivity":
+    def valid_counts(self) -> WorkbenchCollectionActivity:
         if self.completed_item_count > self.item_count:
             raise ValueError("invalid collection activity counts")
         if self.current_item_position is not None and (
@@ -103,7 +115,7 @@ class WorkbenchAnalysisActivity(StrictModel):
     started_at: UtcTimestamp | None
 
     @model_validator(mode="after")
-    def valid_counts(self) -> "WorkbenchAnalysisActivity":
+    def valid_counts(self) -> WorkbenchAnalysisActivity:
         if self.completed_count + self.unsuccessful_count > self.total_count:
             raise ValueError("invalid analysis activity counts")
         return self
@@ -119,23 +131,40 @@ class WorkbenchReportActivity(StrictModel):
     started_at: UtcTimestamp | None
 
     @model_validator(mode="after")
-    def valid_counts(self) -> "WorkbenchReportActivity":
+    def valid_counts(self) -> WorkbenchReportActivity:
         if self.completed_count + self.failed_count > self.total_count:
             raise ValueError("invalid report activity counts")
         return self
 
 
 class WorkbenchActivity(StrictModel):
+    automation: WorkbenchAutomationActivity | None
     collection: WorkbenchCollectionActivity | None
     initial_analysis: WorkbenchAnalysisActivity | None
     report: WorkbenchReportActivity | None
 
 
-class WorkbenchNextCollection(StrictModel):
+class WorkbenchAutomationActivity(StrictModel):
+    run_id: PositiveId
+    task_id: PositiveId
+    task_name: str = Field(min_length=1, max_length=80)
+    status: Literal["queued", "collecting", "analysing", "reporting"]
+    active_stage: AutomationStageName | None
+    created_at: UtcTimestamp
+    started_at: UtcTimestamp | None
+
+
+# Resolve the forward reference introduced by keeping the existing domain
+# activity projections alongside the workflow-level owner.
+WorkbenchActivity.model_rebuild()
+
+
+class WorkbenchNextAutomation(StrictModel):
     id: PositiveId
+    name: str = Field(min_length=1, max_length=80)
     rule_name: str = Field(min_length=1, max_length=80)
     due_at: UtcTimestamp
-    interval_minutes: int = Field(ge=1, le=43_200)
+    schedule: AutomationSchedule
 
 
 class WorkbenchLatestReport(StrictModel):
@@ -148,7 +177,7 @@ class WorkbenchLatestReport(StrictModel):
     coverage: Coverage
 
     @model_validator(mode="after")
-    def valid_report_state(self) -> "WorkbenchLatestReport":
+    def valid_report_state(self) -> WorkbenchLatestReport:
         if self.status == "completed":
             if self.overview is None or self.empty_reason is not None:
                 raise ValueError("invalid completed report projection")
@@ -161,5 +190,5 @@ class WorkbenchSnapshot(StrictModel):
     observed_at: UtcTimestamp
     attention: list[WorkbenchAttention] = Field(max_length=100)
     activity: WorkbenchActivity
-    next_collection: WorkbenchNextCollection | None
+    next_automation: WorkbenchNextAutomation | None
     latest_report: WorkbenchLatestReport | None

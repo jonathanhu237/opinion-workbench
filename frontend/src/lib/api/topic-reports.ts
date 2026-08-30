@@ -72,6 +72,7 @@ const intervalSelection = z
   })
 const selectionSchema = z.union([
   z.strictObject({ kind: z.literal('initial_job'), job_id: safeId }),
+  z.strictObject({ kind: z.literal('workflow_run'), run_id: safeId }),
   intervalSelection,
 ])
 const promptSchema = z
@@ -223,13 +224,17 @@ export const reportRunSchema = z
           value.coverage.relevant !== 0 ||
           value.usage.composition.attempted_requests !== 0)) ||
       automatic !== (value.request_id === null) ||
-      automatic !== (value.completion_event_id !== null) ||
       retry !== (value.parent_report_id !== null) ||
       (value.parent_report_id !== null && value.parent_report_id >= value.id) ||
       (value.selection.kind === 'initial_job'
-        ? value.selection.job_id !== value.initial_job_id
-        : value.initial_job_id !== null) ||
-      (automatic && value.selection.kind !== 'initial_job') ||
+        ? value.selection.job_id !== value.initial_job_id ||
+          (automatic && value.completion_event_id === null)
+        : value.selection.kind === 'workflow_run'
+          ? !automatic || value.completion_event_id !== null
+          : value.initial_job_id !== null) ||
+      (automatic &&
+        value.selection.kind !== 'initial_job' &&
+        value.selection.kind !== 'workflow_run') ||
       (value.trigger === 'interval' &&
         value.selection.kind !== 'first_seen_interval') ||
       (value.recovery_reason !== null && value.status !== 'interrupted') ||

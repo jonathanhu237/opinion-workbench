@@ -3,8 +3,8 @@ from fastapi import APIRouter
 from longtian_api.api.v1.ai_settings import router as ai_settings_router
 from longtian_api.api.v1.ai_summaries import router as ai_summaries_router
 from longtian_api.api.v1.analysis_settings import router as analysis_settings_router
-from longtian_api.api.v1.collection_schedules import (
-    router as collection_schedules_router,
+from longtian_api.api.v1.automation_workflows import (
+    router as automation_workflows_router,
 )
 from longtian_api.api.v1.content_analyses import router as content_analyses_router
 from longtian_api.api.v1.health import router as health_router
@@ -27,8 +27,8 @@ api_router.include_router(search_batches_router)
 api_router.include_router(ai_settings_router)
 api_router.include_router(ai_summaries_router)
 api_router.include_router(analysis_settings_router)
+api_router.include_router(automation_workflows_router)
 api_router.include_router(results_router)
 api_router.include_router(content_analyses_router)
-api_router.include_router(collection_schedules_router)
 api_router.include_router(topic_reports_router)
 api_router.include_router(workbench_router)

@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
 import { safeCount, safeId } from '@/lib/api/analysis-shared'
+import { automationScheduleSchema } from '@/lib/api/automation-workflows'
 import { getApiBaseUrl } from '@/lib/api/client'
 import { isoDateSchema, searchPlatformSchema } from '@/lib/api/search-runs'
 
@@ -20,6 +21,8 @@ const attentionStatusSchema = z.enum([
   'configuration_blocked',
   'failed',
   'unsuccessful_members',
+  'previous_run_active',
+  'configuration_unavailable',
 ])
 const attentionReasonSchema = z.enum([
   'browser_operation_active',
@@ -48,7 +51,8 @@ const attentionReasonSchema = z.enum([
 ])
 const attentionSchema = z.strictObject({
   kind: z.enum([
-    'collection_schedule',
+    'automation_task',
+    'automation_run',
     'collection_batch',
     'initial_analysis',
     'report',
@@ -106,6 +110,17 @@ const reportActivitySchema = z
   .refine(
     (value) => value.completed_count + value.failed_count <= value.total_count,
   )
+const automationActivitySchema = z.strictObject({
+  run_id: safeId,
+  task_id: safeId,
+  task_name: z.string().trim().min(1).max(80),
+  status: z.enum(['queued', 'collecting', 'analysing', 'reporting']),
+  active_stage: z
+    .enum(['collection', 'initial_analysis', 'topic_report'])
+    .nullable(),
+  created_at: utcDateSchema,
+  started_at: utcDateSchema.nullable(),
+})
 const coverageSchema = z
   .strictObject({
     total: safeCount,
@@ -155,16 +170,18 @@ export const workbenchSnapshotSchema = z.strictObject({
   observed_at: utcDateSchema,
   attention: z.array(attentionSchema).max(100),
   activity: z.strictObject({
+    automation: automationActivitySchema.nullable(),
     collection: collectionActivitySchema.nullable(),
     initial_analysis: analysisActivitySchema.nullable(),
     report: reportActivitySchema.nullable(),
   }),
-  next_collection: z
+  next_automation: z
     .strictObject({
       id: safeId,
+      name: z.string().trim().min(1).max(80),
       rule_name: z.string().trim().min(1).max(80),
       due_at: utcDateSchema,
-      interval_minutes: z.number().int().min(1).max(43_200),
+      schedule: automationScheduleSchema,
     })
     .nullable(),
   latest_report: latestReportSchema.nullable(),
@@ -174,6 +191,9 @@ export type WorkbenchSnapshot = z.infer<typeof workbenchSnapshotSchema>
 export type WorkbenchAttention = z.infer<typeof attentionSchema>
 export type WorkbenchCollectionActivity = z.infer<
   typeof collectionActivitySchema
+>
+export type WorkbenchAutomationActivity = z.infer<
+  typeof automationActivitySchema
 >
 export type WorkbenchAnalysisActivity = z.infer<typeof analysisActivitySchema>
 export type WorkbenchReportActivity = z.infer<typeof reportActivitySchema>

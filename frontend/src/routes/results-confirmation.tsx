@@ -77,7 +77,7 @@ export function ResultsConfirmation({
         <p className="text-sm leading-6 text-muted-foreground">
           正文、图片和视频将发送到上述模型服务，可能消耗 API
           额度。每条成功的初步分析都会单独保存，不以报告成功为前提。
-          全部成员处理结束后，将按本次固定的报告提示词自动判断已保存文字并生成一份报告，无需再次确认；文字判断和合成也会消耗额度。失败项不会补做，后来入库的内容不加入本任务。
+          本次手动操作不会自动判断相关性或生成报告。失败项不会补做，后来入库的内容不加入本任务。
           {confirmation.request.force_refresh
             ? '本次将重新获取内容并分析，不复用旧版理解。'
             : '仅复用兼容的已保存理解，不会把未读媒体当成完整内容。'}
@@ -100,7 +100,7 @@ export function ResultsConfirmation({
         </div>
         {!confirmation.settings.automation.available && (
           <p className="text-sm text-muted-foreground">
-            新采集内容的自动分析目前不可用；不影响本次明确提交的初步分析及其后续文字报告。
+            自动任务目前不可用；不影响本次明确提交的手动初步分析。
           </p>
         )}
         {ambiguous && (

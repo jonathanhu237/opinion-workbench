@@ -31,13 +31,6 @@ import { CollectionRunDetail } from '@/routes/collection-run-detail'
 import { CollectionRuns } from '@/routes/collection-runs'
 import { startAISummary } from '@/lib/api/ai-summaries'
 
-vi.mock('@/lib/api/collection-schedules', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/lib/api/collection-schedules')>()),
-  fetchCollectionSchedules: vi
-    .fn()
-    .mockResolvedValue({ schedules: [], next_before_id: null }),
-}))
-
 vi.mock('@/lib/api/monitoring-rules', async (importOriginal) => {
   const actual =
     await importOriginal<typeof import('@/lib/api/monitoring-rules')>()

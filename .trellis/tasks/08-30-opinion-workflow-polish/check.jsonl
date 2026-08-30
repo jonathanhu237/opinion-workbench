@@ -1,0 +1,17 @@
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Verify migration, transaction, snapshot, cancellation and temporary-database compliance."}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Verify every new error/status envelope and secret-safe failure path."}
+{"file":".trellis/spec/backend/batch-search-guidelines.md","reason":"Verify workflow orchestration does not weaken batch/browser recovery contracts."}
+{"file":".trellis/spec/backend/initial-analysis-guidelines.md","reason":"Verify generic understanding, member outcomes, reuse and no automatic legacy handoff."}
+{"file":".trellis/spec/backend/collection-schedule-guidelines.md","reason":"Compare the replacement against proven occurrence, clock and overlap invariants and locate obsolete runtime paths."}
+{"file":".trellis/spec/backend/topic-report-guidelines.md","reason":"Verify text-only report admission/retry, frozen citations, coverage and model call counts."}
+{"file":".trellis/spec/backend/workbench-guidelines.md","reason":"Verify the unified read model stays truthful, read-only and freshness-aware."}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Verify query keys, URL state, polling and mutation ambiguity handling."}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Verify exact frontend decoding and no raw payload casts."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Verify accessible fixed-stage timeline, forms and interaction primitives."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Run and interpret every frozen frontend quality gate."}
+{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Audit every API/service/repository/frontend boundary and real transition window."}
+{"file":".trellis/tasks/08-28-collection-report-decoupling/research/acceptance-matrix.md","reason":"Ensure previously accepted collection/analysis/report behavior is preserved or deliberately replaced."}
+{"file":".trellis/tasks/08-29-shared-results-initial-analysis/research/full-check.md","reason":"Reuse the proven initial-analysis regression and acceptance surface."}
+{"file":".trellis/tasks/08-29-scheduled-rule-collection/research/full-check.md","reason":"Reuse scheduler timing, browser and full-gate evidence."}
+{"file":".trellis/tasks/08-29-automatic-text-reports/research/full-check.md","reason":"Reuse report lifecycle, call-count and full-gate evidence."}
+{"file":".trellis/tasks/08-29-automatic-text-reports/research/browser-acceptance.md","reason":"Verify the replacement UI and automatic report flow against prior browser observations."}

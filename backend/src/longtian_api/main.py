@@ -12,7 +12,7 @@ from longtian_api.repositories.search_runs import SearchRunRepository
 from longtian_api.services.ai_settings import AISettingsService
 from longtian_api.services.ai_summaries import SummaryService
 from longtian_api.services.analysis_settings import AnalysisSettingsService
-from longtian_api.services.collection_schedules import CollectionScheduleService
+from longtian_api.services.automation_workflows import AutomationWorkflowService
 from longtian_api.services.content_analyses import ContentAnalysisService
 from longtian_api.services.content_enrichment import ContentEnrichmentService
 from longtian_api.services.enrichment_staging import MediaSpool
@@ -47,14 +47,16 @@ def create_app(
     analysis_automation_available: bool = True,
     collection_automation_available: bool = True,
     topic_reports_available: bool = True,
+    automation_workflow_available: bool = True,
+    automation_workflow_service_factory: Callable[[Database], AutomationWorkflowService]
+    | None = None,
     topic_report_service_factory: Callable[
         [Database, AISettingsService], TopicReportService
     ]
     | None = None,
-    collection_schedule_service_factory: Callable[
-        [Database, SearchBatchService], CollectionScheduleService
-    ]
-    | None = None,
+    # Kept in the factory signature for callers that construct historical
+    # fixtures; the old scheduler is no longer registered by the lifespan.
+    collection_schedule_service_factory: Callable | None = None,
     content_analysis_service_factory: Callable[
         [Database, AISettingsService, ContentEnrichmentService], ContentAnalysisService
     ]
@@ -149,23 +151,33 @@ def create_app(
                 )
             )
             await run_in_threadpool(topic_report_service.initialize)
-            if topic_reports_available:
-                content_analysis_service.on_job_finished = (
-                    topic_report_service.initial_analysis_finished
+            # Automatic progression belongs exclusively to the fixed workflow
+            # owner.  The domain services remain independently callable; their
+            # historical callback attributes are deliberately inert.
+            content_analysis_service.on_job_finished = None
+            search_run_service.on_collection_finished = None
+            search_batch_service.on_collection_finished = None
+            automation_workflow_service = (
+                automation_workflow_service_factory(batch_database)
+                if automation_workflow_service_factory is not None
+                else AutomationWorkflowService(
+                    batch_database,
+                    monitoring_rules=monitoring_rule_service,
+                    batches=search_batch_service,
+                    analyses=content_analysis_service,
+                    reports=topic_report_service,
+                    ai_settings=ai_settings_service,
+                    available=automation_workflow_available,
                 )
-            search_run_service.on_collection_finished = (
-                content_analysis_service.collection_finished
             )
-            search_batch_service.on_collection_finished = (
-                content_analysis_service.collection_finished
-            )
+            await run_in_threadpool(automation_workflow_service.initialize)
             application.state.results_service = ResultsService(batch_database)
             application.state.analysis_settings_service = analysis_settings_service
             application.state.content_analysis_service = content_analysis_service
             application.state.topic_report_service = topic_report_service
             application.state.workbench_service = WorkbenchService(
                 batch_database,
-                schedules_available=collection_automation_available,
+                automation_available=automation_workflow_available,
             )
             application.state.platform_connection_service = platform_service
             application.state.monitoring_rule_service = monitoring_rule_service
@@ -174,27 +186,16 @@ def create_app(
             application.state.ai_settings_service = ai_settings_service
             application.state.content_enrichment_service = enrichment_service
             application.state.ai_summary_service = summary_service
+            application.state.automation_workflow_service = automation_workflow_service
             await search_batch_service.resume_after_startup()
-            collection_schedule_service = (
-                collection_schedule_service_factory(
-                    batch_database, search_batch_service
-                )
-                if collection_schedule_service_factory is not None
-                else CollectionScheduleService(
-                    batch_database,
-                    search_batch_service,
-                    available=collection_automation_available,
-                )
-            )
-            application.state.collection_schedule_service = collection_schedule_service
-            await collection_schedule_service.start()
+            await automation_workflow_service.start()
             yield
         finally:
             # Stop timer admission first; drain every owner even after a failure.
             scope = locals()
             await _shutdown_services(
                 [
-                    scope.get("collection_schedule_service"),
+                    scope.get("automation_workflow_service"),
                     scope.get("content_analysis_service"),
                     scope.get("topic_report_service"),
                     scope.get("summary_service"),

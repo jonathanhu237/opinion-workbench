@@ -5,6 +5,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from threading import Barrier
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -85,7 +86,7 @@ def test_event_link_rollback_replay_and_concurrent_consumers(tmp_path):
     asyncio.run(run())
 
 
-def test_pending_event_startup_is_storage_only_and_explicit_retry_recovers(tmp_path):
+def test_pending_manual_event_startup_is_storage_only_and_admits_no_report(tmp_path):
     async def run():
         db, initial, reports, ai, model, *_ = environment(tmp_path, count=1)
         initial.on_job_finished = None
@@ -93,18 +94,87 @@ def test_pending_event_startup_is_storage_only_and_explicit_retry_recovers(tmp_p
         await finish(initial)
         baseline = model.counts.copy()
         reports.initialize()
-        report = reports.repository.list().reports[0]
-        assert (
-            report.status == "interrupted"
-            and report.recovery_reason == "backend_restart"
-        )
+        assert reports.repository.list().reports == []
         assert reports.repository.next_report() is None
         reports.initialize()
         assert model.counts == baseline
-        retried = await reports.retry(report.id, retry_request(report))
+        with db.connect() as connection:
+            assert (
+                connection.execute(
+                    "SELECT state FROM analysis_completion_events"
+                ).fetchone()[0]
+                == "pending"
+            )
+        await initial.shutdown()
+        await reports.shutdown()
+        await ai.shutdown()
+
+    asyncio.run(run())
+
+
+def test_workflow_report_freezes_goal_replays_and_saves_zero_model_empty(tmp_path):
+    async def run():
+        from longtian_api.repositories.analysis_settings import (
+            AnalysisSettingsRepository,
+        )
+
+        db, initial, reports, ai, model, *_ = environment(tmp_path, count=1)
+        initial.on_job_finished = None
+        admission = await initial.create(request(db))
+        await finish(initial)
+        settings = AnalysisSettingsRepository(db).read()
+
+        def snapshot(goal):
+            return SimpleNamespace(
+                analysis_goal=goal,
+                ai_configuration_revision=1,
+                ai_base_url=BASE,
+                ai_model=MODEL,
+                initial_prompt_version_id=settings.initial_prompt.id,
+                report_prompt_version_id=settings.report_prompt.id,
+            )
+
+        goal = "只判断与道路积水处置相关的舆情。"
+        report = await reports.workflow_admit(
+            run_id=41,
+            analysis_job_id=admission.job.id,
+            operation_key="workflow:41:topic_report:1",
+            snapshot=snapshot(goal),
+        )
         await finish(reports)
-        assert reports.repository.read(retried.id).status == "completed"
-        assert model.counts["initial"] == baseline["initial"]
+        report = reports.repository.read(report.id)
+        assert report.status == "completed"
+        assert report.selection.model_dump() == {"kind": "workflow_run", "run_id": 41}
+        assert report.prompt.instructions == goal and report.prompt.origin == "override"
+        replay = await reports.workflow_admit(
+            run_id=41,
+            analysis_job_id=admission.job.id,
+            operation_key="workflow:41:topic_report:1",
+            snapshot=snapshot(goal),
+        )
+        assert replay.id == report.id
+        with db.connect() as connection:
+            assert (
+                connection.execute(
+                    "SELECT state FROM analysis_completion_events"
+                ).fetchone()[0]
+                == "pending"
+            )
+
+        baseline = model.counts.copy()
+        empty = await reports.workflow_admit(
+            run_id=42,
+            analysis_job_id=None,
+            operation_key="workflow:42:topic_report:1",
+            snapshot=snapshot("识别本轮新增材料。"),
+        )
+        await finish(reports)
+        empty = reports.repository.read(empty.id)
+        assert empty.status == "empty" and empty.empty_reason == "no_ready_sources"
+        assert empty.selection.model_dump() == {"kind": "workflow_run", "run_id": 42}
+        assert model.counts == baseline
+        reports.initialize()
+        assert len(reports.repository.list().reports) == 2
         await initial.shutdown()
         await reports.shutdown()
         await ai.shutdown()

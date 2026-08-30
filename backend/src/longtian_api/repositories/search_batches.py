@@ -190,6 +190,7 @@ class SearchBatchRepository:
         terms: Sequence[str],
         platforms: Sequence[SearchPlatform],
         max_results_per_term: int,
+        workflow_operation_key: str | None = None,
     ) -> SearchBatchRecord:
         with self._connection(write=True) as connection:
             return _insert_batch(
@@ -199,7 +200,17 @@ class SearchBatchRepository:
                 terms=terms,
                 platforms=platforms,
                 max_results_per_term=max_results_per_term,
+                workflow_operation_key=workflow_operation_key,
             )
+
+    def workflow_batch(self, operation_key: str) -> SearchBatchRecord | None:
+        """Return a batch admitted for a workflow stage, if any."""
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT id FROM search_batches WHERE workflow_operation_key=?",
+                (operation_key,),
+            ).fetchone()
+            return _read_batch(connection, int(row[0])) if row is not None else None
 
     def scheduled_batch(self, dispatch_token: str) -> SearchBatchRecord | None:
         with self._connection() as connection:
@@ -691,14 +702,22 @@ def _insert_batch(
     terms: Sequence[str],
     platforms: Sequence[SearchPlatform],
     max_results_per_term: int,
+    workflow_operation_key: str | None = None,
 ) -> SearchBatchRecord:
     """One insertion owner shared by manual and occurrence-backed admission."""
     timestamp = _utc_timestamp()
     cursor = connection.execute(
         """INSERT INTO search_batches
-          (monitoring_rule_id,rule_name,max_results_per_term,status,created_at)
-          VALUES (?,?,?,'queued',?)""",
-        (monitoring_rule_id, rule_name, max_results_per_term, timestamp),
+          (monitoring_rule_id,rule_name,max_results_per_term,status,created_at,
+           workflow_operation_key)
+          VALUES (?,?,?,'queued',?,?)""",
+        (
+            monitoring_rule_id,
+            rule_name,
+            max_results_per_term,
+            timestamp,
+            workflow_operation_key,
+        ),
     )
     batch_id = int(cursor.lastrowid)
     connection.executemany(

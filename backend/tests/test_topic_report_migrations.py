@@ -12,7 +12,11 @@ from schema_fixtures import (
 from test_content_analysis_repository import old_projection
 
 from longtian_api import database as migrations
-from longtian_api.database import Database, DatabaseVersionError
+from longtian_api.database import (
+    CURRENT_DATABASE_VERSION,
+    Database,
+    DatabaseVersionError,
+)
 
 REPORT_TABLES = {
     "topic_report_runs",
@@ -160,11 +164,11 @@ def populated_v13(tmp_path):
     return database
 
 
-def test_genuine_populated_v13_adds_only_reports_and_reopens(tmp_path):
+def test_genuine_populated_v13_adds_only_reports(tmp_path):
     database = populated_v13(tmp_path)
     before = old_projection(database)
-    database.initialize()
-    Database(database.path).initialize()
+    with database.connect() as connection:
+        migrations._migrate_to_version_14(connection)
     after = old_projection(database)
     assert set(after) - set(before) == REPORT_TABLES
     assert all(after[table] == rows for table, rows in before.items())
@@ -173,7 +177,6 @@ def test_genuine_populated_v13_adds_only_reports_and_reopens(tmp_path):
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 14
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
-        assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
         assert connection.execute("PRAGMA busy_timeout").fetchone()[0] == 5000
         assert (
             connection.execute("SELECT enabled FROM analysis_settings").fetchone()[0]
@@ -216,17 +219,21 @@ def test_v14_failure_after_actual_child_insert_rolls_back(tmp_path, monkeypatch)
     with database.connect() as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 13
     monkeypatch.setattr(migration, "migrate", original)
-    database.initialize()
+    with database.connect() as connection:
+        migrations._migrate_to_version_14(connection)
     assert set(old_projection(database)) - set(before) == REPORT_TABLES
 
 
 def test_forward_version_is_rejected_without_changing_any_rows(tmp_path):
     database = populated_v13(tmp_path)
     with database.connect() as connection:
-        connection.execute("PRAGMA user_version=15")
+        connection.execute(f"PRAGMA user_version={CURRENT_DATABASE_VERSION + 1}")
     before = old_projection(database)
     with pytest.raises(DatabaseVersionError):
         database.initialize()
     assert old_projection(database) == before
     with database.connect() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 15
+        assert (
+            connection.execute("PRAGMA user_version").fetchone()[0]
+            == CURRENT_DATABASE_VERSION + 1
+        )

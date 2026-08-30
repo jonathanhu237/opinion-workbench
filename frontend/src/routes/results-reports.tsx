@@ -125,10 +125,10 @@ export function ResultsReports({
           tabIndex={-1}
           className="font-display text-xl"
         >
-          报告 · 第二阶段
+          报告
         </h2>
         <p className="text-sm leading-6 text-muted-foreground">
-          初步分析任务全部处理结束后自动生成一份报告，仅使用本任务已保存的成功文本。相关性判断属于报告阶段；报告失败不会影响第一阶段证据。
+          自动任务会在固定报告阶段使用已保存文本和任务目标；手动初步分析不会自动生成报告。这里也保留历史报告与明确发起的时间范围报告。
         </p>
       </CardHeader>
       <CardContent className="space-y-5 pt-5">
@@ -140,18 +140,18 @@ export function ResultsReports({
         {job && (
           <section
             className="space-y-2 rounded-lg bg-secondary/45 p-3"
-            aria-label={`任务 ${job.id} 的自动报告`}
+            aria-label={`任务 ${job.id} 的关联报告`}
           >
             <p className="text-sm font-medium">
-              初步分析任务 #{job.id} 的后续报告
+              初步分析任务 #{job.id} 的关联报告
             </p>
             {isActiveAnalysisJob(job.status) ? (
               <p role="status" className="text-sm">
-                报告：等待初步分析结束。后来入库的内容不加入本任务，也不逐条重建报告。
+                初步分析仍在进行；本次手动任务不会自动提交报告。
               </p>
             ) : job.status !== 'completed' ? (
               <p className="text-sm">
-                本任务未正常完成，不会自动提交报告；已保存的初步文本仍可查看。
+                本任务未正常完成；已保存的初步文本仍可查看。
               </p>
             ) : automatic.isError ? (
               <div role="alert" className="space-y-2">
@@ -162,12 +162,16 @@ export function ResultsReports({
                   variant="outline"
                   onClick={() => void automatic.refetch()}
                 >
-                  重试读取本次自动报告
+                  重试读取关联报告
                 </Button>
               </div>
-            ) : automatic.isPending || automatic.data?.reports.length === 0 ? (
+            ) : automatic.isPending ? (
               <p role="status" className="text-sm">
-                报告：等待后台接收完成记录，无需再次生成。当前仅刷新状态，不会提交任务。
+                正在读取历史关联报告；当前只读取数据，不会提交任务。
+              </p>
+            ) : automatic.data?.reports.length === 0 ? (
+              <p className="text-sm">
+                本任务没有关联报告；手动初步分析不会自动生成报告。
               </p>
             ) : (
               <div className="space-y-2">
@@ -196,7 +200,7 @@ export function ResultsReports({
           onSaved={saved}
         />
         <p className="text-xs text-muted-foreground">
-          上述时间范围与其他提示词操作是可选项，不是自动报告的前置步骤。
+          上述时间范围与提示词覆盖是独立的明确操作，不会补做采集或初步分析。
         </p>
         {invalidLink && (
           <div role="alert" className="space-y-2">
@@ -331,7 +335,9 @@ export function ResultsReports({
             <p className="text-sm text-muted-foreground">
               {report.selection.kind === 'initial_job'
                 ? `范围固定于初步分析任务 #${report.selection.job_id}`
-                : `首次入库时间：${formatEvidenceDate(report.selection.first_seen_from)}（含）至 ${formatEvidenceDate(report.selection.first_seen_to)}（不含），北京时间`}
+                : report.selection.kind === 'workflow_run'
+                  ? `范围固定于自动运行 #${report.selection.run_id}，使用该运行冻结的任务目标`
+                  : `首次入库时间：${formatEvidenceDate(report.selection.first_seen_from)}（含）至 ${formatEvidenceDate(report.selection.first_seen_to)}（不含），北京时间`}
               {report.parent_report_id !== null
                 ? ` · 基于报告 #${report.parent_report_id} 的独立新版本`
                 : ''}
@@ -366,7 +372,7 @@ export function ResultsReports({
         )}
         {!job && selectedId === null && history.isSuccess && (
           <p className="text-sm text-muted-foreground">
-            开始一次初步分析后，其成功文本将自动形成报告。也可通过可选的时间范围操作使用已保存文字；不会自动补做初步分析。
+            自动任务的报告会显示在这里。也可明确选择时间范围，使用已保存文字生成独立报告；不会自动补做初步分析。
           </p>
         )}
       </CardContent>

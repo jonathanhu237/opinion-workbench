@@ -116,7 +116,7 @@ describe('homepage workbench', () => {
       await screen.findByRole('heading', { name: '当前运行正常' }),
     ).toBeInTheDocument()
     expect(screen.getByText('还没有可阅读的舆情报告')).toBeInTheDocument()
-    expect(screen.getByText('暂无可执行的定时采集计划。')).toBeInTheDocument()
+    expect(screen.getByText('暂无可执行的自动任务计划。')).toBeInTheDocument()
     expect(screen.getByText('5/5 已连接')).toBeInTheDocument()
     expect(screen.queryByText('需要查看')).toBeNull()
     expect(screen.queryByText('今日发现', { exact: true })).toBeNull()
@@ -129,7 +129,7 @@ describe('homepage workbench', () => {
     const snapshot: WorkbenchSnapshot = workbenchFixture({
       attention: [
         {
-          kind: 'collection_schedule',
+          kind: 'automation_task',
           severity: 'warning',
           status: 'missed',
           reason: 'offline',
@@ -168,8 +168,27 @@ describe('homepage workbench', () => {
           occurred_at: workbenchTimestamp,
           unsuccessful_count: null,
         },
+        {
+          kind: 'automation_run',
+          severity: 'error',
+          status: 'failed',
+          reason: 'internal_error',
+          resource_id: 15,
+          owner: '社区自动值守',
+          occurred_at: workbenchTimestamp,
+          unsuccessful_count: null,
+        },
       ],
       activity: {
+        automation: {
+          run_id: 44,
+          task_id: 45,
+          task_name: '社区自动值守',
+          status: 'reporting',
+          active_stage: 'topic_report',
+          created_at: workbenchTimestamp,
+          started_at: workbenchTimestamp,
+        },
         collection: {
           id: 41,
           status: 'running',
@@ -200,11 +219,12 @@ describe('homepage workbench', () => {
           started_at: workbenchTimestamp,
         },
       },
-      next_collection: {
+      next_automation: {
         id: 51,
+        name: '下一班自动任务',
         rule_name: '下一班社区采集',
         due_at: '2026-08-29T09:00:00+00:00',
-        interval_minutes: 60,
+        schedule: { kind: 'interval', interval_minutes: 60 },
       },
       latest_report: completedReport(),
     })
@@ -213,7 +233,7 @@ describe('homepage workbench', () => {
     renderWorkbench()
 
     expect(
-      await screen.findByRole('heading', { name: '当前有 5 项需要查看' }),
+      await screen.findByRole('heading', { name: '当前有 6 项需要查看' }),
     ).toBeInTheDocument()
     expect(
       screen.getByText(
@@ -226,7 +246,8 @@ describe('homepage workbench', () => {
     expect(
       screen.getByText('来源判断已完成，正在组织可读报告'),
     ).toBeInTheDocument()
-    expect(screen.getByText('下一班社区采集')).toBeInTheDocument()
+    expect(screen.getByText('社区自动值守')).toBeInTheDocument()
+    expect(screen.getByText('下一班自动任务')).toBeInTheDocument()
     expect(screen.getAllByRole('progressbar')).toHaveLength(3)
 
     const attention = screen.getByRole('heading', { name: '需要查看' })
@@ -235,10 +256,11 @@ describe('homepage workbench', () => {
     const links = within(attention).getAllByRole('link')
     expect(links.map((link) => link.getAttribute('href'))).toEqual([
       '/platform-accounts',
-      '/collection-runs?schedule=11',
+      '/automation-tasks/11/runs',
       '/collection-batches/12',
       '/results?job=13',
       '/results?report=14',
+      '/automation-runs/15',
     ])
     expect(screen.getByRole('link', { name: /阅读完整报告/u })).toHaveAttribute(
       'href',

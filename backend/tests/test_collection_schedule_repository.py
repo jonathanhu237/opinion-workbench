@@ -15,7 +15,11 @@ from schema_fixtures import (
 from test_content_analysis_repository import old_projection
 
 from longtian_api import database as migrations
-from longtian_api.database import Database, DatabaseVersionError
+from longtian_api.database import (
+    CURRENT_DATABASE_VERSION,
+    Database,
+    DatabaseVersionError,
+)
 from longtian_api.repositories.search_batches import (
     ScheduledDispatchChangedError,
     SearchBatchRepository,
@@ -52,10 +56,21 @@ def test_real_v12_to_v13_preserves_every_old_column_and_reopens(tmp_path):
         "topic_report_node_sources",
         "topic_report_node_children",
         "topic_report_requests",
+        "automation_tasks",
+        "automation_task_platforms",
+        "automation_occurrences",
+        "automation_runs",
+        "automation_stage_attempts",
+        "automation_task_contents",
+        "automation_run_contents",
+        "automation_requests",
     }
     assert all(after[table] == [] for table in set(after) - set(before))
     with database.connect() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 14
+        assert (
+            connection.execute("PRAGMA user_version").fetchone()[0]
+            == CURRENT_DATABASE_VERSION
+        )
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         assert connection.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
         assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
@@ -80,7 +95,7 @@ def test_v13_migration_failure_rolls_back_actual_ddl(tmp_path, monkeypatch):
     assert old_projection(database) == before
     with database.connect() as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 12
-        connection.execute("PRAGMA user_version=15")
+        connection.execute(f"PRAGMA user_version={CURRENT_DATABASE_VERSION + 1}")
     with pytest.raises(DatabaseVersionError):
         database.initialize()
 

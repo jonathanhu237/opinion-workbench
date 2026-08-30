@@ -16,6 +16,44 @@ export const appRoutes: RouteObject[] = [
         element: <Workbench />,
       },
       {
+        path: 'automation-tasks',
+        hydrateFallbackElement: (
+          <p role="status" className="text-sm text-muted-foreground">
+            正在加载自动任务…
+          </p>
+        ),
+        lazy: async () => {
+          const { AutomationTasks } = await import('@/routes/automation-tasks')
+          return { Component: AutomationTasks }
+        },
+      },
+      {
+        path: 'automation-tasks/:taskId/runs',
+        hydrateFallbackElement: (
+          <p role="status" className="text-sm text-muted-foreground">
+            正在加载运行记录…
+          </p>
+        ),
+        lazy: async () => {
+          const { AutomationTaskRuns } =
+            await import('@/routes/automation-tasks')
+          return { Component: AutomationTaskRuns }
+        },
+      },
+      {
+        path: 'automation-runs/:runId',
+        hydrateFallbackElement: (
+          <p role="status" className="text-sm text-muted-foreground">
+            正在加载运行详情…
+          </p>
+        ),
+        lazy: async () => {
+          const { AutomationRunDetail } =
+            await import('@/routes/automation-run-detail')
+          return { Component: AutomationRunDetail }
+        },
+      },
+      {
         path: 'platform-accounts',
         element: <PlatformAccounts />,
       },

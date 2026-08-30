@@ -144,16 +144,6 @@ class TopicReportRepository:
                   'judging','composing')"""
             ).fetchall():
                 self._finish(connection, row[0], "interrupted", recovery=True)
-        # One bounded event per transaction; recovered metadata is never runnable.
-        while True:
-            with self.connection(write=True) as connection:
-                event = connection.execute(
-                    """SELECT job_id FROM analysis_completion_events WHERE
-                      state='pending' ORDER BY id LIMIT 1"""
-                ).fetchone()
-                if event is None:
-                    break
-                self._consume(connection, event[0], recovered=True)
 
     def _require(self, connection, report_id):
         row = connection.execute(
@@ -492,17 +482,19 @@ class TopicReportRepository:
         job_id=None,
         event_id=None,
         parent_id=None,
+        workflow_operation_key=None,
     ):
         import json
 
         return connection.execute(
-            """INSERT INTO topic_report_runs(request_id,trigger,initial_job_id,
-              completion_event_id,
+            """INSERT INTO topic_report_runs(request_id,workflow_operation_key,
+              trigger,initial_job_id,completion_event_id,
           parent_report_id,selection_json,prompt_json,configuration_revision,
           base_url,model,status,created_at)
-          VALUES(?,?,?,?,?,?,?,?,?,?,'queued',?)""",
+          VALUES(?,?,?,?,?,?,?,?,?,?,?,'queued',?)""",
             (
                 request_id,
+                workflow_operation_key,
                 trigger,
                 job_id,
                 event_id,
@@ -660,6 +652,83 @@ class TopicReportRepository:
         if recovered:
             self._finish(connection, report_id, "interrupted", recovery=True)
         return self._read(connection, report_id)
+
+    def create_workflow(
+        self,
+        *,
+        run_id: int,
+        analysis_job_id: int | None,
+        operation_key: str,
+        analysis_goal: str,
+        configuration_revision: int,
+        base_url: str,
+        model: str,
+        initial_prompt_version_id: int,
+        report_prompt_version_id: int,
+    ):
+        """Freeze one workflow-owned report without consuming legacy callbacks."""
+        with self.connection(write=True) as connection:
+            existing = connection.execute(
+                "SELECT id FROM topic_report_runs WHERE workflow_operation_key=?",
+                (operation_key,),
+            ).fetchone()
+            if existing is not None:
+                report = self._read(connection, int(existing[0]))
+                if (
+                    report.selection.kind != "workflow_run"
+                    or report.selection.run_id != run_id
+                    or report.initial_job_id != analysis_job_id
+                ):
+                    raise ValueError("invalid workflow report replay")
+                return report
+
+            provider = ProviderIntent(
+                base_url=base_url,
+                model=model,
+                configuration_revision=configuration_revision,
+            )
+            prompt = ReportPrompt(
+                version_id=None,
+                origin="override",
+                instructions=analysis_goal,
+                content_hash=hashlib.sha256(analysis_goal.encode()).hexdigest(),
+                schema_version="topic-report-v1",
+            )
+            attempts = ()
+            if analysis_job_id is not None:
+                job = self._analyses._read(connection, analysis_job_id)
+                if (
+                    job.status != "completed"
+                    or job.configuration_revision != configuration_revision
+                    or job.base_url != base_url
+                    or job.model != model
+                    or job.initial_prompt.id != initial_prompt_version_id
+                    or job.report_prompt.id != report_prompt_version_id
+                ):
+                    raise ValueError("invalid workflow analysis snapshot")
+                attempts = connection.execute(
+                    """SELECT * FROM content_analysis_attempts
+                       WHERE job_id=? ORDER BY position""",
+                    (analysis_job_id,),
+                ).fetchall()
+
+            report_id = self._new(
+                connection,
+                trigger="automatic",
+                selection={"kind": "workflow_run", "run_id": run_id},
+                prompt=prompt,
+                provider=provider,
+                job_id=analysis_job_id,
+                workflow_operation_key=operation_key,
+            )
+            for attempt in attempts:
+                self._snapshot(
+                    connection,
+                    report_id,
+                    attempt["position"],
+                    attempt=attempt,
+                )
+            return self._read(connection, report_id)
 
     def consume(self, job_id):
         with self.connection(write=True) as connection:

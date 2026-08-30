@@ -33,13 +33,6 @@ import { fetchSearchRuns } from './lib/api/search-runs'
 import { fetchWorkbench } from './lib/api/workbench'
 import { workbenchFixture } from './lib/api/workbench.fixtures'
 
-vi.mock('./lib/api/collection-schedules', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('./lib/api/collection-schedules')>()),
-  fetchCollectionSchedules: vi
-    .fn()
-    .mockResolvedValue({ schedules: [], next_before_id: null }),
-}))
-
 vi.mock('./lib/api/health', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./lib/api/health')>()
 
@@ -249,7 +242,7 @@ describe('Longtian public opinion application', () => {
     expect(mockedFetchMonitoringRules).not.toHaveBeenCalled()
   })
 
-  it('keeps only the six real navigation destinations and marks them exactly', async () => {
+  it('keeps only the seven real navigation destinations and marks them exactly', async () => {
     const user = userEvent.setup()
     const { router } = renderRoute()
 
@@ -259,12 +252,13 @@ describe('Longtian public opinion application', () => {
     ).toBeInTheDocument()
     const navigation = screen.getByRole('navigation', { name: '主导航' })
     const links = within(navigation).getAllByRole('link')
-    expect(links).toHaveLength(6)
+    expect(links).toHaveLength(7)
     expect(links.map((link) => link.textContent)).toEqual([
       '工作台',
       '平台账号',
       '监控规则',
-      '采集任务',
+      '自动任务',
+      '手工采集',
       '结果与分析',
       'AI 配置',
     ])
@@ -325,18 +319,18 @@ describe('Longtian public opinion application', () => {
     expect(screen.getByRole('main')).toHaveAccessibleName('监控规则')
     expect(screen.getByRole('main')).toHaveFocus()
 
-    await user.click(within(navigation).getByRole('link', { name: '采集任务' }))
+    await user.click(within(navigation).getByRole('link', { name: '手工采集' }))
 
     await waitFor(() =>
       expect(router.state.location.pathname).toBe('/collection-runs'),
     )
     expect(
-      await screen.findByRole('heading', { name: '采集任务', level: 1 }),
+      await screen.findByRole('heading', { name: '手工采集', level: 1 }),
     ).toBeInTheDocument()
     expect(
-      within(navigation).getByRole('link', { name: '采集任务' }),
+      within(navigation).getByRole('link', { name: '手工采集' }),
     ).toHaveAttribute('aria-current', 'page')
-    expect(screen.getByRole('main')).toHaveAccessibleName('采集任务')
+    expect(screen.getByRole('main')).toHaveAccessibleName('手工采集')
     expect(screen.getByRole('main')).toHaveFocus()
 
     await user.click(within(navigation).getByRole('link', { name: 'AI 配置' }))
@@ -398,12 +392,13 @@ describe('Longtian public opinion application', () => {
       name: '主导航',
     })
     const links = within(navigation).getAllByRole('link')
-    expect(links).toHaveLength(6)
+    expect(links).toHaveLength(7)
     expect(links.map((link) => link.textContent)).toEqual([
       '工作台',
       '平台账号',
       '监控规则',
-      '采集任务',
+      '自动任务',
+      '手工采集',
       '结果与分析',
       'AI 配置',
     ])

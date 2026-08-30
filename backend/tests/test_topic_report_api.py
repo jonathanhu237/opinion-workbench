@@ -19,18 +19,19 @@ def assert_error(response, code):
     assert response.headers["cache-control"] == "no-store"
 
 
-def initial_report(client, app):
+def initial_report(client, app, database):
     admitted = client.post("/api/v1/content-analysis-jobs", json=body(client))
     assert admitted.status_code == 202, admitted.text
-    job_id = admitted.json()["job"]["id"]
     client.portal.call(finish, app.state.content_analysis_service)
+    report = client.post(
+        "/api/v1/topic-reports", json=interval_request(database).model_dump()
+    )
+    assert report.status_code == 202, report.text
     client.portal.call(finish, app.state.topic_report_service)
-    reports = client.get(f"/api/v1/topic-reports?initial_job_id={job_id}")
-    assert reports.status_code == 200, reports.text
-    return reports.json()["reports"][0]
+    return client.get(f"/api/v1/topic-reports/{report.json()['id']}").json()
 
 
-def test_auto_report_selection_frozen_pages_and_new_version_ids(tmp_path):
+def test_explicit_report_selection_frozen_pages_and_new_version_ids(tmp_path):
     app, db, model, media = api_environment(tmp_path, count=10)
     with TestClient(app, base_url="http://127.0.0.1") as client:
         saved(client)
@@ -44,7 +45,7 @@ def test_auto_report_selection_frozen_pages_and_new_version_ids(tmp_path):
             "next_before_id": None,
         }
         assert not model.calls and not media.calls
-        original = initial_report(client, app)
+        original = initial_report(client, app, db)
         assert original["status"] == "completed"
         report_id = original["id"]
         sources = client.get(
@@ -82,9 +83,7 @@ def test_auto_report_selection_frozen_pages_and_new_version_ids(tmp_path):
             client.get(f"/api/v1/topic-reports/{retry_id}/sections/{root['id']}"),
             "topic_report_section_not_found",
         )
-        latest = client.get(
-            f"/api/v1/topic-reports?initial_job_id={original['initial_job_id']}&limit=1"
-        ).json()
+        latest = client.get("/api/v1/topic-reports?limit=1").json()
         assert (
             latest["reports"][0]["id"] == retry_id
             and latest["next_before_id"] == retry_id
@@ -223,15 +222,20 @@ def test_interval_rejects_sub_microsecond_precision_without_admission(tmp_path, 
 
 
 def test_active_revision_cancel_and_retry_contracts(tmp_path):
-    app, _, model, _ = api_environment(tmp_path, count=1)
+    app, database, model, _ = api_environment(tmp_path, count=1)
     model.block_stage = "judgment"
     with TestClient(app, base_url="http://127.0.0.1") as client:
         saved(client)
-        admission = client.post("/api/v1/content-analysis-jobs", json=body(client))
+        client.post("/api/v1/content-analysis-jobs", json=body(client))
         client.portal.call(finish, app.state.content_analysis_service)
+        created = client.post(
+            "/api/v1/topic-reports",
+            json=interval_request(database).model_dump(),
+        )
+        assert created.status_code == 202, created.text
         client.portal.call(model.entered.wait)
         report = client.get("/api/v1/topic-reports").json()["reports"][0]
-        assert report["initial_job_id"] == admission.json()["job"]["id"]
+        assert report["initial_job_id"] is None
         report_id = report["id"]
         assert_error(
             client.post(
@@ -296,7 +300,7 @@ def test_interval_semantics_prompt_cas_and_storage_errors(tmp_path, monkeypatch)
 def test_real_lifespan_stops_scheduler_then_all_owners_after_report_failure(tmp_path):
     app, _, _, _ = api_environment(tmp_path, count=0)
     names = [
-        "collection_schedule_service",
+        "automation_workflow_service",
         "content_analysis_service",
         "topic_report_service",
         "ai_summary_service",

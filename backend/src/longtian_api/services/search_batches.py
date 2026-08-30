@@ -69,7 +69,10 @@ class SearchBatchRepositoryProtocol(Protocol):
         terms: Sequence[str],
         platforms: Sequence[SearchPlatform],
         max_results_per_term: int,
+        workflow_operation_key: str | None = None,
     ) -> SearchBatchRecord: ...
+
+    def workflow_batch(self, operation_key: str) -> SearchBatchRecord | None: ...
 
     def mark_running(self, batch_id: int) -> SearchBatchRecord: ...
 
@@ -177,6 +180,97 @@ class SearchBatchService:
         self._control_task: asyncio.Task | None = None
         self._cancelling = False
         self.on_collection_finished = None
+
+    async def start_workflow_batch(
+        self,
+        *,
+        monitoring_rule_id: int,
+        rule_name: str,
+        terms: Sequence[str],
+        platforms: Sequence[SearchPlatform],
+        max_results_per_term: int,
+        operation_key: str,
+    ) -> SearchBatchDetail:
+        """Admit one workflow collection using its frozen snapshot.
+
+        Unlike the manual endpoint this method never rereads the mutable rule.
+        The workflow has already validated and frozen the rule identity at
+        admission; the durable operation key makes retries after a crash a
+        read-only replay of the same batch.
+        """
+        return await settle(
+            self._start_workflow_batch(
+                monitoring_rule_id=monitoring_rule_id,
+                rule_name=rule_name,
+                terms=terms,
+                platforms=platforms,
+                max_results_per_term=max_results_per_term,
+                operation_key=operation_key,
+            )
+        )
+
+    async def _start_workflow_batch(
+        self,
+        *,
+        monitoring_rule_id: int,
+        rule_name: str,
+        terms: Sequence[str],
+        platforms: Sequence[SearchPlatform],
+        max_results_per_term: int,
+        operation_key: str,
+    ) -> SearchBatchDetail:
+        existing_lookup = getattr(self._repository, "workflow_batch", None)
+        if existing_lookup is not None:
+            existing = await database_call(existing_lookup, operation_key)
+            if existing is not None:
+                return _to_detail(existing)
+        owner = BrowserOperationOwner("search_batch", uuid4())
+        async with self._lock:
+            if existing_lookup is not None:
+                existing = await database_call(existing_lookup, operation_key)
+                if existing is not None:
+                    return _to_detail(existing)
+            if self._shutdown_started or self._active_batch_id is not None:
+                raise _browser_operation_active()
+            if not self._search_runs.browser_session_available:
+                raise SearchBatchError(
+                    status_code=409,
+                    code="browser_unavailable",
+                    message="当前浏览器会话不可用于采集。",
+                )
+            if not await self._browser_operations.try_claim(owner):
+                raise _browser_operation_active()
+            try:
+                create = self._repository.create_batch
+                try:
+                    record = await database_call(
+                        create,
+                        monitoring_rule_id=monitoring_rule_id,
+                        rule_name=rule_name,
+                        terms=tuple(terms),
+                        platforms=tuple(platforms),
+                        max_results_per_term=max_results_per_term,
+                        workflow_operation_key=operation_key,
+                    )
+                except TypeError:
+                    # Test doubles implementing the pre-workflow protocol can
+                    # still be used; durable production repositories support
+                    # the key and therefore never take this compatibility path.
+                    record = await database_call(
+                        create,
+                        monitoring_rule_id=monitoring_rule_id,
+                        rule_name=rule_name,
+                        terms=tuple(terms),
+                        platforms=tuple(platforms),
+                        max_results_per_term=max_results_per_term,
+                    )
+            except BaseException:
+                await self._browser_operations.release(owner)
+                raise
+            self._active_batch_id = record.id
+            self._active_owner = owner
+            self._current_task = self._create_runner(record.id, owner)
+        return _to_detail(record)
 
     def initialize(self) -> None:
         self._repository.initialize()

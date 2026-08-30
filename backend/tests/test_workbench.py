@@ -29,74 +29,78 @@ def database(tmp_path):
     return owner
 
 
-def test_empty_snapshot_and_global_next_schedule(tmp_path):
+def _automation_task(connection, name, due_at, *, enabled=True):
+    return connection.execute(
+        """INSERT INTO automation_tasks(name,normalized_name,monitoring_rule_id,
+          max_results_per_term,analysis_goal,schedule_kind,interval_minutes,
+          enabled,revision,next_due_at,anchor_at,created_at,updated_at)
+          VALUES (?,?,1,10,'识别与任务目标相关的舆情','interval',30,?,1,?,?,?,?)""",
+        (
+            name,
+            name,
+            int(enabled),
+            due_at if enabled else None,
+            NOW.isoformat() if enabled else None,
+            NOW.isoformat(),
+            NOW.isoformat(),
+        ),
+    ).lastrowid
+
+
+def test_empty_snapshot_and_global_next_automation(tmp_path):
     owner = database(tmp_path)
     assert service(owner).read().model_dump() == {
         "observed_at": NOW.isoformat(),
         "attention": [],
         "activity": {
+            "automation": None,
             "collection": None,
             "initial_analysis": None,
             "report": None,
         },
-        "next_collection": None,
+        "next_automation": None,
         "latest_report": None,
     }
     with owner.connect() as connection:
         for name, minutes in (("较晚规则", 60), ("最近规则", 15)):
             due = (NOW + timedelta(minutes=minutes)).isoformat()
-            connection.execute(
-                """INSERT INTO collection_schedules(monitoring_rule_id,rule_name,
-                  max_results_per_term,interval_minutes,enabled,anchor_at,next_due_at,
-                  created_at,updated_at) VALUES (1,?,10,30,1,?,?,?,?)""",
-                (name, NOW.isoformat(), due, NOW.isoformat(), NOW.isoformat()),
-            )
-    next_collection = service(owner).read().next_collection
-    assert next_collection is not None
-    assert next_collection.rule_name == "最近规则"
-    assert next_collection.due_at == (NOW + timedelta(minutes=15)).isoformat()
+            _automation_task(connection, name, due)
+    next_automation = service(owner).read().next_automation
+    assert next_automation is not None
+    assert next_automation.name == "最近规则"
+    assert next_automation.rule_name == "龙田街道及四个社区"
+    assert next_automation.due_at == (NOW + timedelta(minutes=15)).isoformat()
+    assert next_automation.schedule.interval_minutes == 30
 
 
-def test_unavailable_schedule_automation_is_not_presented_as_next_collection(tmp_path):
+def test_unavailable_workflow_is_not_presented_as_next_automation(tmp_path):
     owner = database(tmp_path)
     with owner.connect() as connection:
-        connection.execute(
-            """INSERT INTO collection_schedules(monitoring_rule_id,rule_name,
-              max_results_per_term,interval_minutes,enabled,anchor_at,next_due_at,
-              created_at,updated_at) VALUES (1,'社区规则',10,30,1,?,?,?,?)""",
-            (
-                NOW.isoformat(),
-                (NOW + timedelta(minutes=30)).isoformat(),
-                NOW.isoformat(),
-                NOW.isoformat(),
-            ),
+        _automation_task(
+            connection,
+            "社区任务",
+            (NOW + timedelta(minutes=30)).isoformat(),
         )
-    assert service(owner).read().next_collection is not None
+    assert service(owner).read().next_automation is not None
     assert (
         WorkbenchService(
             owner,
             clock=lambda: NOW,
-            schedules_available=False,
+            automation_available=False,
         )
         .read()
-        .next_collection
+        .next_automation
         is None
     )
 
 
-def test_invalid_enabled_schedule_is_attention_and_not_next_collection(tmp_path):
+def test_invalid_enabled_automation_is_attention_and_not_next_automation(tmp_path):
     owner = database(tmp_path)
     with owner.connect() as connection:
-        connection.execute(
-            """INSERT INTO collection_schedules(monitoring_rule_id,rule_name,
-              max_results_per_term,interval_minutes,enabled,anchor_at,next_due_at,
-              created_at,updated_at) VALUES (1,'社区规则',10,30,1,?,?,?,?)""",
-            (
-                NOW.isoformat(),
-                (NOW + timedelta(minutes=30)).isoformat(),
-                NOW.isoformat(),
-                NOW.isoformat(),
-            ),
+        _automation_task(
+            connection,
+            "社区任务",
+            (NOW + timedelta(minutes=30)).isoformat(),
         )
         connection.execute("DELETE FROM monitoring_rule_terms WHERE rule_id=1")
         connection.executemany(
@@ -106,32 +110,26 @@ def test_invalid_enabled_schedule_is_attention_and_not_next_collection(tmp_path)
         )
 
     snapshot = service(owner).read()
-    assert snapshot.next_collection is None
+    assert snapshot.next_automation is None
     assert [(item.status, item.reason) for item in snapshot.attention] == [
         ("invalid", "too_many_search_terms")
     ]
 
 
-def test_schedule_issue_clears_on_revision_and_disabled_schedule_is_ignored(tmp_path):
+def test_automation_issue_clears_on_revision_and_disabled_task_is_ignored(tmp_path):
     owner = database(tmp_path)
     with owner.connect() as connection:
-        schedule_id = connection.execute(
-            """INSERT INTO collection_schedules(monitoring_rule_id,rule_name,
-              max_results_per_term,interval_minutes,enabled,anchor_at,next_due_at,
-              created_at,updated_at) VALUES (1,'社区规则',10,30,1,?,?,?,?)""",
-            (
-                NOW.isoformat(),
-                (NOW + timedelta(minutes=30)).isoformat(),
-                NOW.isoformat(),
-                NOW.isoformat(),
-            ),
-        ).lastrowid
+        task_id = _automation_task(
+            connection,
+            "社区任务",
+            (NOW + timedelta(minutes=30)).isoformat(),
+        )
         connection.execute(
-            """INSERT INTO collection_occurrences(schedule_id,schedule_revision,
-              due_at,dispatch_token,status,reason,missed_count,missed_until,created_at)
-              VALUES (?,1,?,'missed-token','missed','offline',2,?,?)""",
+            """INSERT INTO automation_occurrences(task_id,task_revision,
+              due_at,status,reason,missed_count,missed_until,created_at)
+              VALUES (?,1,?,'missed','offline',2,?,?)""",
             (
-                schedule_id,
+                task_id,
                 (NOW - timedelta(hours=1)).isoformat(),
                 NOW.isoformat(),
                 NOW.isoformat(),
@@ -139,15 +137,15 @@ def test_schedule_issue_clears_on_revision_and_disabled_schedule_is_ignored(tmp_
         )
     issue = service(owner).read().attention[0]
     assert (issue.kind, issue.status, issue.reason, issue.unsuccessful_count) == (
-        "collection_schedule",
+        "automation_task",
         "missed",
         "offline",
         2,
     )
     with owner.connect() as connection:
         connection.execute(
-            """UPDATE collection_schedules SET revision=2,updated_at=? WHERE id=?""",
-            (NOW.isoformat(), schedule_id),
+            """UPDATE automation_tasks SET revision=2,updated_at=? WHERE id=?""",
+            (NOW.isoformat(), task_id),
         )
     assert service(owner).read().attention == []
     with owner.connect() as connection:
@@ -159,9 +157,9 @@ def test_schedule_issue_clears_on_revision_and_disabled_schedule_is_ignored(tmp_
     assert (issue.status, issue.reason) == ("invalid", "monitoring_rule_disabled")
     with owner.connect() as connection:
         connection.execute(
-            """UPDATE collection_schedules SET enabled=0,anchor_at=NULL,
+            """UPDATE automation_tasks SET enabled=0,anchor_at=NULL,
               next_due_at=NULL,updated_at=? WHERE id=?""",
-            (NOW.isoformat(), schedule_id),
+            (NOW.isoformat(), task_id),
         )
     assert service(owner).read().attention == []
 

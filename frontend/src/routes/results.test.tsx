@@ -238,9 +238,7 @@ describe('Results and Analysis', () => {
     })
     vi.mocked(fetchReportSection).mockResolvedValue(reportSectionFixture())
     renderResults('/results?job=7', true)
-    expect(
-      await screen.findByRole('heading', { name: '报告 · 第二阶段' }),
-    ).toBeVisible()
+    expect(await screen.findByRole('heading', { name: '报告' })).toBeVisible()
     expect(
       await screen.findByRole('region', { name: '文字报告 31' }),
     ).toBeVisible()
@@ -760,9 +758,7 @@ describe('Results and Analysis', () => {
     expect(
       screen.getByText('已保存 8 条 · 未成功 2 条 · 待处理 0 条'),
     ).toBeVisible()
-    expect(
-      screen.getByText(/此状态不代表全部分析成功或报告已生成/),
-    ).toBeVisible()
+    expect(screen.getByText(/本任务已全部处理并保存完成记录/)).toBeVisible()
     await user.click(screen.getByRole('button', { name: '取消任务 7' }))
     await waitFor(() =>
       expect(cancelAnalysisJob).toHaveBeenCalledWith(7, expect.anything()),

@@ -174,7 +174,7 @@ describe('automatic second-stage report views', () => {
         : { reports: [reportFixture()], next_before_id: null },
     )
     const first = renderReports()
-    expect(await screen.findByText(/等待后台接收完成记录/)).toBeVisible()
+    expect(await screen.findByText(/本任务没有关联报告/)).toBeVisible()
     assertNoMutation()
     empty = false
     expect(
@@ -207,7 +207,7 @@ describe('automatic second-stage report views', () => {
   })
   it('waits for normal settlement and does not automatically report cancelled upstream work', async () => {
     const view = renderReports('/results?job=7', analysisJobFixture())
-    expect(await screen.findByText(/报告：等待初步分析结束/)).toBeVisible()
+    expect(await screen.findByText(/初步分析仍在进行/)).toBeVisible()
     expect(fetchTopicReports).not.toHaveBeenCalledWith(expect.anything(), {
       initialJobId: 7,
     })
@@ -221,7 +221,7 @@ describe('automatic second-stage report views', () => {
       }),
     )
     expect(
-      await screen.findByText(/本任务未正常完成，不会自动提交报告/),
+      await screen.findByText(/本任务未正常完成；已保存的初步文本仍可查看/),
     ).toBeVisible()
     assertNoMutation()
   })
@@ -247,9 +247,7 @@ describe('automatic second-stage report views', () => {
       )
       renderReports()
       expect(await screen.findByText(`报告：${label}`)).toBeVisible()
-      expect(
-        screen.getByRole('heading', { name: '报告 · 第二阶段' }),
-      ).toBeVisible()
+      expect(screen.getByRole('heading', { name: '报告' })).toBeVisible()
       expect(screen.queryByText(/第三阶段/)).toBeNull()
       assertNoMutation()
     },
@@ -465,9 +463,7 @@ describe('automatic second-stage report views', () => {
     expect(router.state.location.search).toContain('report=30')
     expect(router.state.location.search).not.toContain('report_sources_offset')
     expect(router.state.location.search).not.toContain('report_section=')
-    expect(
-      screen.getByRole('heading', { name: '报告 · 第二阶段' }),
-    ).toHaveFocus()
+    expect(screen.getByRole('heading', { name: '报告' })).toHaveFocus()
     assertNoMutation()
   })
   it('cancels only the report with observed revision and fences a late active detail read', async () => {

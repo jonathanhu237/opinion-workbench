@@ -307,10 +307,10 @@ export function ResultsJobs({
               </p>
               <p className="text-sm text-muted-foreground">
                 {job.completion_event_id !== null
-                  ? '本任务已全部处理并保存完成记录；此状态不代表全部分析成功或报告已生成。'
+                  ? '本任务已全部处理并保存完成记录；手动初步分析不会自动生成报告。'
                   : job.status === 'cancelled' || job.status === 'interrupted'
                     ? '已保存的初步分析仍可查看；本任务不会自动生成报告。'
-                    : '每条分析独立保存，任务结束后才记录一次完成。取消会停止本任务的自动后续处理。'}
+                    : '每条分析独立保存；取消只停止本次初步分析，不会触发自动报告。'}
               </p>
               <FrozenAnalysisPrompts job={job} />
               {items.isPending && (

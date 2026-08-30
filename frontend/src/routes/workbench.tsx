@@ -26,11 +26,13 @@ import type {
 } from '@/lib/api/platform-connections'
 import type {
   WorkbenchAnalysisActivity,
+  WorkbenchAutomationActivity,
   WorkbenchAttention,
   WorkbenchCollectionActivity,
   WorkbenchReportActivity,
   WorkbenchSnapshot,
 } from '@/lib/api/workbench'
+import { automationScheduleLabel } from '@/lib/api/automation-workflows'
 import { cn } from '@/lib/utils'
 
 const dateFormatter = new Intl.DateTimeFormat('zh-CN', {
@@ -49,14 +51,24 @@ const platformLabels = {
   xhs: '小红书',
 } as const
 
-function formatTimestamp(value: string) {
-  return dateFormatter.format(new Date(value))
+function formatTimestamp(value: string, timeZone?: string) {
+  if (timeZone === undefined) return dateFormatter.format(new Date(value))
+  return new Intl.DateTimeFormat('zh-CN', {
+    timeZone,
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(new Date(value))
 }
 
 function attentionLink(item: WorkbenchAttention) {
   switch (item.kind) {
-    case 'collection_schedule':
-      return `/collection-runs?schedule=${item.resource_id}`
+    case 'automation_task':
+      return `/automation-tasks/${item.resource_id}/runs`
+    case 'automation_run':
+      return `/automation-runs/${item.resource_id}`
     case 'collection_batch':
       return `/collection-batches/${item.resource_id}`
     case 'initial_analysis':
@@ -68,8 +80,18 @@ function attentionLink(item: WorkbenchAttention) {
 
 function attentionTitle(item: WorkbenchAttention) {
   switch (item.kind) {
-    case 'collection_schedule':
-      return '定时采集未按计划进入批次'
+    case 'automation_task':
+      return item.status === 'invalid'
+        ? '自动任务配置需要查看'
+        : item.status === 'skipped'
+          ? '自动任务本轮已跳过'
+          : item.status === 'missed'
+            ? '自动任务错过计划时间'
+            : '自动任务计划需要查看'
+    case 'automation_run':
+      return item.status === 'configuration_blocked'
+        ? '自动任务运行被 AI 配置阻断'
+        : '自动任务运行未正常结束'
     case 'collection_batch':
       return item.status === 'paused_for_manual_action'
         ? '采集批次需要在原页面继续'
@@ -106,6 +128,12 @@ function reasonCopy(item: WorkbenchAttention) {
     unsuccessful_members: '部分内容未成功完成，成功内容仍已保存。',
   }
   if (item.reason && copies[item.reason]) return copies[item.reason]
+  if (item.status === 'previous_run_active') {
+    return '上一轮仍在运行，本次没有排队。'
+  }
+  if (item.status === 'configuration_unavailable') {
+    return '当前 AI 配置不可用，任务暂未运行。'
+  }
   if (item.status === 'failed') return '本次任务没有生成新的可读报告。'
   return '请进入对应页面查看已保存的状态与原因。'
 }
@@ -432,6 +460,35 @@ function ActivityStage({
   )
 }
 
+function automationStage(
+  activity: WorkbenchAutomationActivity | null,
+): StageProps {
+  const statuses: Record<WorkbenchAutomationActivity['status'], string> = {
+    queued: '排队中',
+    collecting: '采集中',
+    analysing: '初步分析中',
+    reporting: '生成报告中',
+  }
+  const activeStageLabels: Record<
+    NonNullable<WorkbenchAutomationActivity['active_stage']>,
+    string
+  > = {
+    collection: '采集',
+    initial_analysis: '初步分析',
+    topic_report: '相关性判断与报告',
+  }
+  return {
+    label: '自动任务',
+    status: activity ? statuses[activity.status] : '空闲',
+    detail: activity
+      ? `${activity.task_name}${activity.active_stage ? ` · 当前阶段：${activeStageLabels[activity.active_stage]}` : ''}`
+      : '当前没有进行中的自动任务',
+    active: activity !== null,
+    href: activity ? `/automation-runs/${activity.run_id}` : undefined,
+    icon: Activity,
+  }
+}
+
 function collectionStage(
   activity: WorkbenchCollectionActivity | null,
 ): StageProps {
@@ -557,12 +614,17 @@ function ActivityRail({
             <Skeleton className="h-12 w-full" />
           </div>
         ) : snapshot ? (
-          <div aria-label="采集、初步分析和报告运行状态">
-            <ActivityStage {...collectionStage(snapshot.activity.collection)} />
-            <ActivityStage
-              {...analysisStage(snapshot.activity.initial_analysis)}
-            />
-            <ActivityStage {...reportStage(snapshot.activity.report)} />
+          <div aria-label="自动任务与固定工作流运行状态">
+            <ActivityStage {...automationStage(snapshot.activity.automation)} />
+            <div aria-label="采集、初步分析和报告运行状态">
+              <ActivityStage
+                {...collectionStage(snapshot.activity.collection)}
+              />
+              <ActivityStage
+                {...analysisStage(snapshot.activity.initial_analysis)}
+              />
+              <ActivityStage {...reportStage(snapshot.activity.report)} />
+            </div>
           </div>
         ) : (
           <p className="py-4 text-sm text-muted-foreground">
@@ -571,27 +633,32 @@ function ActivityRail({
         )}
 
         <div className="mt-2 space-y-4 border-t pt-5">
-          <section aria-labelledby="next-collection-heading">
+          <section aria-labelledby="next-automation-heading">
             <div className="flex items-center gap-2">
               <Clock3 className="size-4 text-primary" aria-hidden />
-              <h3 id="next-collection-heading" className="font-medium">
-                下一次定时采集
+              <h3 id="next-automation-heading" className="font-medium">
+                下一次自动任务
               </h3>
             </div>
-            {snapshot?.next_collection ? (
+            {snapshot?.next_automation ? (
               <div className="mt-2 flex items-start justify-between gap-3">
                 <div>
-                  <p className="text-sm">
-                    {snapshot.next_collection.rule_name}
-                  </p>
+                  <p className="text-sm">{snapshot.next_automation.name}</p>
                   <p className="mt-1 text-xs text-muted-foreground">
-                    {formatTimestamp(snapshot.next_collection.due_at)} · 每{' '}
-                    {snapshot.next_collection.interval_minutes} 分钟
+                    {snapshot.next_automation.rule_name} ·{' '}
+                    {formatTimestamp(
+                      snapshot.next_automation.due_at,
+                      snapshot.next_automation.schedule.kind === 'daily'
+                        ? snapshot.next_automation.schedule.timezone
+                        : undefined,
+                    )}{' '}
+                    ·{' '}
+                    {automationScheduleLabel(snapshot.next_automation.schedule)}
                   </p>
                 </div>
                 <Link
-                  to={`/collection-runs?schedule=${snapshot.next_collection.id}`}
-                  aria-label="查看下一次定时采集"
+                  to={`/automation-tasks/${snapshot.next_automation.id}/runs`}
+                  aria-label="查看下一次自动任务"
                   className={cn(
                     buttonVariants({ variant: 'ghost', size: 'icon-sm' }),
                     'shrink-0',
@@ -602,7 +669,7 @@ function ActivityRail({
               </div>
             ) : snapshot ? (
               <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                暂无可执行的定时采集计划。
+                暂无可执行的自动任务计划。
               </p>
             ) : (
               <p className="mt-2 text-sm text-muted-foreground">暂不可用</p>
@@ -692,7 +759,7 @@ export function Workbench() {
       : fullyKnown
         ? {
             title: '当前运行正常',
-            detail: '已读取持久任务、定时计划、最新报告与平台连接状态。',
+            detail: '已读取自动任务、计划、最新报告与平台连接状态。',
             icon: CheckCircle2,
             tone: 'normal',
           }

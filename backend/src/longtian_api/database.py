@@ -4,7 +4,7 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
-CURRENT_DATABASE_VERSION = 14
+CURRENT_DATABASE_VERSION = 15
 DEFAULT_RULE_NAME = "龙田街道及四个社区"
 DEFAULT_RULE_TERMS = (
     "龙田街道",
@@ -94,6 +94,9 @@ class Database:
                 version = 13
             if version < 14:
                 _migrate_to_version_14(connection)
+                version = 14
+            if version < 15:
+                _migrate_to_version_15(connection)
         finally:
             connection.close()
 
@@ -118,6 +121,32 @@ def _migrate_to_version_14(connection: sqlite3.Connection) -> None:
             raise DatabaseVersionError("Unsupported database migration source version.")
         migrate(connection)
         connection.execute("PRAGMA user_version = 14")
+        connection.execute("COMMIT")
+    except BaseException:
+        if connection.in_transaction:
+            connection.execute("ROLLBACK")
+        raise
+
+
+def _migrate_to_version_15(connection: sqlite3.Connection) -> None:
+    """Append fixed-purpose automatic workflow persistence.
+
+    The migration is deliberately additive.  Existing collection, analysis and
+    report history is retained as-is; an installation with no automation rows
+    starts with an empty task list and no enabled work.
+    """
+    from longtian_api.migrations.automation_workflows import migrate
+
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        version = _read_user_version(connection)
+        if version >= 15:
+            connection.execute("COMMIT")
+            return
+        if version != 14:
+            raise DatabaseVersionError("Unsupported database migration source version.")
+        migrate(connection)
+        connection.execute("PRAGMA user_version = 15")
         connection.execute("COMMIT")
     except BaseException:
         if connection.in_transaction:

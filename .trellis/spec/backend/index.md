@@ -27,10 +27,11 @@ This directory contains guidelines for backend development. Fill in each file wi
 | [Batch Search](./batch-search-guidelines.md) | Serial batches, v10 proof checkpoints, guarded manual recovery, merged results and UI/API contracts | Active |
 | [AI Configuration](./ai-configuration-guidelines.md) | Single-model settings, protected credentials, exclusive operations, text testing, and secret-safe UI/API contracts | Active |
 | [Manual AI Summaries](./ai-summary-guidelines.md) | Full-run snapshots, reusable item analysis, text-only reports, explicit consent, usage and cross-layer validation | Active |
-| [Independent Initial Analysis](./initial-analysis-guidelines.md) | Global results, immutable prompts/evidence, uncapped bulk admission, legacy interlocks and durable completion events | Active |
-| [Fixed-Interval Collection](./collection-schedule-guidelines.md) | Durable schedule/occurrence admission, busy skips, clock/restart recovery and independent collection UI | Active |
-| [Automatic Text Reports](./topic-report-guidelines.md) | Frozen completion-event reports, bounded text graphs, independent retry, usage and source history | Active |
-| [Homepage Workbench](./workbench-guidelines.md) | Read-only duty snapshot, current-owner attention, latest readable report, polling and UI truthfulness | Active |
+| [Independent Initial Analysis](./initial-analysis-guidelines.md) | Global results, immutable prompts/evidence, uncapped explicit admission and workflow child adapter | Active |
+| [Unified Opinion Automation](./automation-workflow-guidelines.md) | Fixed collection-to-analysis-to-report orchestration, task goals, durable retry, cancellation and task-scoped new content | Active |
+| [Historical Fixed-Interval Collection](./collection-schedule-guidelines.md) | Retired v13 schedule route/lifecycle and preserved storage context | Historical |
+| [Automatic Text Reports](./topic-report-guidelines.md) | Saved-evidence judgment/composition adapter, bounded text graphs, retry, usage and source history | Active |
+| [Homepage Workbench](./workbench-guidelines.md) | Read-only automation duty snapshot, current-owner attention, latest readable report, polling and UI truthfulness | Active |
 | [Media Projection Fidelity](./media-projection-guidelines.md) | Preserve absent versus malformed media across minimized source projections; prevent false-ready input | Active |
 
 ---

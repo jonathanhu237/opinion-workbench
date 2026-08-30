@@ -53,7 +53,6 @@ def test_v11_appends_only_summary_tables_preserving_actual_v10_rows(tmp_path):
         assert (
             connection.execute("PRAGMA user_version").fetchone()[0]
             == CURRENT_DATABASE_VERSION
-            == 14
         )
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         for table, rows in before.items():

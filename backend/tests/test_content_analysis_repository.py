@@ -66,7 +66,10 @@ def test_genuine_v11_preserves_old_data_and_forward_only_history(tmp_path):
     assert {r.analysis_state for r in results.items} == {"never_started"}
     assert ContentAnalysisRepository(database).list().jobs == []
     with database.connect() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 14
+        assert (
+            connection.execute("PRAGMA user_version").fetchone()[0]
+            == migrations.CURRENT_DATABASE_VERSION
+        )
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         assert (
             connection.execute(

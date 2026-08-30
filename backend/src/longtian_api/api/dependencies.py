@@ -5,6 +5,7 @@ from typing import Annotated
 from fastapi import Depends, Request
 
 from longtian_api.services.ai_settings import AISettingsService
+from longtian_api.services.automation_workflows import AutomationWorkflowService
 from longtian_api.services.monitoring_rules import MonitoringRuleService
 from longtian_api.services.platform_connections import PlatformConnectionService
 from longtian_api.services.search_batches import SearchBatchService
@@ -55,3 +56,14 @@ def get_ai_settings_service(request: Request) -> AISettingsService:
 
 
 AISettingsServiceDep = Annotated[AISettingsService, Depends(get_ai_settings_service)]
+
+
+def get_automation_workflow_service(request: Request) -> AutomationWorkflowService:
+    """Retrieve the single fixed-pipeline workflow owner."""
+
+    return request.app.state.automation_workflow_service
+
+
+AutomationWorkflowServiceDep = Annotated[
+    AutomationWorkflowService, Depends(get_automation_workflow_service)
+]

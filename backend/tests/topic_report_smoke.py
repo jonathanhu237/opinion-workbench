@@ -140,7 +140,9 @@ def create_smoke_app() -> FastAPI:
         )
 
     app, database, model, media = api_environment(
-        Path(temporary.name), count=0, search_run_service_factory=runs_factory
+        Path(temporary.name).resolve(),
+        count=0,
+        search_run_service_factory=runs_factory,
     )
     seed_run(database, 101, start=1000, rule_name="自动文本报告验收主采集")
     seed_run(database, 2, start=5000, rule_name="跨采集任务的历史来源")

@@ -25,11 +25,12 @@ export function workbenchFixture(
     observed_at: workbenchTimestamp,
     attention: [],
     activity: {
+      automation: null,
       collection: null,
       initial_analysis: null,
       report: null,
     },
-    next_collection: null,
+    next_automation: null,
     latest_report: null,
     ...values,
   }

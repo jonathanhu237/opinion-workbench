@@ -1,5 +1,6 @@
 """One-transaction persistent read model for the homepage workbench."""
 
+import json
 from datetime import datetime
 
 from longtian_api.repositories.content_analyses import ContentAnalysisRepository
@@ -9,9 +10,10 @@ from longtian_api.schemas.workbench import (
     WorkbenchActivity,
     WorkbenchAnalysisActivity,
     WorkbenchAttention,
+    WorkbenchAutomationActivity,
     WorkbenchCollectionActivity,
     WorkbenchLatestReport,
-    WorkbenchNextCollection,
+    WorkbenchNextAutomation,
     WorkbenchReportActivity,
     WorkbenchSnapshot,
 )
@@ -36,9 +38,9 @@ _UNSUCCESSFUL_ANALYSES = (
 class WorkbenchRepository:
     """Read all persistent homepage state from one SQLite snapshot."""
 
-    def __init__(self, database, *, schedules_available=True):
+    def __init__(self, database, *, automation_available=True):
         self._database = database
-        self._schedules_available = schedules_available
+        self._automation_available = automation_available
         self._analyses = ContentAnalysisRepository(database)
         self._reports = TopicReportRepository(database)
 
@@ -48,7 +50,7 @@ class WorkbenchRepository:
             connection = self._database.connect()
             connection.execute("BEGIN")
             attention = [
-                *self._schedule_attention(connection),
+                *self._automation_attention(connection),
                 *self._collection_attention(connection),
                 *self._analysis_attention(connection),
                 *self._report_attention(connection),
@@ -65,11 +67,12 @@ class WorkbenchRepository:
                 observed_at=observed_at,
                 attention=attention[:100],
                 activity=WorkbenchActivity(
+                    automation=self._automation_activity(connection),
                     collection=self._collection_activity(connection),
                     initial_analysis=self._analysis_activity(connection),
                     report=self._report_activity(connection),
                 ),
-                next_collection=self._next_collection(connection, observed_at),
+                next_automation=self._next_automation(connection, observed_at),
                 latest_report=self._latest_report(connection),
             )
             connection.execute("COMMIT")
@@ -85,19 +88,20 @@ class WorkbenchRepository:
                 connection.close()
 
     @staticmethod
-    def _schedule_attention(connection) -> list[WorkbenchAttention]:
+    def _automation_attention(connection) -> list[WorkbenchAttention]:
         rows = connection.execute(
-            """SELECT s.*,r.enabled AS rule_enabled,o.status AS occurrence_status,
+            """SELECT t.*,r.name AS rule_name,r.enabled AS rule_enabled,
+              o.status AS occurrence_status,
               o.reason AS occurrence_reason,o.created_at AS occurrence_created_at,
               o.missed_count AS occurrence_missed_count
-              FROM collection_schedules s
-              LEFT JOIN monitoring_rules r ON r.id=s.monitoring_rule_id
-              LEFT JOIN collection_occurrences o ON o.id=(
-                SELECT id FROM collection_occurrences
-                WHERE schedule_id=s.id AND schedule_revision=s.revision
+              FROM automation_tasks t
+              LEFT JOIN monitoring_rules r ON r.id=t.monitoring_rule_id
+              LEFT JOIN automation_occurrences o ON o.id=(
+                SELECT id FROM automation_occurrences
+                WHERE task_id=t.id AND task_revision=t.revision
                 ORDER BY id DESC LIMIT 1
               )
-              WHERE s.enabled=1 ORDER BY s.id"""
+              WHERE t.enabled=1 ORDER BY t.id"""
         ).fetchall()
         items = []
         for row in rows:
@@ -130,7 +134,7 @@ class WorkbenchRepository:
             )
             items.append(
                 WorkbenchAttention(
-                    kind="collection_schedule",
+                    kind="automation_task",
                     severity=severity,
                     status=status,
                     reason=reason,
@@ -140,6 +144,39 @@ class WorkbenchRepository:
                     unsuccessful_count=row["occurrence_missed_count"]
                     if status == "missed"
                     else None,
+                )
+            )
+        failed_runs = connection.execute(
+            """WITH terminal AS (
+              SELECT a.*,ROW_NUMBER() OVER (
+                PARTITION BY a.task_id ORDER BY a.id DESC
+              ) AS ordinal
+              FROM automation_runs a
+              WHERE a.status NOT IN ('queued','collecting','analysing','reporting')
+            )
+            SELECT a.*,t.name AS task_name FROM terminal a
+            JOIN automation_tasks t ON t.id=a.task_id
+            WHERE a.ordinal=1 AND a.status IN
+              ('failed','interrupted','configuration_blocked')
+            ORDER BY a.id"""
+        ).fetchall()
+        for row in failed_runs:
+            items.append(
+                WorkbenchAttention(
+                    kind="automation_run",
+                    severity="action_required"
+                    if row["status"] == "configuration_blocked"
+                    else "error",
+                    status=row["status"],
+                    reason={
+                        "failed": "internal_error",
+                        "interrupted": "interrupted",
+                        "configuration_blocked": "configuration_blocked",
+                    }[row["status"]],
+                    resource_id=row["id"],
+                    owner=row["task_name"],
+                    occurred_at=row["finished_at"] or row["created_at"],
+                    unsuccessful_count=None,
                 )
             )
         return items
@@ -308,6 +345,26 @@ class WorkbenchRepository:
         ]
 
     @staticmethod
+    def _automation_activity(connection) -> WorkbenchAutomationActivity | None:
+        row = connection.execute(
+            """SELECT * FROM automation_runs WHERE status IN
+              ('queued','collecting','analysing','reporting')
+              ORDER BY id DESC LIMIT 1"""
+        ).fetchone()
+        if row is None:
+            return None
+        snapshot = json.loads(row["snapshot_json"])
+        return WorkbenchAutomationActivity(
+            run_id=row["id"],
+            task_id=row["task_id"],
+            task_name=snapshot["task_name"],
+            status=row["status"],
+            active_stage=row["active_stage"],
+            created_at=row["created_at"],
+            started_at=row["started_at"],
+        )
+
+    @staticmethod
     def _collection_activity(connection) -> WorkbenchCollectionActivity | None:
         row = connection.execute(
             """SELECT id FROM search_batches WHERE status IN
@@ -383,18 +440,19 @@ class WorkbenchRepository:
             started_at=report.started_at,
         )
 
-    def _next_collection(
+    def _next_automation(
         self, connection, observed_at
-    ) -> WorkbenchNextCollection | None:
-        if not self._schedules_available:
+    ) -> WorkbenchNextAutomation | None:
+        if not self._automation_available:
             return None
         rows = connection.execute(
-            """SELECT s.id,s.monitoring_rule_id,s.rule_name,
-              s.next_due_at,s.interval_minutes
-              FROM collection_schedules s JOIN monitoring_rules r
-                ON r.id=s.monitoring_rule_id AND r.enabled=1
-              WHERE s.enabled=1 AND s.next_due_at>=?
-              ORDER BY s.next_due_at,s.id""",
+            """SELECT t.id,t.name,t.monitoring_rule_id,r.name AS rule_name,
+              t.next_due_at,t.schedule_kind,t.interval_minutes,
+              t.daily_time,t.timezone
+              FROM automation_tasks t JOIN monitoring_rules r
+                ON r.id=t.monitoring_rule_id AND r.enabled=1
+              WHERE t.enabled=1 AND t.next_due_at>=?
+              ORDER BY t.next_due_at,t.id""",
             (observed_at,),
         ).fetchall()
         for row in rows:
@@ -405,11 +463,24 @@ class WorkbenchRepository:
                 is not None
             ):
                 continue
-            return WorkbenchNextCollection(
+            schedule = (
+                {
+                    "kind": "interval",
+                    "interval_minutes": row["interval_minutes"],
+                }
+                if row["schedule_kind"] == "interval"
+                else {
+                    "kind": "daily",
+                    "daily_time": row["daily_time"],
+                    "timezone": row["timezone"],
+                }
+            )
+            return WorkbenchNextAutomation(
                 id=row["id"],
+                name=row["name"],
                 rule_name=row["rule_name"],
                 due_at=row["next_due_at"],
-                interval_minutes=row["interval_minutes"],
+                schedule=schedule,
             )
         return None
 

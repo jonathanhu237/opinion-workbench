@@ -84,7 +84,7 @@ def test_interval_wrong_latest_claim_identity_rolls_back_entire_admission(tmp_pa
     asyncio.run(run())
 
 
-def test_existing_report_with_pending_event_fails_once_without_startup_loop(
+def test_existing_report_with_pending_event_is_not_consumed_on_startup(
     tmp_path, monkeypatch
 ):
     async def run():
@@ -110,10 +110,8 @@ def test_existing_report_with_pending_event_fails_once_without_startup_loop(
                 )
             baseline = model.counts.copy(), len(worker.calls)
             try:
-                with pytest.raises(TopicReportError) as raised:
-                    reports.initialize()
-                assert_storage_failure(raised.value)
-                assert calls == 1
+                reports.initialize()
+                assert calls == 0
                 assert (model.counts, len(worker.calls)) == baseline
                 with closing(db.connect()) as connection:
                     assert (

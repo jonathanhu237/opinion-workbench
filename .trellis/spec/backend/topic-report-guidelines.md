@@ -5,14 +5,18 @@
 Read this guide when changing automatic report admission, saved-text judgments,
 composition, retry/versioning, report history or the Results and Analysis UI.
 Read [Initial Analysis](./initial-analysis-guidelines.md) for the upstream job,
-evidence, prompt and completion-event contracts, and
-[Collection Schedules](./collection-schedule-guidelines.md) for collection timing.
+evidence and prompt contracts, and
+[Unified Opinion Automation](./automation-workflow-guidelines.md) for automatic
+admission, task goals, fixed-stage progression and retry ownership.
 The legacy [Manual AI Summaries](./ai-summary-guidelines.md) contract remains
 readable but is not the new workflow's creation path.
 
-`topic_reports` consumes durable initial-analysis output. It must not call a
-collector, browser, enrichment/media acquisition or initial-understanding runner.
-Topic judgment and synthesis are internal parts of one user-facing second stage.
+`topic_reports` consumes durable initial-analysis output. Workflow admission
+freezes `selection.kind=workflow_run`, a durable operation key and the task goal
+as exact report instructions; zero-source workflow admission saves an empty
+report without model calls. It must not call a collector, browser,
+enrichment/media acquisition or initial-understanding runner.
+Topic judgment and synthesis are internal parts of the workflow's report stage.
 
 ## 2. Signatures
 
@@ -57,7 +61,9 @@ surrogates; preserve accepted whitespace. `null` on retry preserves the original
 report instructions, not today's shared default.
 
 Core entry points are `TopicReportService.create`, `retry`, `cancel`,
-`initial_analysis_finished`, `initialize` and `shutdown`. SQLite v14 adds
+`workflow_admit`, `initialize` and `shutdown`. The historical
+`initial_analysis_finished` adapter must not be registered as a live completion
+callback. SQLite v14 adds
 `topic_report_runs`, `topic_report_sources`, `topic_report_nodes`,
 `topic_report_node_sources`, `topic_report_node_children` and
 `topic_report_requests`. It preserves v11 legacy and v12/v13 analysis/schedule
@@ -74,10 +80,11 @@ strict shapes, partitioning, serialization and output validation.
 
 ### Admission, snapshots and lifecycle
 
-- A normally completed initial-analysis job emits one durable completion event.
-  Consume it transactionally with the unique automatic report link and all
-  frozen member snapshots, including unavailable members. No per-record report,
-  all-history accumulation, later-arrival expansion or second confirmation.
+- The central automation workflow explicitly admits one report child for its
+  settled initial-analysis stage. The operation key and frozen member snapshots,
+  including unavailable members, make admission idempotent. No per-record
+  report, all-history accumulation, later-arrival expansion or callback-owned
+  progression.
 - Freeze exact successful attempt IDs, full accepted input text, structured
   understanding, source identity/origin, first-entry time, initial prompt/provider
   provenance and the report prompt/provider intent. Current source fields cannot
@@ -94,21 +101,22 @@ strict shapes, partitioning, serialization and output validation.
   sub-millisecond precision and cannot alone enforce this half-open interval.
   Retry copies the original scope, including unavailable
   members; newly prepared material requires a new explicit scope.
-- Manual initial-analysis intent still produces its automatic report when the
-  separate collection-auto setting is off. Prompt saves, GET, polling and route
-  entry admit no work. New installations and new schedules remain disabled until
-  the user explicitly enables the relevant automation.
-- Event notification only admits/enqueues report intent and must not wait for
-  the upstream AI lease. A downstream exception must not undo or strand initial
-  analysis. The report queue rechecks emptiness under its admission lock so a
-  concurrent admission cannot be left without a runner.
-- Startup is storage-only. Recovered active reports and unconsumed completion
-  events become explicitly interrupted, non-runnable records with
+- Manual initial-analysis intent does not automatically produce a report.
+  Prompt saves, GET, polling and route entry admit no work. New automation tasks
+  remain disabled until explicitly enabled; run-now is a separate explicit
+  mutation and does not enable the timer.
+- Workflow admission only admits/enqueues report intent and must not wait for
+  an upstream AI lease. A downstream exception must not undo or strand saved
+  initial analysis. The report queue rechecks emptiness under its admission lock
+  so concurrent admission cannot be left without a runner.
+- Pending legacy analysis-completion events are inert on startup. Manual initial
+  analysis cannot create a report during restart. Startup is storage-only;
+  recovered active reports become explicitly interrupted, non-runnable records with
   `recovery_reason=backend_restart`. A later unrelated wake cannot resume them.
-  An existing report link must agree with a consumed event; a contradictory
-  pending event fails once as storage corruption, not an infinite startup loop.
-  Explicit retry creates a new version. Stop the scheduler before draining
-  analysis/report owners; clean up all owners even when an earlier cleanup fails.
+  Existing historical event links remain readable but do not admit work.
+  Explicit retry creates a new version. Stop the automation owner before
+  draining child analysis/report owners; clean up all owners even when an
+  earlier cleanup fails.
 
 ### Bounded saved-text execution
 
@@ -194,7 +202,7 @@ source URLs/XHS origin tuples; model prose is text, not executable HTML or links
 
 Keep selected report/version and source/section pagination in URL state, separate
 from result filters and initial-job selection. One-click initial analysis stays
-the primary action. Show automatic report status beside its originating job;
+the primary action. Show workflow-owned report status beside its originating run;
 retry/cancel and optional interval/one-off override remain distinct secondary
 actions. Preserve ambiguous mutation intent/UUID; do not auto-retry a mutation or
 turn an empty report-list response into authorization to create one.
@@ -237,8 +245,8 @@ exception detail to make a report error more descriptive.
 - Populated v11→v14 migration, v13→v14 preservation, reopen, forward-version
   rejection and transactional rollback after an actual child insert; no startup
   provider/collector work and no changed legacy JSON, usage, IDs or source links.
-- 10/8/2 event settlement, duplicate notification, later arrivals, crash before/
-  after consumption, zero-ready and cancelled/interrupted upstream suppression.
+- 10/8/2 workflow admission, duplicate operation-key replay, later arrivals,
+  zero-ready and cancelled/interrupted upstream suppression.
 - 1/8/9/101/1,001 sources, strict exact 120,000-character boundary with escaped
   Unicode/custom prompts, oversize input, multi-level tree and final singleton.
 - Missing/unknown/duplicate citations; nested model mutation; Boolean IDs;
@@ -251,7 +259,7 @@ exception detail to make a report error more descriptive.
   default versus one-off override, interval timezone/first-entry semantics,
   frozen cross-run citations, self/future retry and canonical-node references,
   and legacy read-only navigation.
-- Full backend and frozen frontend gates on Centaurus; isolated fake-service
+- Full backend and frozen frontend gates locally; isolated fake-service
   browser QA for automatic reporting, text-only retry, keyboard focus, narrow
   layout, reload/pagination and console. Mocks do not establish live-model quality.
 

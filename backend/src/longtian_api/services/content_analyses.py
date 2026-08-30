@@ -1,7 +1,9 @@
 """Lifespan-owned stage-one queue; independent evidence precedes report handoff."""
 
 import asyncio
+import hashlib
 from typing import cast
+from uuid import UUID
 
 from longtian_api.repositories.content_analyses import ContentAnalysisRepository
 from longtian_api.repositories.search_runs import SearchResultSourceRecord
@@ -43,11 +45,50 @@ class ContentAnalysisService:
     async def create(self, payload: AnalysisCreate):
         return await settle(self._create(payload))
 
+    async def workflow_admit(self, *, result_ids, operation_key, snapshot):
+        """Admit topic-neutral understanding for one workflow membership.
+
+        The workflow owns the selected IDs and operation key.  This adapter
+        deliberately delegates to the existing strict analysis repository so
+        browser/media leases, model parsing and usage accounting stay in one
+        place; the task-specific objective is consumed only by the report
+        stage.
+        """
+        if not result_ids:
+            return None
+        from longtian_api.repositories.analysis_settings import (
+            AnalysisSettingsRepository,
+        )
+
+        settings = AnalysisSettingsRepository(self.repository.database).read()
+        configuration_revision = getattr(snapshot, "ai_configuration_revision", None)
+        if configuration_revision is None:
+            raise AIError("ai_configuration_required")
+        payload = AnalysisCreate(
+            request_id=_operation_request_id(operation_key),
+            configuration_revision=configuration_revision,
+            initial_prompt_version_id=(
+                getattr(snapshot, "initial_prompt_version_id", None)
+                or settings.initial_prompt.id
+            ),
+            report_prompt_version_id=(
+                getattr(snapshot, "report_prompt_version_id", None)
+                or settings.report_prompt.id
+            ),
+            force_refresh=False,
+            selection={"kind": "explicit", "result_ids": list(result_ids)},
+        )
+        return await self.create(payload)
+
     async def _create(self, payload):
         async with self._admission:
             replay = await database_call(self.repository.replay, payload)
             if replay is not None:
                 return replay
+            # ``available`` controls the legacy collection-completion handoff,
+            # not the independently callable analysis API.  Manual analysis
+            # must remain usable when the old automatic path is disabled; the
+            # fixed workflow performs its own availability checks at admission.
             if self._closed:
                 raise AnalysisError("content_analysis_unavailable")
             await database_call(
@@ -309,3 +350,18 @@ class ContentAnalysisService:
                 "input_incomplete",
                 error=failure("acquisition", code),
             )
+
+
+def _operation_request_id(operation_key: str) -> str:
+    """Derive a stable canonical UUIDv4-shaped replay key.
+
+    ``uuid5`` is deterministic but its version is 5, while the public
+    AnalysisCreate contract intentionally accepts only canonical UUIDv4
+    request IDs. Hashing the operation key and setting the RFC 4122 version
+    and variant bits preserves deterministic replay without weakening that
+    boundary.
+    """
+    raw = bytearray(hashlib.sha256(operation_key.encode("utf-8")).digest()[:16])
+    raw[6] = (raw[6] & 0x0F) | 0x40
+    raw[8] = (raw[8] & 0x3F) | 0x80
+    return str(UUID(bytes=bytes(raw)))

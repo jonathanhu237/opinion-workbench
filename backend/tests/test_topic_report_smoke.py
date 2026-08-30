@@ -5,7 +5,7 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 from test_content_analysis_api import body
-from topic_report_fixtures import finish
+from topic_report_fixtures import finish, interval_request
 from topic_report_smoke import (
     COUNTERS_PATH,
     LEGACY_RESULT_ID,
@@ -51,10 +51,14 @@ def start_initial(client, app):
     assert response.json()["admitted_count"] == 103
     job_id = response.json()["job"]["id"]
     client.portal.call(finish, app.state.content_analysis_service)
+    admitted = client.post(
+        "/api/v1/topic-reports",
+        json=interval_request(app.state.monitoring_rule_service.database).model_dump(),
+    )
+    assert admitted.status_code == 202, admitted.text
     client.portal.call(finish, app.state.topic_report_service)
-    report_list = client.get(f"/api/v1/topic-reports?initial_job_id={job_id}").json()
-    assert len(report_list["reports"]) == 1
-    return job_id, report_list["reports"][0]
+    report = client.get(f"/api/v1/topic-reports/{admitted.json()['id']}").json()
+    return job_id, report
 
 
 def test_smoke_reads_exact_origin_and_legacy_history_start_no_operations():
@@ -73,7 +77,8 @@ def test_smoke_reads_exact_origin_and_legacy_history_start_no_operations():
         assert not settings["automation"]["enabled"]
         assert client.get("/api/v1/content-analysis-jobs").json()["jobs"] == []
         assert client.get("/api/v1/topic-reports").json()["reports"] == []
-        assert client.get("/api/v1/collection-schedules").json()["schedules"] == []
+        assert client.get("/api/v1/collection-schedules").status_code == 404
+        assert client.get("/api/v1/automation-tasks").json()["tasks"] == []
         result = client.get(f"/api/v1/results/{LEGACY_RESULT_ID}").json()
         assert result["analysis_state"] == "legacy_completed"
         legacy = client.get(f"/api/v1/search-runs/{LEGACY_RUN_ID}/ai-summaries").json()[
@@ -133,12 +138,12 @@ def test_smoke_normal_handoff_cross_page_citations_and_report_only_override_retr
         assert job["counts"]["completed"] == 101
         assert job["counts"]["input_incomplete"] == 2
         assert original["status"] == "completed"
-        assert original["trigger"] == "automatic"
-        assert original["request_id"] is None
+        assert original["trigger"] == "interval"
+        assert original["request_id"] is not None
         assert original["coverage"] == {
-            "total": 103,
+            "total": 104,
             "ready": 101,
-            "unavailable": 2,
+            "unavailable": 3,
             "pending": 0,
             "judging": 0,
             "relevant": 96,
@@ -154,15 +159,22 @@ def test_smoke_normal_handoff_cross_page_citations_and_report_only_override_retr
             page = client.get(
                 f"/api/v1/topic-reports/{report_id}/sources?limit=50&offset={offset}"
             ).json()
-            assert page["total"] == 103
+            assert page["total"] == 104
             sources.extend(page["items"])
-        assert len(sources) == 103
-        assert {item["source"]["source_run_id"] for item in sources} == {2, 3}
-        assert {item["source"]["result_id"] for item in sources} == set(range(1, 104))
-        assert sources[-1]["position"] == 102
-        assert sources[-1]["source"]["result_id"] == 103
+        assert len(sources) == 104
+        assert {item["source"]["source_run_id"] for item in sources} == {
+            2,
+            3,
+            LEGACY_RUN_ID,
+        }
+        assert {item["source"]["result_id"] for item in sources} == set(range(1, 105))
+        assert sources[-1]["position"] == 103
+        assert sources[-1]["source"]["result_id"] == LEGACY_RESULT_ID
+        analysed_source = next(
+            item for item in sources if item["source"]["result_id"] == 103
+        )
         initial = client.get(
-            f"/api/v1/content-analyses/{sources[-1]['initial_attempt_id']}"
+            f"/api/v1/content-analyses/{analysed_source['initial_attempt_id']}"
         ).json()
         assert initial["status"] == "completed" and initial["output"] is not None
         leaves = []
@@ -269,9 +281,9 @@ def test_smoke_normal_handoff_cross_page_citations_and_report_only_override_retr
         assert client.get(f"/api/v1/topic-reports/{report_id}").json() == original
         assert client.get(f"/api/v1/topic-reports/{failed['id']}").json() == failed
         assert len(client.get("/api/v1/content-analysis-jobs").json()["jobs"]) == 1
-        history = client.get(f"/api/v1/topic-reports?initial_job_id={job_id}").json()
+        history = client.get("/api/v1/topic-reports").json()
         assert len(history["reports"]) == 3
-        assert sum(item["trigger"] == "automatic" for item in history["reports"]) == 1
+        assert sum(item["trigger"] == "interval" for item in history["reports"]) == 1
         assert counters(client) == after
 
 
