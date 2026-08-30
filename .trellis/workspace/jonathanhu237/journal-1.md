@@ -500,3 +500,25 @@ Implemented and accepted a read-only homepage duty workbench with current attent
 ### Status
 
 [OK] **Completed**
+
+
+## Session 22: 统一舆情自动工作流
+<!-- trellis-session: v=2 fp=844b9063a0758e17 -->
+
+**Date**: 2026-08-30
+**Task**: 统一舆情自动工作流
+**Branch**: `feat/opinion-workflow-automation`
+
+### Summary
+
+以固定采集、初步分析、目标报告链路替换旧定时采集方式，加入任务级目标、断点重试、恢复与互斥控制，并完成前后端工作台、运行详情、规范和测试收口。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `3d7fec7` | feat: unify automated opinion workflows |
+
+### Status
+
+[OK] **Completed**

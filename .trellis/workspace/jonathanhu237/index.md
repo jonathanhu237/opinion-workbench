@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 21
+- **Total Sessions**: 22
 - **Last Active**: 2026-08-30
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~502 | Active |
+| `journal-1.md` | ~524 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 22 | 2026-08-30 | 统一舆情自动工作流 | `3d7fec7` | `feat/opinion-workflow-automation` |
 | 21 | 2026-08-30 | Homepage duty workbench | `8fe8c90` | `feat/homepage-workbench` |
 | 20 | 2026-08-27 | AI configuration and monitoring query composition | `501e460`, `c5e57a3` | `main` |
 | 19 | 2026-08-27 | 多平台批量采集 | `a150bbf` | `main` |
