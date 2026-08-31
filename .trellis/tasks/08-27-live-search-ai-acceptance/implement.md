@@ -68,3 +68,37 @@ uncommitted frontend changes; do not treat them as part of this data cleanup.
    then restore the existing application without changing its data/configuration.
 5. Report actual decisions and usage, distinguish list-price estimates from billing,
    remove owned temporary media and preserve a sanitized verification record.
+
+## Current End-to-End Follow-up — 2026-08-30
+
+1. Re-read the current local-first runtime instructions and relevant backend/frontend/infra
+   specs. Inspect the implemented collection, initial-analysis, and topic-report API/UI path.
+2. Resolve the real runtime database and current process/port state without exposing secrets.
+   Confirm no active job owns the workflow, take a private SQLite backup, and record integrity,
+   schema version, rule count, source count, analysis count, and report count.
+3. Start only missing local services with the repository's supported commands. Verify health,
+   frontend/API connectivity, saved AI readiness projection, and browser/CDP availability.
+4. Inspect the existing `龙田街道及四个社区` rule and derive a bounded issue vocabulary from its
+   configured terms and the current product contract. Record each effective query and cap.
+5. Execute one real product collection workflow. Follow progress through terminal job/batch/run
+   states; never bypass login, permission, challenge, throttling, or platform protections.
+6. Observe the product-owned AI initial-understanding/summary stages and automatic report handoff
+   to terminal states. Do not retry provider calls merely to obtain a passing result.
+7. Inspect the generated aggregate report in the UI and API. Cross-check counts, source IDs,
+   citation targets, relevant/irrelevant/uncertain classifications, and a small sample of actual
+   collected records; note false positives, stale items, and location namesakes.
+8. Re-run integrity/foreign-key checks, disable only a task-created rule if one was necessary,
+   preserve histories, and append sanitized evidence plus a pass/partial/fail matrix to
+   `verification.md`.
+9. Dispatch a read-only `trellis-check` reviewer after live work. It must not make platform or
+   provider calls, operate the browser, mutate the database, or change product code.
+
+## Authorized Analysis-Wait Bug Fix — 2026-08-31
+
+1. Add a focused failing regression for an `AnalysisAdmission` whose nested job is
+   queued/running when admitted and later settles through `ContentAnalysisService.read`.
+2. Normalize the admitted child to `admission.job` before calling the existing child
+   wait loop; preserve replay/recovery paths that already read a job directly.
+3. Run the focused automation workflow tests, backend lint/type checks relevant to the
+   changed files, then dispatch an independent `trellis-check` review.
+4. Do not run live collection, enrichment, AI, reporting, or mutate runtime data.

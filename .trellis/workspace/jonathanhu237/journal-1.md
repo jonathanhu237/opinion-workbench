@@ -522,3 +522,25 @@ Implemented and accepted a read-only homepage duty workbench with current attent
 ### Status
 
 [OK] **Completed**
+
+
+## Session 23: Fix analysis admission wait
+<!-- trellis-session: v=2 fp=0ae3e3033c24a4e7 -->
+
+**Date**: 2026-08-31
+**Task**: Fix analysis admission wait
+**Branch**: `main`
+
+### Summary
+
+Normalized AnalysisAdmission to its nested AnalysisJob before workflow polling, added regression coverage, documented the child contract, and verified 1008 backend tests. Media enrichment remains intentionally unchanged for later work.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8e518ea` | fix(backend): wait for admitted analysis job |
+
+### Status
+
+[OK] **Completed**

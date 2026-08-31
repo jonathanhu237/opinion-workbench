@@ -12,7 +12,7 @@
   "assignee": "jonathanhu237",
   "createdAt": "2026-08-27",
   "completedAt": null,
-  "branch": null,
+  "branch": "main",
   "base_branch": "main",
   "worktree_path": null,
   "commit": null,
@@ -25,8 +25,15 @@
   "meta": {
     "media_cost_probe_2026_08_28": {
       "status": "verified_with_one_output_failure",
-      "attempted_content_ids": [370, 63, 372],
-      "validated_content_ids": [63, 372],
+      "attempted_content_ids": [
+        370,
+        63,
+        372
+      ],
+      "validated_content_ids": [
+        63,
+        372
+      ],
       "requests": 3,
       "total_tokens": 56913,
       "standard_price_estimate_cny": 0.457083,
