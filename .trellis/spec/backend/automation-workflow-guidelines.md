@@ -4,7 +4,8 @@
 
 Read this guide before changing automatic task configuration, scheduled or
 run-now admission, cross-stage orchestration, failed-stage retry, task-scoped
-new-content membership, cancellation, automation history, or the Automation UI.
+new-content membership, cancellation, automation history, child-admission
+envelopes, child polling projections, or the Automation UI.
 
 `AutomationWorkflowService` is the only automatic workflow owner. It always
 executes this immutable order:
@@ -53,6 +54,17 @@ SQLite v15 appends `automation_tasks`, `automation_task_platforms`,
 `automation_requests`. It also adds the unique workflow operation key to search
 batches. Do not rewrite or convert v13 collection-schedule rows during upgrade.
 
+The initial-analysis child boundary is explicit:
+
+```python
+ContentAnalysisService.workflow_admit(...) -> AnalysisAdmission
+ContentAnalysisService.read(job_id: int) -> AnalysisJob
+```
+
+`AnalysisAdmission.job`, not the admission envelope, owns lifecycle `status`,
+`counts` and `usage`. The workflow may use the envelope to resolve the child ID,
+but must normalize to the nested job before calling the generic child waiter.
+
 ## 3. Contracts
 
 ### Admission and frozen intent
@@ -87,6 +99,10 @@ batches. Do not rewrite or convert v13 collection-schedule rows during upgrade.
 - Initial analysis receives the current run's exact member IDs and performs the
   reusable generic multimodal understanding. The task goal is frozen as
   orchestration/report intent; it must not mutate the generic evidence model.
+- `workflow_admit` returns an admission envelope. Normalize it once to
+  `admission.job` at the orchestration boundary, then poll `read(job.id)` while
+  the job is nonterminal. Recovery already starts from a direct `AnalysisJob`
+  read and must remain unchanged. Never ask the envelope for lifecycle status.
 - Topic reporting consumes the saved initial-analysis evidence and task goal,
   performs relevance judgment, and synthesizes the report. It must not invoke
   collection or media acquisition.
@@ -143,6 +159,8 @@ coercing them.
 | Missing/disabled/invalid/oversized rule | Stable rule/automation configuration error; no child work |
 | Invalid goal, platforms, schedule or timezone | 422 strict request/configuration error; no write |
 | AI configuration unavailable | `configuration_blocked` or stable AI configuration error; no substitution |
+| Analysis admission contains a queued/running job | Persist the nested job ID and poll that job to settlement; do not project a missing envelope-level status as failure |
+| Analysis admission has no child job ID | Preserve the existing no-child result; never enter the child poll loop |
 | Corrupt storage or closed service | Sanitized 503 automation storage/unavailable error |
 
 Never expose raw SQLite, browser, model or credential-bearing exception text.
@@ -152,12 +170,16 @@ Never expose raw SQLite, browser, model or credential-bearing exception text.
 - Good: task A first sees ten sources, analyses eight and records two failures;
   its report exposes 10/8/2 coverage. Retry begins at the failed stage and
   preserves all previously completed child work.
+- Good: initial-analysis admission returns `{job: queued}`; the workflow records
+  `job.id`, polls `read(job.id)` to terminal state, and only then advances.
 - Good: task B later sees the same globally deduplicated content. It is still
   new to task B and is processed once for B's goal.
 - Base: a scheduled or run-now collection finds no new task content. The run
   completes as `no_new_sources` with zero model calls.
 - Bad: report retry launches a browser, a completion callback creates another
   stage, or editing a task rewrites the snapshot of an existing run.
+- Bad: pass `AnalysisAdmission` into the generic waiter and inspect
+  `admission.status`; the missing field makes a live nested job look terminal.
 - Bad: polling an empty run list creates work, two active runs overlap for one
   task, or a historical collection schedule is exposed as a live automation.
 
@@ -171,6 +193,10 @@ Never expose raw SQLite, browser, model or credential-bearing exception text.
   overlap handling.
 - Run-now replay/conflict, frozen snapshots, one active run per task, cancellation
   fencing, restart interruption and retry from collection, analysis and report.
+- Analysis admission-envelope regression: admit a nested queued/running job,
+  return a settled job from `read(job.id)`, and assert the workflow polls exactly
+  that ID, projects terminal counts/usage and advances only after settlement.
+  Also preserve direct-job recovery and no-child behavior.
 - Per-task new-content membership across repeated task A and independent task B;
   zero-new short circuit with zero model calls; partial 10/8/2 metrics and
   report-only retry with zero upstream work.
@@ -202,3 +228,19 @@ for stage in ("collection", "initial_analysis", "topic_report"):
 Wrong: retry by creating a new run from today's task configuration.
 Correct: retain the original run snapshot and completed attempts, append one
 attempt at the first failed stage, and continue the fixed suffix only.
+
+Wrong: poll lifecycle state on the admission envelope.
+
+```python
+admission = await analyses.workflow_admit(...)
+await wait_child(admission)  # AnalysisAdmission has no status.
+```
+
+Correct: normalize the child-domain response before using the shared waiter.
+
+```python
+admission = await analyses.workflow_admit(...)
+job = admission.job
+if job is not None:
+    await wait_child(job.id, job)
+```

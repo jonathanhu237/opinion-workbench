@@ -15,6 +15,7 @@ from longtian_api.repositories.automation_workflows import (
     AutomationWorkflowRepository,
     BatchContentRecord,
 )
+from longtian_api.schemas.analysis_settings import PromptVersion
 from longtian_api.schemas.automation_workflows import (
     AutomationDailySchedule,
     AutomationIntervalSchedule,
@@ -23,6 +24,12 @@ from longtian_api.schemas.automation_workflows import (
     AutomationRunRetry,
     AutomationTaskCreate,
     AutomationTaskReplace,
+)
+from longtian_api.schemas.content_analyses import (
+    AnalysisAdmission,
+    AnalysisCounts,
+    AnalysisJob,
+    AnalysisUsage,
 )
 from longtian_api.services.automation_workflow_errors import AutomationWorkflowError
 from longtian_api.services.automation_workflows import (
@@ -312,6 +319,86 @@ class _PartialAnalysis:
 
     async def read(self, job_id):
         raise AssertionError(f"terminal fake job {job_id} must not be polled")
+
+
+class _QueuedAnalysisAdmission:
+    """Return an admission envelope whose nested job settles on the first read."""
+
+    job_id = 201
+
+    def __init__(self):
+        self.calls = []
+        self.read_calls = []
+
+    @staticmethod
+    def _job(*, status, queued, completed):
+        now = datetime.now(UTC)
+        counts = AnalysisCounts(
+            total=1,
+            queued=queued,
+            acquiring=0,
+            analysing=0,
+            completed=completed,
+            input_incomplete=0,
+            unsupported=0,
+            failed=0,
+            cancelled=0,
+            interrupted=0,
+            reused=0,
+        )
+        usage = AnalysisUsage(
+            attempted_requests=0,
+            accounted_requests=0,
+            complete=True,
+            prompt_tokens=0,
+            completion_tokens=0,
+            total_tokens=0,
+        )
+        return AnalysisJob(
+            id=_QueuedAnalysisAdmission.job_id,
+            request_id=None,
+            trigger="automatic",
+            status=status,
+            configuration_revision=1,
+            base_url="https://example.test",
+            model="test-model",
+            initial_prompt=PromptVersion(
+                id=1,
+                stage="initial",
+                instructions="test initial prompt",
+                content_hash="0" * 64,
+                schema_version="initial-understanding-v1",
+                created_at=now,
+            ),
+            report_prompt=PromptVersion(
+                id=2,
+                stage="report",
+                instructions="test report prompt",
+                content_hash="1" * 64,
+                schema_version="topic-report-v1",
+                created_at=now,
+            ),
+            force_refresh=False,
+            counts=counts,
+            usage=usage,
+            queue_reason=None,
+            completion_event_id=1 if status == "completed" else None,
+            created_at=now,
+            started_at=now if status == "completed" else None,
+            finished_at=now if status == "completed" else None,
+        )
+
+    async def workflow_admit(self, **kwargs):
+        self.calls.append(kwargs)
+        return AnalysisAdmission(
+            job=self._job(status="queued", queued=1, completed=0),
+            admitted_count=1,
+            already_active_count=0,
+        )
+
+    async def read(self, job_id):
+        self.read_calls.append(job_id)
+        return self._job(status="completed", queued=0, completed=1)
 
 
 class _ReportSequence:
@@ -618,6 +705,47 @@ async def _test_partial_analysis_coverage(tmp_path: Path):
         2,
     )
     assert analysis.usage_attempted == 10 and analysis.usage_tokens == 1200
+    await service.shutdown()
+
+
+def test_analysis_admission_waits_for_nested_job_to_settle(tmp_path: Path):
+    asyncio.run(_test_analysis_admission_waits_for_nested_job_to_settle(tmp_path))
+
+
+async def _test_analysis_admission_waits_for_nested_job_to_settle(tmp_path: Path):
+    from summary_fixtures import seed_run
+
+    database, rules, _ = _repository(tmp_path)
+    seed_run(database, 1)
+    repository = _ContentRepository(database)
+    batches = _FakeBatch(["completed"])
+    analyses = _QueuedAnalysisAdmission()
+    reports = _ReportSequence(["completed"], total=1, ready=1, unavailable=0)
+    service = AutomationWorkflowService(
+        database,
+        monitoring_rules=rules,
+        batches=batches,
+        analyses=analyses,
+        reports=reports,
+        repository=repository,
+    )
+    service.initialize()
+    task = service.create_task(_task_payload())
+    run = await service.run_now(task.id, AutomationRunNow(request_id=REQUEST))
+    workflow_task = service._run_tasks[run.id]
+    await asyncio.wait_for(asyncio.shield(workflow_task), 1)
+
+    final = service.get_run(run.id)
+    analysis = final.stages[1]
+    assert final.status == "completed"
+    assert analysis.status == "completed"
+    assert (analysis.child_id, analysis.input_count, analysis.success_count) == (
+        analyses.job_id,
+        1,
+        1,
+    )
+    assert analyses.read_calls == [analyses.job_id]
+    assert reports.calls[0]["analysis_job_id"] == analyses.job_id
     await service.shutdown()
 
 

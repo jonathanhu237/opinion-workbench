@@ -886,7 +886,12 @@ class AutomationWorkflowService:
                     selection={"kind": "explicit", "result_ids": list(ids)},
                 )
                 child = await self._analyses.create(payload)
-            child_id = _value(_value(child, "job", child), "id")
+            # ``workflow_admit`` returns an admission envelope while the
+            # generic child waiter consumes the lifecycle-owned job itself.
+            # Normalize at this boundary so it polls the nested job status;
+            # recovery paths already provide a direct job from ``read``.
+            child = _value(child, "job", child)
+            child_id = _value(child, "id")
             if child_id is None:
                 return None, True, _StageMetrics()
             await database_call(
