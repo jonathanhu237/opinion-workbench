@@ -544,3 +544,26 @@ Normalized AnalysisAdmission to its nested AnalysisJob before workflow polling, 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 24: 完成龙田三平台采集分析报告验收
+<!-- trellis-session: v=2 fp=c28fc82060f81611 -->
+
+**Date**: 2026-09-01
+**Task**: 完成龙田三平台采集分析报告验收
+**Branch**: `main`
+
+### Summary
+
+修复历史报告 schema 迁移，安全升级 live DB 到 schema 16，仅重试 run 3 报告阶段并完成三阶段 E2E；记录空报告的真实证据边界、UI 验收、模型用量与完整性校验。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `da4de53` | fix(database): repair historical report schema |
+| `8b569ef` | docs(task): record successful report retry |
+
+### Status
+
+[OK] **Completed**
