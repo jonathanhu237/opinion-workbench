@@ -660,3 +660,74 @@ preserved, `quick_check=ok`, `integrity_check=ok`, and zero foreign-key violatio
 | Automatic report | **FAIL (migration)** | Historical v15 table lacked workflow operation key; no child/report/citations were created |
 | Schema repair | **OFFLINE PASS** | Schema 16 full suite passed and the actual copied v15 DB admitted the exact report graph |
 | Cleanup/preservation | **PASS** | Rule 9 and task 3 disabled; no retries; backups, history, original rule/config and FK integrity preserved |
+
+## Live Schema-16 Migration and Single Report Retry 2026-09-01
+
+The user separately authorized applying schema 16 to the live runtime database and retrying only
+run 3's failed report stage once. No connection check, collection, initial analysis, manual report,
+new task, new rule, or new run was issued in this follow-up.
+
+Before startup, a second private backup was created at
+`runtime/e2e-report-retry.xYp1t5/before-migration.sqlite3` (directory 0700, file 0600; SHA-256
+`25e97c65b0ea6ccfec5f70417fa383ce8b08a55fe9b0481f0e8ecb2571621821`). It was schema 15 with
+42 product tables and 220 rows, `quick_check=ok`, and zero foreign-key violations. The product
+startup migration advanced the live database to schema 16. A canonical projection over every
+pre-existing column had SHA-256
+`f9649cb09fc10ffb57d15eeffeefc8a626e2c1096d9dbe235013913d9063d4fe` both before and after
+migration, proving that the historical product data was unchanged while the missing
+`workflow_operation_key` column was added.
+
+The only retry request was `7b5b1e64-ba43-4cf9-be27-3853adffef16`, submitted against run 3 at
+expected revision 5. It resumed at `topic_report`; the existing collection batch 3, search runs
+7/8/9, and initial-analysis job 2 were not rerun. Report attempt 2 completed with child
+`topic_report #1`, input 3, success 2, failure 1, two model calls, and 2,652 tokens. Run 3 became
+terminal `completed/completed` at revision 8 with `topic_report_id=1`.
+
+Report 1 is a truthful terminal empty report, not a workflow failure:
+
+- Its frozen selection is automation run 3 and initial-analysis job 2, with three source rows in
+  exact order `(1, 7, 12)`.
+- Coverage is three total, two ready, and one unavailable. The Weibo member remains unavailable
+  because its initial model response was invalid JSON.
+- Both ready sources completed report judgments. The Xiaohongshu legal/complaint guide lacks a
+  proved Longtian location; the Kuaishou resident-complaint report identifies Shenzhen but not
+  Longtian and has incomplete text plus unavailable video/audio. Both were therefore retained as
+  `uncertain`, not promoted to facts.
+- With zero confirmed-relevant sources, the report settled `empty` with
+  `empty_reason=no_relevant_sources`. It correctly made no composition request, created no section
+  node, and emitted no citation rather than fabricating a Longtian incident summary.
+
+Across the complete run, initial analysis used three model calls / 3,734 tokens and report
+judgment used two model calls / 2,652 tokens: five calls and 6,386 tokens in total. Collection used
+no model calls. The live report retry consumed no composition tokens.
+
+UI verification on `http://127.0.0.1:5174/automation-runs/3` showed all three workflow stages as
+completed, with the saved child IDs, coverage, attempts, model-call counts, and token counts above.
+`/results?report=1` rendered report 1 as `暂无可报告材料`, showed coverage 3 / ready 2 /
+unavailable 1, judgment progress 2/2, zero sections, and the three frozen sources with their exact
+unavailable/uncertain explanations. Browser console warnings and errors were empty. The broader
+Results page also displayed a non-blocking `分析接口返回的数据与当前应用不匹配` banner in the
+initial-analysis-task panel; the report region itself loaded correctly, so this is recorded as a
+separate UI follow-up rather than a report-pipeline failure.
+
+Final live-database checks reported schema 16, `quick_check=ok`, `integrity_check=ok`, and zero
+foreign-key violations. Rule 9 and task 3 remain disabled. Search runs 7/8/9 still each retain one
+member, job 2 remains completed with its original 2-success/1-failure attempts, and the report
+graph contains one report, three sources, two completed judgment nodes, and zero composition
+nodes. A post-success private backup was created at
+`runtime/e2e-report-retry.xYp1t5/after-report.sqlite3` (file 0600; SHA-256
+`714345509a50e1a58b87e01c67996967a5a55ed76bccc62db902dfca80389f9d`), independently reopening
+as schema 16 with `quick_check=ok`, `integrity_check=ok`, and zero foreign-key violations.
+
+### Final acceptance matrix
+
+| Capability | Status | Evidence / limitation |
+| --- | --- | --- |
+| Schema 15 to 16 live migration | **PASS** | Startup migration completed; full old-column data projection hash was unchanged |
+| Retry isolation | **PASS** | One report-only retry; collection, search runs and initial-analysis job were not rerun |
+| Automatic report admission | **PASS** | Report 1 admitted with the exact frozen three-source graph and completed two judgments |
+| Report truthfulness | **PASS (empty result)** | Zero sources proved Longtian relevance, so no composition or citations were fabricated |
+| Full technical workflow | **PASS** | Run 3 is terminal completed with durable collection, analysis and report artifacts |
+| Business evidence quality | **PARTIAL** | Media stayed unavailable and the surviving text did not prove a Longtian-specific incident |
+| UI run/report projection | **PASS with follow-up** | Run and report rendered correctly; separate analysis-task panel showed a mismatch banner |
+| Integrity and cleanup | **PASS** | Schema 16 healthy; FK 0; rule/task disabled; before/after private backups retained |
