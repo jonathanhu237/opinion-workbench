@@ -59,11 +59,20 @@ The initial-analysis child boundary is explicit:
 ```python
 ContentAnalysisService.workflow_admit(...) -> AnalysisAdmission
 ContentAnalysisService.read(job_id: int) -> AnalysisJob
+ContentAnalysisRepository.workflow_create(
+    payload: WorkflowAnalysisCreate, *, operation_key: str
+) -> AnalysisAdmission
 ```
 
 `AnalysisAdmission.job`, not the admission envelope, owns lifecycle `status`,
 `counts` and `usage`. The workflow may use the envelope to resolve the child ID,
 but must normalize to the nested job before calling the generic child waiter.
+`WorkflowAnalysisCreate` is an internal, uncapped mixed-state intent for one
+exact ordered workflow membership; it is not an HTTP model and must not relax
+the public manual `explicit | retry | reanalysis` selection rules. Its request
+proof has a workflow-specific hash namespace that includes the operation key,
+so a public request cannot replay a workflow admission from the shared request
+table.
 
 ## 3. Contracts
 
@@ -99,6 +108,19 @@ but must normalize to the nested job before calling the generic child waiter.
 - Initial analysis receives the current run's exact member IDs and performs the
   reusable generic multimodal understanding. The task goal is frozen as
   orchestration/report intent; it must not mutate the generic evidence model.
+- Exact run membership may mix globally never-started, retryable terminal,
+  completed, legacy-only and currently active claims because task-scoped
+  membership is independent of global result/analysis history. Admit those IDs
+  in one workflow-only transaction and preserve run order. Queue never-started,
+  retryable and legacy-only evidence; let the normal cache path reuse compatible
+  completed evidence. Freeze an active claim as a terminal
+  `input_incomplete/source_active` attempt in this workflow job without changing
+  that claim's owner, so the report sees exact unavailable coverage and no second
+  browser/model operation is created.
+- Workflow replay binds both the canonical request payload and its durable stage
+  operation key. A lost response returns the same automatic job; the same request
+  ID with another operation key is a conflict. Job, ordered attempts, claims and
+  request proof commit or roll back together.
 - `workflow_admit` returns an admission envelope. Normalize it once to
   `admission.job` at the orchestration boundary, then poll `read(job.id)` while
   the job is nonterminal. Recovery already starts from a direct `AnalysisJob`
@@ -161,6 +183,9 @@ coercing them.
 | AI configuration unavailable | `configuration_blocked` or stable AI configuration error; no substitution |
 | Analysis admission contains a queued/running job | Persist the nested job ID and poll that job to settlement; do not project a missing envelope-level status as failure |
 | Analysis admission has no child job ID | Preserve the existing no-child result; never enter the child poll loop |
+| Workflow membership mixes never-started, failed and completed claims | One ordered automatic job; failed members are reacquired, compatible completed members may reuse, and public manual selection semantics remain unchanged |
+| Workflow member is owned by another analysis path | Preserve it in the workflow job as unavailable `source_active`; do not replace its active claim or issue a duplicate model request |
+| Workflow request proof replays under another operation key | 409-style `content_analysis_request_conflict`; no new job, attempt or claim |
 | Corrupt storage or closed service | Sanitized 503 automation storage/unavailable error |
 
 Never expose raw SQLite, browser, model or credential-bearing exception text.
@@ -174,8 +199,14 @@ Never expose raw SQLite, browser, model or credential-bearing exception text.
   `job.id`, polls `read(job.id)` to terminal state, and only then advances.
 - Good: task B later sees the same globally deduplicated content. It is still
   new to task B and is processed once for B's goal.
+- Good: task B first sees three global results whose analysis states are
+  `input_incomplete`, never-started and completed. One workflow job keeps that
+  order, reacquires the first, analyses the second and cache-reuses the third;
+  one incompatible member cannot roll back the other two.
 - Base: a scheduled or run-now collection finds no new task content. The run
   completes as `no_new_sources` with zero model calls.
+- Base: another job currently owns one member. The current workflow keeps one
+  unavailable source row and processes the rest without stealing the claim.
 - Bad: report retry launches a browser, a completion callback creates another
   stage, or editing a task rewrites the snapshot of an existing run.
 - Bad: pass `AnalysisAdmission` into the generic waiter and inspect
@@ -200,6 +231,11 @@ Never expose raw SQLite, browser, model or credential-bearing exception text.
 - Per-task new-content membership across repeated task A and independent task B;
   zero-new short circuit with zero model calls; partial 10/8/2 metrics and
   report-only retry with zero upstream work.
+- Mixed workflow admission across never-started, retryable, completed,
+  legacy-only and active claims. Assert exact position order, compatible reuse,
+  no duplicate claim/model work, active unavailable report membership, strict
+  public selection conflicts, operation-key replay conflict, and rollback of
+  job/attempt/request/claim rows after a later-member insertion failure.
 - Strict HTTP errors and old-route 404, plus frontend decoder, list/editor/run
   detail, mutation, navigation, workbench and responsive interaction tests.
 - Run backend Ruff/pytest and frontend format, lint, type, Vitest and build gates
@@ -243,4 +279,18 @@ admission = await analyses.workflow_admit(...)
 job = admission.job
 if job is not None:
     await wait_child(job.id, job)
+```
+
+Wrong: submit task-scoped repeated results through the public manual
+`selection.kind="explicit"`; one historical attempt makes the whole transaction
+fail. Correct: use the workflow-only mixed admission contract and keep public
+selection rules unchanged.
+
+```python
+admission = await analyses.workflow_admit(
+    result_ids=run_member_ids,
+    operation_key=stage.operation_key,
+    snapshot=run.snapshot,
+)
+# The returned job contains exact ordered success/retry/reuse/unavailable rows.
 ```

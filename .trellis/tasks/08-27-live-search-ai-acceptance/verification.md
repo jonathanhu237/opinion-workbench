@@ -475,3 +475,79 @@ fixture or bounded live evidence can prove a safe change. The legacy manual `/ai
 also remains strict; this repair targets the current independent analysis -> automatic report
 workflow. Isolated loopback browser smoke was not run; frontend behavior is covered by component
 tests, strict decoder tests, typecheck and production build pending a later bounded live check.
+
+## Best-Effort Evidence — Bounded Live Follow-up 2026-09-01
+
+The user approved one live sample per selected platform. Before mutation, a private fresh backup
+was created at `runtime/e2e-best-effort.pYGAA2/before-live.sqlite3` with mode 0600 (directory
+0700); it recorded schema 15, `quick_check=ok`, and zero foreign-key violations. The API ran on
+127.0.0.1:18000, the frontend on 127.0.0.1:5174, an ephemeral local proxy forwarded 8000 to
+18000, and the user's existing Chrome CDP endpoint remained on 9222.
+
+Connection attempts were strictly sequential. The first Weibo attempt
+`8e90140f-a8fd-414c-8723-3076531c8e20` paused for browser approval and then expired without any
+collection. After the user confirmed approval, a fresh check
+`7760e25e-e525-4fcc-ac1f-9acde699242a` completed connected; Kuaishou
+`4504367a-693a-4624-bf16-fc2d75736554` and Xiaohongshu
+`cc1a3e91-f1cf-44c8-895a-97175e6eb636` also completed connected, all with guidance `none` and no
+active attempt. Douyin and Toutiao were not checked.
+
+The normal product APIs created rule 8 (`2026-09-01验收·最佳努力补全`) with the single effective
+query `深圳坪山龙田街道 投诉`, then disabled-by-default task 2
+(`2026-09-01验收·三平台各一条`) for exactly `wb`, `ks`, `xhs`, cap 1, and a dormant 43,200-minute
+interval. One manual run-now request `e11ef296-eb17-4e82-92d3-8c9b73ca71f3` created run 2; no
+second run or retry was attempted.
+
+Run 2 settled failed at revision 4. Collection attempt 1 completed as batch 2 with three platform
+items and 3/3 successful observations: Weibo content 1 was repeated, Kuaishou content 11 was new,
+and Xiaohongshu content 7 was repeated. The initial-analysis stage failed before child creation
+(`child_id=null`, input/success/failure 0), so model requests/tokens were 0; topic-report was
+cancelled and no report/source/citation rows were created.
+
+Read-only repository evidence identifies a separate mixed-selection admission defect rather than
+a new enrichment failure. Run 2 membership is exactly `(1, 7, 11)`. Claims 1 and 7 already have
+job-1 attempts in `input_incomplete`, while claim 11 has no first/latest attempt. The workflow
+submits all run members as `selection.kind=explicit`, but that repository contract accepts only
+never-started claims and rejects recoverable prior attempts with
+`content_analysis_selection_conflict`. Because admission is transactional, the two repeated
+claims roll back the never-started Kuaishou claim as well; no job exists on which the new
+best-effort acquisition logic could run.
+
+After evidence capture, rule 8 was disabled by full replacement. Task 2 remained disabled at
+revision 1 and all run/batch/result history was preserved. Final read-only reopen reported schema
+15, `quick_check=ok`, zero foreign-key violations, two tasks/runs/batches, six search runs, eleven
+search contents, one pre-existing analysis job with ten attempts, and zero topic reports. The
+bounded follow-up therefore passes connection readiness and 3/3 collection, but does not yet
+validate live best-effort LLM analysis or report generation because mixed new/recoverable
+membership is rejected before enrichment begins.
+
+## Best-Effort Workflow Admission Repair — Offline Verification 2026-09-01
+
+The mixed-selection defect was repaired without changing the public manual analysis API. Automatic
+workflow admission now uses an internal `WorkflowAnalysisCreate` intent with no 1,000-member
+selection cap, preserves the exact run-member order, and admits never-started, retryable,
+completed/reusable, legacy-only, and currently active claims in one transaction. Compatible
+completed evidence follows the existing reuse path; an active claim is represented as one
+truthful `input_incomplete/source_active` workflow member without replacing its owner or issuing
+duplicate browser/model work.
+
+Workflow request proofs use a separate hash namespace that includes the durable operation key.
+Consequently, a public request cannot replay a workflow request from the shared request table, and
+same-request/different-operation or same-operation/different-request collisions fail closed as
+`content_analysis_request_conflict`. Job, attempt, claim, and request rows remain atomic on a
+later-member insertion failure.
+
+Offline checks after the repair:
+
+- Content-analysis focused tests: 20 passed, including mixed new/retryable/reusable/legacy-only
+  membership, active-owner preservation, rollback, replay isolation, and a 1,001-member exact
+  ordered admission.
+- Affected backend suites: 72 passed; full backend suite: 1,018 passed. Ruff format/check passed,
+  `git diff --check` passed, and Trellis task validation passed.
+- The public `AnalysisCreate` selection remains strict and capped at 1,000; only the internal
+  workflow model is uncapped. No live platform, browser-session, LLM/provider, or runtime-database
+  operation was performed for this repair.
+
+A second live run is still a separate explicit acceptance action. The existing live sample remains
+preserved and disabled; this offline result proves the admission boundary and does not claim that
+the provider-side media enrichment or final report has passed in production-like conditions.

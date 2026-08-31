@@ -24,6 +24,7 @@ from longtian_api.schemas.content_analyses import (
     AnalysisUsage,
     AttemptStatus,
     Understanding,
+    WorkflowAnalysisCreate,
 )
 from longtian_api.services.ai_analysis import MODEL_INPUT_VERSION
 from longtian_api.services.ai_client import MAX_USAGE_TOKENS
@@ -32,6 +33,13 @@ from longtian_api.services.analysis_errors import AnalysisError
 from longtian_api.services.summary_errors import failure
 
 ACTIVE_ATTEMPTS = ("queued", "acquiring", "analysing")
+WORKFLOW_RECOVERABLE_ATTEMPTS = (
+    "input_incomplete",
+    "unsupported",
+    "failed",
+    "cancelled",
+    "interrupted",
+)
 
 
 def observation_hash(source: SummarySource) -> str:
@@ -41,6 +49,17 @@ def observation_hash(source: SummarySource) -> str:
         source.model_dump(
             exclude={"source_run_id", "matched_terms", "published_at_text"}
         )
+    )
+
+
+def workflow_intent_hash(payload: WorkflowAnalysisCreate, operation_key: str) -> str:
+    """Hash the private workflow intent separately from public API calls."""
+    return fingerprint(
+        {
+            "kind": "workflow",
+            "operation_key": operation_key,
+            "payload": payload.model_dump(),
+        }
     )
 
 
@@ -208,9 +227,65 @@ class ContentAnalysisRepository(AnalysisRepository):
             already_active_count=row["already_active_count"],
         )
 
+    def _workflow_replay(
+        self, connection, payload: WorkflowAnalysisCreate, operation_key: str
+    ):
+        existing_origin = connection.execute(
+            "SELECT id,request_id FROM content_analysis_jobs WHERE automatic_origin=?",
+            (operation_key,),
+        ).fetchone()
+        request = connection.execute(
+            "SELECT * FROM content_analysis_requests WHERE request_id=?",
+            (payload.request_id,),
+        ).fetchone()
+        if request is None:
+            # ``automatic_origin`` is the durable workflow-stage key.  The
+            # service normally derives request_id from it, but the repository
+            # must fail closed if a lower-level caller presents the same key
+            # with a different (or missing) request proof instead of leaking
+            # the UNIQUE constraint as a storage error.
+            if existing_origin is not None:
+                raise AnalysisError("content_analysis_request_conflict")
+            return None
+        if request["intent_hash"] != workflow_intent_hash(payload, operation_key):
+            raise AnalysisError("content_analysis_request_conflict")
+        if request["job_id"] is None:
+            if existing_origin is not None:
+                raise AnalysisError("content_analysis_request_conflict")
+            return AnalysisAdmission(
+                job=None,
+                admitted_count=request["admitted_count"],
+                already_active_count=request["already_active_count"],
+            )
+        replay = AnalysisAdmission(
+            job=self._read(connection, request["job_id"]),
+            admitted_count=request["admitted_count"],
+            already_active_count=request["already_active_count"],
+        )
+        if replay.job.trigger != "automatic":
+            raise AnalysisError("content_analysis_request_conflict")
+        row = connection.execute(
+            "SELECT request_id,trigger,automatic_origin "
+            "FROM content_analysis_jobs WHERE id=?",
+            (replay.job.id,),
+        ).fetchone()
+        if (
+            row is None
+            or row["request_id"] != payload.request_id
+            or row["trigger"] != "automatic"
+            or row["automatic_origin"] != operation_key
+            or (existing_origin is not None and existing_origin["id"] != replay.job.id)
+        ):
+            raise AnalysisError("content_analysis_request_conflict")
+        return replay
+
     def replay(self, payload: AnalysisCreate):
         with self.connection() as connection:
             return self._replay(connection, payload)
+
+    def workflow_replay(self, payload: WorkflowAnalysisCreate, *, operation_key: str):
+        with self.connection() as connection:
+            return self._workflow_replay(connection, payload, operation_key)
 
     def create(self, payload: AnalysisCreate) -> AnalysisAdmission:
         with self.connection(write=True) as connection:
@@ -317,6 +392,107 @@ class ContentAnalysisRepository(AnalysisRepository):
             )
             return result
 
+    def workflow_create(
+        self, payload: WorkflowAnalysisCreate, *, operation_key: str
+    ) -> AnalysisAdmission:
+        """Admit a mixed workflow membership without changing public selection rules.
+
+        Automatic runs receive one frozen analysis job for their exact ordered
+        membership.  A workflow membership may contain never-started,
+        recoverable, completed, legacy-only and currently active sources at the
+        same time; the public ``explicit`` selection intentionally cannot do
+        that and remains unchanged.  Completed sources are admitted as queued
+        attempts, allowing the normal cache/reuse path to copy their saved
+        evidence without a model request.  Legacy-only sources are queued for
+        the neutral-understanding contract instead of reinterpreting an old
+        topic judgment.  Sources owned by another analysis path are frozen as
+        unavailable attempts, so report coverage remains exact without taking
+        a duplicate claim.
+
+        All selection and claim writes happen in one transaction.  The
+        operation UUID and intent hash are persisted using the same replay
+        table as manual admissions, so an ambiguous workflow response cannot
+        create another job or another claim.
+        """
+        with self.connection(write=True) as connection:
+            replay = self._workflow_replay(connection, payload, operation_key)
+            if replay is not None:
+                return replay
+            settings = connection.execute(
+                "SELECT * FROM analysis_settings WHERE id=1"
+            ).fetchone()
+            if (
+                settings["initial_prompt_version_id"],
+                settings["report_prompt_version_id"],
+            ) != (
+                payload.initial_prompt_version_id,
+                payload.report_prompt_version_id,
+            ):
+                raise AnalysisError("analysis_prompt_changed")
+            provider = self._provider(connection, payload.configuration_revision)
+
+            selections: list[tuple[int, int, bool]] = []
+            active = 0
+            for position, content_id in enumerate(payload.result_ids):
+                claim = connection.execute(
+                    """SELECT cl.*,a.status AS latest_status FROM
+                         content_analysis_claims cl
+                       LEFT JOIN content_analysis_attempts a ON
+                         a.id=cl.latest_attempt_id
+                       WHERE cl.content_id=?""",
+                    (content_id,),
+                ).fetchone()
+                if claim is None:
+                    raise AnalysisError("result_not_found")
+
+                latest_status = claim["latest_status"]
+                if (
+                    claim["active_job_id"]
+                    or claim["active_legacy_summary_id"]
+                    or latest_status in ACTIVE_ATTEMPTS
+                ):
+                    # Keep exact workflow/report coverage, but never take a
+                    # second claim while another owner is settling the source.
+                    active += 1
+                    selections.append((content_id, position, True))
+                    continue
+
+                valid = (
+                    (latest_status is None and claim["first_attempt_id"] is None)
+                    or latest_status == "completed"
+                    or latest_status in WORKFLOW_RECOVERABLE_ATTEMPTS
+                    or (
+                        latest_status is None
+                        and claim["legacy_state"]
+                        in ("legacy_completed", "legacy_attempted")
+                    )
+                )
+                if not valid:
+                    raise AnalysisError("content_analysis_selection_conflict")
+                selections.append((content_id, position, False))
+
+            result = self._admit(
+                connection,
+                settings,
+                provider,
+                request_id=payload.request_id,
+                origin=operation_key,
+                force_refresh=payload.force_refresh,
+                active=active,
+                selections=tuple(selections),
+            )
+            connection.execute(
+                "INSERT INTO content_analysis_requests VALUES (?,?,?,?,?)",
+                (
+                    payload.request_id,
+                    workflow_intent_hash(payload, operation_key),
+                    result.job.id if result.job else None,
+                    result.admitted_count,
+                    result.already_active_count,
+                ),
+            )
+            return result
+
     def _provider(self, connection, revision):
         row = connection.execute(
             "SELECT base_url,model,revision FROM ai_settings WHERE id=1"
@@ -337,11 +513,17 @@ class ContentAnalysisRepository(AnalysisRepository):
         origin=None,
         force_refresh=False,
         active=0,
+        selections: tuple[tuple[int, int, bool], ...] | None = None,
     ):
-        count = connection.execute("SELECT COUNT(*) FROM selected_contents").fetchone()[
-            0
-        ]
-        if not count:
+        if selections is None:
+            selections = tuple(
+                (int(row[0]), position, False)
+                for position, row in enumerate(
+                    connection.execute("SELECT id FROM selected_contents ORDER BY id")
+                )
+            )
+        admitted = sum(not unavailable for _, _, unavailable in selections)
+        if not selections:
             return AnalysisAdmission(
                 job=None, admitted_count=0, already_active_count=active
             )
@@ -364,10 +546,7 @@ class ContentAnalysisRepository(AnalysisRepository):
             ),
         ).lastrowid
         prompt = read_prompt(connection, settings["initial_prompt_version_id"])
-        for position, selected in enumerate(
-            connection.execute("SELECT id FROM selected_contents ORDER BY id")
-        ):
-            content_id = selected[0]
+        for content_id, position, unavailable in selections:
             source, row = source_snapshot(connection, content_id)
             observation = observation_hash(source)
             cache_key = fingerprint(
@@ -382,11 +561,33 @@ class ContentAnalysisRepository(AnalysisRepository):
                     "extractor": f"{source.platform}-enrichment-v1",
                 }
             )
+            if unavailable:
+                connection.execute(
+                    """INSERT INTO content_analysis_attempts(
+                      job_id,content_id,source_run_id,position,source_json,
+                      first_seen_at,observation_hash,cache_key,error_json,status,
+                      created_at,finished_at)
+                      VALUES (?,?,?,?,?,?,?,?,?,'input_incomplete',?,?)""",
+                    (
+                        job_id,
+                        content_id,
+                        source.source_run_id,
+                        position,
+                        source.model_dump_json(),
+                        row["first_seen_at"],
+                        observation,
+                        cache_key,
+                        failure("acquisition", "source_active").model_dump_json(),
+                        now,
+                        now,
+                    ),
+                )
+                continue
             attempt_id = connection.execute(
-                """INSERT INTO
-                  content_analysis_attempts(job_id,content_id,source_run_id,
-              position,source_json,first_seen_at,observation_hash,cache_key,status,created_at)
-              VALUES (?,?,?,?,?,?,?,?,'queued',?)""",
+                """INSERT INTO content_analysis_attempts(
+                  job_id,content_id,source_run_id,position,source_json,
+                  first_seen_at,observation_hash,cache_key,status,created_at)
+                  VALUES (?,?,?,?,?,?,?,?,'queued',?)""",
                 (
                     job_id,
                     content_id,
@@ -410,7 +611,7 @@ class ContentAnalysisRepository(AnalysisRepository):
                 raise AnalysisError("content_analysis_selection_conflict")
         return AnalysisAdmission(
             job=self._read(connection, job_id),
-            admitted_count=count,
+            admitted_count=admitted,
             already_active_count=active,
         )
 

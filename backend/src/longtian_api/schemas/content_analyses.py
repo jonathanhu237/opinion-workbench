@@ -106,6 +106,26 @@ class AnalysisCreate(StrictModel):
         return self
 
 
+class WorkflowAnalysisCreate(StrictModel):
+    """Internal uncapped intent for one exact automation-run membership."""
+
+    request_id: str = Field(min_length=36, max_length=36)
+    configuration_revision: PositiveId
+    initial_prompt_version_id: PositiveId
+    report_prompt_version_id: PositiveId
+    force_refresh: bool
+    result_ids: list[PositiveId] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def valid_intent(self) -> Self:
+        request_id = UUID(self.request_id)
+        if request_id.version != 4 or str(request_id) != self.request_id:
+            raise ValueError("invalid request ID")
+        if len(self.result_ids) != len(set(self.result_ids)):
+            raise ValueError("duplicate result")
+        return self
+
+
 class AnalysisUsage(SummaryUsage):
     attempted_requests: Count
     accounted_requests: Count

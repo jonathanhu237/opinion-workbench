@@ -10,7 +10,10 @@ from longtian_api.repositories.content_analyses import ContentAnalysisRepository
 from longtian_api.repositories.search_runs import SearchResultSourceRecord
 from longtian_api.schemas.ai_summaries import FailureCode
 from longtian_api.schemas.analysis_evidence import SavedInput
-from longtian_api.schemas.content_analyses import AnalysisCreate
+from longtian_api.schemas.content_analyses import (
+    AnalysisCreate,
+    WorkflowAnalysisCreate,
+)
 from longtian_api.services.ai_analysis import (
     ANALYSIS_MAX_TOKENS,
     MODEL_DEADLINE_SECONDS,
@@ -49,11 +52,12 @@ class ContentAnalysisService:
     async def workflow_admit(self, *, result_ids, operation_key, snapshot):
         """Admit topic-neutral understanding for one workflow membership.
 
-        The workflow owns the selected IDs and operation key.  This adapter
-        deliberately delegates to the existing strict analysis repository so
-        browser/media leases, model parsing and usage accounting stay in one
-        place; the task-specific objective is consumed only by the report
-        stage.
+        The workflow owns the selected IDs and operation key.  Workflow
+        admission has its own mixed-selection repository contract: the public
+        explicit/retry/reanalysis semantics stay strict while a single
+        workflow job can contain never-started, recoverable and reusable
+        completed members.  The task-specific objective is consumed only by
+        the report stage.
         """
         if not result_ids:
             return None
@@ -65,7 +69,7 @@ class ContentAnalysisService:
         configuration_revision = getattr(snapshot, "ai_configuration_revision", None)
         if configuration_revision is None:
             raise AIError("ai_configuration_required")
-        payload = AnalysisCreate(
+        payload = WorkflowAnalysisCreate(
             request_id=_operation_request_id(operation_key),
             configuration_revision=configuration_revision,
             initial_prompt_version_id=(
@@ -77,9 +81,35 @@ class ContentAnalysisService:
                 or settings.report_prompt.id
             ),
             force_refresh=False,
-            selection={"kind": "explicit", "result_ids": list(result_ids)},
+            result_ids=list(result_ids),
         )
-        return await self.create(payload)
+        return await settle(self._workflow_admit(payload, operation_key))
+
+    async def _workflow_admit(
+        self, payload: WorkflowAnalysisCreate, operation_key: str
+    ):
+        async with self._admission:
+            replay = await database_call(
+                self.repository.workflow_replay,
+                payload,
+                operation_key=operation_key,
+            )
+            if replay is not None:
+                return replay
+            if self._closed:
+                raise AnalysisError("content_analysis_unavailable")
+            await database_call(self._ai.read)
+            workflow_create = getattr(self.repository, "workflow_create", None)
+            if workflow_create is None:
+                raise AnalysisError("content_analysis_unavailable")
+            result = await database_call(
+                workflow_create,
+                payload,
+                operation_key=operation_key,
+            )
+            if result.job is not None:
+                await self._launch()
+            return result
 
     async def _create(self, payload):
         async with self._admission:

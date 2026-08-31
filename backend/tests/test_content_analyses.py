@@ -2,6 +2,7 @@
 
 import asyncio
 import threading
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -14,12 +15,14 @@ from longtian_api.repositories.results import ResultsRepository
 from longtian_api.schemas.ai_settings import AISettingsUpdate
 from longtian_api.schemas.ai_summaries import SummaryCreate
 from longtian_api.schemas.analysis_settings import PromptUpdate
+from longtian_api.schemas.content_analyses import WorkflowAnalysisCreate
 from longtian_api.services.ai_client import MAX_USAGE_TOKENS, AIUsage
 from longtian_api.services.ai_errors import AIError
 from longtian_api.services.ai_summaries import SummaryService
 from longtian_api.services.analysis_errors import AnalysisError
 from longtian_api.services.browser_operations import BrowserOperationOwner
 from longtian_api.services.media_crawler_auth_worker import EnrichmentWorkerResult
+from longtian_api.services.summary_errors import failure
 
 
 def test_independent_neutral_media_understanding_and_unique_settlement(tmp_path):
@@ -230,6 +233,279 @@ def test_failed_known_new_input_cannot_resurrect_old_compatible_text(tmp_path):
         assert len(worker.calls) == len(model.calls) == 3
         assert service.repository.attempt(old.id) == old
         await service.shutdown()
+
+    asyncio.run(run())
+
+
+def test_workflow_admission_accepts_mixed_new_retryable_and_reusable_members(
+    tmp_path,
+):
+    async def run():
+        database, _, service, ai, model, worker, _ = environment(tmp_path, count=4)
+        settings = AnalysisSettingsRepository(database).read()
+        snapshot = SimpleNamespace(
+            ai_configuration_revision=1,
+            initial_prompt_version_id=settings.initial_prompt.id,
+            report_prompt_version_id=settings.report_prompt.id,
+        )
+
+        completed = await service.create(
+            request(database, kind="explicit", result_ids=[1])
+        )
+        await finish(service)
+        assert service.repository.read(completed.job.id).counts.completed == 1
+
+        retryable = service.repository.create(
+            request(database, kind="explicit", result_ids=[2])
+        ).job
+        retryable_item = service.repository.items(retryable.id).items[0]
+        service.repository.start(retryable.id)
+        service.repository.begin(retryable_item.id)
+        service.repository.finish_attempt(
+            retryable_item.id,
+            "input_incomplete",
+            error=failure("acquisition", "input_incomplete"),
+        )
+        service.repository.finish(retryable.id, "completed")
+        with database.connect() as connection:
+            connection.execute(
+                "UPDATE content_analysis_claims SET legacy_state='legacy_completed' "
+                "WHERE content_id=4"
+            )
+
+        # The public contract remains deliberately strict and atomic.
+        with pytest.raises(AnalysisError, match="content_analysis_selection_conflict"):
+            service.repository.create(
+                request(database, kind="explicit", result_ids=[2, 3, 1, 4])
+            )
+
+        operation_key = "automation:run:2:initial_analysis:1"
+        admitted = await service.workflow_admit(
+            result_ids=(2, 3, 1, 4),
+            operation_key=operation_key,
+            snapshot=snapshot,
+        )
+        assert admitted.admitted_count == 4
+        assert admitted.already_active_count == 0
+        assert admitted.job.trigger == "automatic"
+        assert [
+            item.source.result_id
+            for item in service.repository.items(admitted.job.id).items
+        ] == [2, 3, 1, 4]
+
+        await finish(service)
+        settled = service.repository.read(admitted.job.id)
+        assert settled.status == "completed"
+        assert settled.counts.completed == 4
+        assert settled.counts.reused == 1
+        assert len(model.calls) == len(worker.calls) == 4
+
+        replay = await service.workflow_admit(
+            result_ids=(2, 3, 1, 4),
+            operation_key=operation_key,
+            snapshot=snapshot,
+        )
+        workflow_payload = WorkflowAnalysisCreate(
+            request_id=replay.job.request_id,
+            configuration_revision=replay.job.configuration_revision,
+            initial_prompt_version_id=replay.job.initial_prompt.id,
+            report_prompt_version_id=replay.job.report_prompt.id,
+            force_refresh=False,
+            result_ids=[2, 3, 1, 4],
+        )
+        assert replay == service.repository.workflow_replay(
+            workflow_payload, operation_key=operation_key
+        )
+        assert replay.job.id == admitted.job.id
+        with pytest.raises(AnalysisError, match="content_analysis_request_conflict"):
+            service.repository.create(
+                request(
+                    database,
+                    kind="explicit",
+                    result_ids=[2, 3, 1],
+                    request_id=replay.job.request_id,
+                )
+            )
+        with pytest.raises(AnalysisError, match="content_analysis_request_conflict"):
+            service.repository.workflow_create(
+                workflow_payload,
+                operation_key="automation:run:999:initial_analysis:1",
+            )
+        with pytest.raises(AnalysisError, match="content_analysis_request_conflict"):
+            service.repository.workflow_create(
+                workflow_payload.model_copy(update={"request_id": str(uuid4())}),
+                operation_key=operation_key,
+            )
+        assert len(model.calls) == len(worker.calls) == 4
+        await service.shutdown()
+        await ai.shutdown()
+
+    asyncio.run(run())
+
+
+def test_workflow_admission_freezes_active_member_without_duplicate_work(tmp_path):
+    async def run():
+        database, _, service, ai, model, worker, _ = environment(tmp_path, count=2)
+        settings = AnalysisSettingsRepository(database).read()
+        snapshot = SimpleNamespace(
+            ai_configuration_revision=1,
+            initial_prompt_version_id=settings.initial_prompt.id,
+            report_prompt_version_id=settings.report_prompt.id,
+        )
+        model.gate = asyncio.Event()
+        active = await service.create(
+            request(database, kind="explicit", result_ids=[1])
+        )
+        await model.entered.wait()
+
+        admitted = await service.workflow_admit(
+            result_ids=(1, 2),
+            operation_key="automation:run:3:initial_analysis:1",
+            snapshot=snapshot,
+        )
+        assert admitted.admitted_count == 1
+        assert admitted.already_active_count == 1
+        assert admitted.job.counts.total == 2
+        assert admitted.job.counts.input_incomplete == 1
+        items = service.repository.items(admitted.job.id).items
+        assert [item.source.result_id for item in items] == [1, 2]
+        assert items[0].status == "input_incomplete"
+        assert items[0].error.code == "source_active"
+        assert items[1].status == "queued"
+
+        with database.connect() as connection:
+            claims = {
+                row["content_id"]: row["active_job_id"]
+                for row in connection.execute(
+                    """SELECT content_id,active_job_id FROM content_analysis_claims
+                       WHERE content_id IN (1,2) ORDER BY content_id"""
+                )
+            }
+        assert claims == {1: active.job.id, 2: admitted.job.id}
+
+        model.gate.set()
+        await finish(service)
+        settled = service.repository.read(admitted.job.id)
+        assert settled.status == "completed"
+        assert settled.counts.completed == 1
+        assert settled.counts.input_incomplete == 1
+        assert sorted(content_id for content_id, _ in worker.calls) == ["1000", "1001"]
+        assert len(model.calls) == 2
+        await service.shutdown()
+        await ai.shutdown()
+
+    asyncio.run(run())
+
+
+def test_workflow_admission_supports_uncapped_exact_membership(tmp_path):
+    async def run():
+        database, _, service, ai, _, _, _ = environment(tmp_path, count=0)
+        seed_run(
+            database,
+            1001,
+            terms=tuple(f"批量词-{index}" for index in range(21)),
+        )
+        settings = AnalysisSettingsRepository(database).read()
+        payload = WorkflowAnalysisCreate(
+            request_id=str(uuid4()),
+            configuration_revision=1,
+            initial_prompt_version_id=settings.initial_prompt.id,
+            report_prompt_version_id=settings.report_prompt.id,
+            force_refresh=False,
+            result_ids=list(range(1, 1002)),
+        )
+        admitted = service.repository.workflow_create(
+            payload, operation_key="automation:large-membership:initial-analysis"
+        )
+        assert admitted.admitted_count == 1001
+        assert admitted.already_active_count == 0
+        assert admitted.job.counts.total == 1001
+        assert admitted.job.counts.queued == 1001
+        with database.connect() as connection:
+            rows = connection.execute(
+                "SELECT content_id,position,status FROM content_analysis_attempts "
+                "WHERE job_id=? ORDER BY position",
+                (admitted.job.id,),
+            ).fetchall()
+        assert len(rows) == 1001
+        assert rows[0][0:2] == (1, 0)
+        assert rows[-1][0:2] == (1001, 1000)
+        assert {row[2] for row in rows} == {"queued"}
+        # This is an admission-boundary test; cancel the frozen job without
+        # starting enrichment or model work.
+        service.repository.finish(admitted.job.id, "cancelled")
+        assert service.repository.read(admitted.job.id).counts.cancelled == 1001
+        await service.shutdown()
+        await ai.shutdown()
+
+    asyncio.run(run())
+
+
+def test_workflow_admission_rolls_back_job_claims_and_replay_on_member_failure(
+    tmp_path,
+):
+    async def run():
+        database, _, service, ai, model, worker, _ = environment(tmp_path, count=2)
+        settings = AnalysisSettingsRepository(database).read()
+        snapshot = SimpleNamespace(
+            ai_configuration_revision=1,
+            initial_prompt_version_id=settings.initial_prompt.id,
+            report_prompt_version_id=settings.report_prompt.id,
+        )
+        operation_key = "automation:run:4:initial_analysis:1"
+        with database.connect() as connection:
+            connection.execute(
+                """CREATE TRIGGER fail_workflow_member
+                   BEFORE INSERT ON content_analysis_attempts WHEN NEW.position=1
+                   BEGIN SELECT RAISE(ABORT,'private workflow sentinel'); END"""
+            )
+
+        with pytest.raises(AnalysisError, match="analysis_storage_unavailable"):
+            await service.workflow_admit(
+                result_ids=(1, 2),
+                operation_key=operation_key,
+                snapshot=snapshot,
+            )
+
+        with database.connect() as connection:
+            assert (
+                connection.execute(
+                    "SELECT COUNT(*) FROM content_analysis_jobs"
+                ).fetchone()[0]
+                == 0
+            )
+            assert (
+                connection.execute(
+                    "SELECT COUNT(*) FROM content_analysis_attempts"
+                ).fetchone()[0]
+                == 0
+            )
+            assert (
+                connection.execute(
+                    "SELECT COUNT(*) FROM content_analysis_requests"
+                ).fetchone()[0]
+                == 0
+            )
+            assert (
+                connection.execute(
+                    """SELECT COUNT(*) FROM content_analysis_claims
+                   WHERE active_job_id IS NOT NULL OR first_attempt_id IS NOT NULL
+                     OR latest_attempt_id IS NOT NULL"""
+                ).fetchone()[0]
+                == 0
+            )
+            connection.execute("DROP TRIGGER fail_workflow_member")
+
+        admitted = await service.workflow_admit(
+            result_ids=(1, 2),
+            operation_key=operation_key,
+            snapshot=snapshot,
+        )
+        await finish(service)
+        assert service.repository.read(admitted.job.id).counts.completed == 2
+        assert len(model.calls) == len(worker.calls) == 2
+        await service.shutdown()
+        await ai.shutdown()
 
     asyncio.run(run())
 
