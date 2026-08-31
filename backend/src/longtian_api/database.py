@@ -4,7 +4,7 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
-CURRENT_DATABASE_VERSION = 15
+CURRENT_DATABASE_VERSION = 16
 DEFAULT_RULE_NAME = "龙田街道及四个社区"
 DEFAULT_RULE_TERMS = (
     "龙田街道",
@@ -97,6 +97,9 @@ class Database:
                 version = 14
             if version < 15:
                 _migrate_to_version_15(connection)
+                version = 15
+            if version < 16:
+                _migrate_to_version_16(connection)
         finally:
             connection.close()
 
@@ -152,6 +155,45 @@ def _migrate_to_version_15(connection: sqlite3.Connection) -> None:
         if connection.in_transaction:
             connection.execute("ROLLBACK")
         raise
+
+
+def _migrate_to_version_16(connection: sqlite3.Connection) -> None:
+    """Repair the report table shape left behind by historical v15 installs."""
+    from longtian_api.migrations.topic_reports_v16 import migrate
+
+    version = _read_user_version(connection)
+    if version >= 16:
+        return
+    if version != 15:
+        raise DatabaseVersionError("Unsupported database migration source version.")
+
+    # Replacing a table with FK-referencing graph tables requires SQLite's
+    # legacy rename behavior.  The migration copies and verifies every row in
+    # one transaction, then restores the connection's normal FK enforcement.
+    previous_foreign_keys = connection.execute("PRAGMA foreign_keys").fetchone()[0]
+    previous_legacy_alter_table = connection.execute(
+        "PRAGMA legacy_alter_table"
+    ).fetchone()[0]
+    try:
+        if previous_foreign_keys:
+            connection.execute("PRAGMA foreign_keys = OFF")
+        connection.execute("BEGIN IMMEDIATE")
+        migrate(connection)
+        if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
+            raise sqlite3.DatabaseError("Foreign key check failed after v16 migration")
+        connection.execute("PRAGMA user_version = 16")
+        connection.execute("COMMIT")
+    except BaseException:
+        if connection.in_transaction:
+            connection.execute("ROLLBACK")
+        raise
+    finally:
+        connection.execute(f"PRAGMA foreign_keys = {int(previous_foreign_keys)}")
+        # topic_reports_v16 restores this itself, but keep the wrapper's
+        # connection setting stable if migration fails before entering it.
+        connection.execute(
+            f"PRAGMA legacy_alter_table = {int(previous_legacy_alter_table)}"
+        )
 
 
 def _migrate_to_version_13(connection: sqlite3.Connection) -> None:

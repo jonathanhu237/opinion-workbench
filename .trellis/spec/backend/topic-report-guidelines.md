@@ -68,6 +68,11 @@ callback. SQLite v14 adds
 `topic_report_node_sources`, `topic_report_node_children` and
 `topic_report_requests`. It preserves v11 legacy and v12/v13 analysis/schedule
 rows. Never down-label an upgraded database to run old binaries.
+SQLite v16 normalizes historical v15 `topic_report_runs` tables to the
+workflow-owned operation-key shape. The repair preserves report/source/node
+rows, IDs, JSON, timestamps, foreign keys and AUTOINCREMENT state; it validates
+the full table/index/trigger contract rather than trusting only the presence of
+`workflow_operation_key`.
 
 The pure engine boundary is `schemas/topic_report_engine.py` plus
 `services/topic_report_engine.py`: `prepare_judgment`, `take_leaf`,

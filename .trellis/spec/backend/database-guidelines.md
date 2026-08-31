@@ -104,3 +104,86 @@ API route -> service -> repository -> sqlite3
 - Using `INSERT OR IGNORE` to hide normalization or migration defects.
 - Returning raw `sqlite3` exceptions, SQL, paths, or product values to an API or log.
 - Allowing a future collection/browser call to run while a write transaction is open.
+
+## Scenario: Repairing a changed historical migration
+
+### 1. Scope / Trigger
+
+Use this contract when released databases with the same `PRAGMA user_version`
+can have different table shapes because an older migration file was edited
+after some installations had already run it. Historical migration output is an
+immutable compatibility boundary: restore the old migration and add a new
+forward-only repair version.
+
+### 2. Signatures
+
+```python
+CURRENT_DATABASE_VERSION = 16
+Database.initialize()                       # runs pending versions in order
+_migrate_to_version_16(sqlite3.Connection)  # accepts only user_version=15
+topic_reports_v16.migrate(connection)       # normalizes topic_report_runs
+```
+
+Schema 16 adds nullable unique `topic_report_runs.workflow_operation_key` and
+the automatic-workflow CHECK/immutability contract. No HTTP payload changes.
+
+### 3. Contracts
+
+- A genuine old v15 table, an empty old v15 table, and an already-correct v15
+  table all finish with the exact same v16 table/index/trigger shape.
+- Rebuilding `topic_report_runs` preserves every existing report value, ID,
+  graph/source/request foreign key, JSON field, timestamp and AUTOINCREMENT
+  sequence. The new column is `NULL` for historical rows.
+- Table replacement is one `BEGIN IMMEDIATE` transaction. If foreign keys must
+  be disabled for the SQLite rename/drop sequence, save and restore both
+  `foreign_keys` and `legacy_alter_table`, then require an empty
+  `foreign_key_check` before commit.
+- Reopen is idempotent. A database newer than 16 is rejected without writes.
+
+### 4. Validation & Error Matrix
+
+| Condition | Required result |
+| --- | --- |
+| `user_version < 15` enters v16 directly | Reject unsupported source version; earlier migrations own that path. |
+| `user_version > 16` | Reject as a forward-version database without changing rows. |
+| Missing report table or unexpected source columns | Fail startup and roll back; do not guess a shape. |
+| Copy, rename, CHECK, index, trigger or FK validation fails | Roll back table/rows/version and restore connection PRAGMAs. |
+| Column exists but owned CHECK/index/trigger SQL is stale | Rebuild to the canonical v16 shape; column presence alone is insufficient proof. |
+| Already canonical v15 shape | Advance only the version; do not rewrite report rows or sequence. |
+
+### 5. Good / Base / Bad Cases
+
+- Good: a populated historical v15 report graph migrates to v16 with identical
+  old-column projections, IDs, links and sequence, and can admit a workflow report.
+- Base: an empty historical v15 database gains the canonical table shape and no
+  product rows.
+- Bad: edit `migrations/topic_reports.py` to add a new column and keep schema 15;
+  already-migrated installations will never execute that DDL.
+
+### 6. Tests Required
+
+- Construct v13, run the historically accurate v14 and v15 migrations, seed a
+  report plus dependent source/node membership, then assert exact old-column and
+  sequence preservation through v16, FK/integrity success and idempotent reopen.
+- Cover an empty historical v15 database and an already-canonical v15 database.
+- Inject failure after the real table swap/copy and assert version 15, rows,
+  schema, foreign keys and PRAGMA settings are restored.
+- Compare canonical table, owned index and owned trigger SQL; do not use only
+  `PRAGMA table_info` as the schema proof.
+
+### 7. Wrong vs Correct
+
+Wrong: mutate a released migration and assume the existing version will rerun.
+
+```python
+# v14 file edited after release; old user_version=15 databases stay unchanged
+CREATE TABLE topic_report_runs (... workflow_operation_key TEXT UNIQUE ...)
+```
+
+Correct: preserve v14 history and add an explicit v15-to-v16 repair.
+
+```python
+if version < 16:
+    _migrate_to_version_16(connection)
+# v16 transaction normalizes the complete table/index/trigger contract.
+```

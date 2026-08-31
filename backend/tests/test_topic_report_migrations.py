@@ -164,6 +164,241 @@ def populated_v13(tmp_path):
     return database
 
 
+def _historical_v15(tmp_path):
+    database = populated_v13(tmp_path)
+    with database.connect() as connection:
+        migrations._migrate_to_version_14(connection)
+        migrations._migrate_to_version_15(connection)
+    return database
+
+
+def _seed_historical_report_graph(database):
+    now = "2026-08-28T01:00:00+00:00"
+    with database.connect() as connection:
+        report_id = connection.execute(
+            """INSERT INTO topic_report_runs(request_id,trigger,selection_json,
+              prompt_json,configuration_revision,base_url,model,status,created_at)
+              VALUES (?,'interval','{"result_ids":[1]}','{"instructions":"old"}',
+                1,'https://example.com/v1','historical-model','queued',?)""",
+            (str(uuid4()), now),
+        ).lastrowid
+        source_id = connection.execute(
+            """INSERT INTO topic_report_sources(report_id,content_id,position,
+              source_json,first_seen_at,unavailable_reason)
+              VALUES (?,1,0,'{"legacy":true}',?,'not_analysed')""",
+            (report_id, now),
+        ).lastrowid
+        node_id = connection.execute(
+            """INSERT INTO topic_report_nodes(report_id,node_key,kind,position,level,
+              status,created_at) VALUES (?, 'judgment-0','judgment',0,0,'queued',?)""",
+            (report_id, now),
+        ).lastrowid
+        connection.execute(
+            """INSERT INTO topic_report_node_sources(node_id,source_id,position)
+              VALUES (?,?,0)""",
+            (node_id, source_id),
+        )
+        connection.execute(
+            """UPDATE topic_report_nodes SET status='completed',attempted=1,
+              output_json='{"decision":"uncertain"}',output_hash=?,finished_at=?
+              WHERE id=?""",
+            ("f" * 64, now, node_id),
+        )
+        connection.execute(
+            """UPDATE topic_report_runs SET status='completed',root_section_id=?,
+              finished_at=? WHERE id=?""",
+            (node_id, now, report_id),
+        )
+        # Keep a deliberately non-maximal sequence value to prove that the
+        # table swap does not silently reset AUTOINCREMENT state.
+        connection.execute(
+            "UPDATE sqlite_sequence SET seq=42 WHERE name='topic_report_runs'"
+        )
+        return report_id, source_id, node_id
+
+
+def _historical_report_projection(database):
+    columns = (
+        "id",
+        "request_id",
+        "trigger",
+        "initial_job_id",
+        "completion_event_id",
+        "parent_report_id",
+        "selection_json",
+        "prompt_json",
+        "configuration_revision",
+        "base_url",
+        "model",
+        "status",
+        "revision",
+        "cancel_requested",
+        "root_section_id",
+        "empty_reason",
+        "queue_reason",
+        "recovery_reason",
+        "error_json",
+        "created_at",
+        "started_at",
+        "finished_at",
+    )
+    with database.connect() as connection:
+        return {
+            table: [
+                tuple(row)
+                for row in connection.execute(f'SELECT * FROM "{table}" ORDER BY rowid')
+            ]
+            for table in (
+                "topic_report_sources",
+                "topic_report_nodes",
+                "topic_report_node_sources",
+                "topic_report_node_children",
+                "topic_report_requests",
+            )
+        } | {
+            "topic_report_runs": [
+                tuple(row)
+                for row in connection.execute(
+                    f"SELECT {','.join(columns)} FROM topic_report_runs ORDER BY rowid"
+                )
+            ],
+            "sequences": [
+                tuple(row)
+                for row in connection.execute(
+                    "SELECT name,seq FROM sqlite_sequence ORDER BY name"
+                )
+            ],
+        }
+
+
+def test_v16_repairs_historical_v15_report_graph_without_rewriting_rows(tmp_path):
+    database = _historical_v15(tmp_path)
+    ids = _seed_historical_report_graph(database)
+    before = _historical_report_projection(database)
+    with database.connect() as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 15
+        assert "workflow_operation_key" not in {
+            row[1] for row in connection.execute("PRAGMA table_info(topic_report_runs)")
+        }
+
+    database.initialize()
+    after = _historical_report_projection(database)
+    assert after == before
+    with database.connect() as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 16
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+        assert tuple(
+            connection.execute(
+                "SELECT id,workflow_operation_key FROM topic_report_runs"
+            ).fetchone()
+        ) == (ids[0], None)
+        assert {
+            row[1] for row in connection.execute("PRAGMA table_info(topic_report_runs)")
+        } >= {"workflow_operation_key"}
+        assert (
+            connection.execute(
+                "SELECT sql FROM sqlite_master WHERE type='trigger' "
+                "AND name='topic_report_snapshot_immutable'"
+            )
+            .fetchone()[0]
+            .find("workflow_operation_key")
+            >= 0
+        )
+
+    # Reopening a repaired database must not rebuild it a second time.
+    database.initialize()
+    assert _historical_report_projection(database) == before
+
+
+def test_v16_repairs_an_empty_historical_v15_database(tmp_path):
+    database = Database(tmp_path / "empty-v15.sqlite3")
+    create_legacy_schema(database, 15)
+    with database.connect() as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 15
+        assert (
+            connection.execute("SELECT COUNT(*) FROM topic_report_runs").fetchone()[0]
+            == 0
+        )
+        assert "workflow_operation_key" not in {
+            row[1] for row in connection.execute("PRAGMA table_info(topic_report_runs)")
+        }
+
+    database.initialize()
+    with database.connect() as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 16
+        assert (
+            connection.execute("SELECT COUNT(*) FROM topic_report_runs").fetchone()[0]
+            == 0
+        )
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+
+
+def test_v16_failure_rolls_back_historical_report_table_swap(tmp_path, monkeypatch):
+    import longtian_api.migrations.topic_reports_v16 as migration
+
+    database = _historical_v15(tmp_path)
+    _seed_historical_report_graph(database)
+    before = _historical_report_projection(database)
+    original = migration.migrate
+
+    def fail(connection):
+        original(connection)
+        raise RuntimeError("synthetic v16 failure after report copy")
+
+    monkeypatch.setattr(migration, "migrate", fail)
+    with pytest.raises(RuntimeError, match="v16 failure"):
+        database.initialize()
+    assert _historical_report_projection(database) == before
+    with database.connect() as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 15
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+        assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+        assert connection.execute("PRAGMA legacy_alter_table").fetchone()[0] == 0
+        assert "workflow_operation_key" not in {
+            row[1] for row in connection.execute("PRAGMA table_info(topic_report_runs)")
+        }
+
+
+def test_v16_accepts_already_new_v15_report_shape_without_rewrite(tmp_path):
+    database = _historical_v15(tmp_path)
+    _seed_historical_report_graph(database)
+    database.initialize()
+    before = _historical_report_projection(database)
+    with database.connect() as connection:
+        connection.execute("PRAGMA user_version = 15")
+    database.initialize()
+    assert _historical_report_projection(database) == before
+    with database.connect() as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 16
+
+
+def test_v16_repairs_a_new_column_with_an_old_trigger_shape(tmp_path):
+    database = _historical_v15(tmp_path)
+    _seed_historical_report_graph(database)
+    database.initialize()
+    expected = _historical_report_projection(database)
+    with database.connect() as connection:
+        connection.execute("PRAGMA user_version = 15")
+        connection.execute("DROP TRIGGER topic_report_snapshot_immutable")
+        connection.execute(
+            """CREATE TRIGGER topic_report_snapshot_immutable BEFORE UPDATE
+            ON topic_report_runs BEGIN SELECT RAISE(ABORT,'wrong trigger'); END"""
+        )
+
+    database.initialize()
+    assert _historical_report_projection(database) == expected
+    with database.connect() as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 16
+        trigger_sql = connection.execute(
+            "SELECT sql FROM sqlite_master WHERE name='topic_report_snapshot_immutable'"
+        ).fetchone()[0]
+        assert (
+            "workflow_operation_key" in trigger_sql
+            and "wrong trigger" not in trigger_sql
+        )
+
+
 def test_genuine_populated_v13_adds_only_reports(tmp_path):
     database = populated_v13(tmp_path)
     before = old_projection(database)

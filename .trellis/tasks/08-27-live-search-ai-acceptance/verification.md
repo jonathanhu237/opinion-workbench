@@ -551,3 +551,112 @@ Offline checks after the repair:
 A second live run is still a separate explicit acceptance action. The existing live sample remains
 preserved and disabled; this offline result proves the admission boundary and does not claim that
 the provider-side media enrichment or final report has passed in production-like conditions.
+
+## Final Three-Platform E2E — Live Follow-up and Schema-16 Repair 2026-09-01
+
+The user explicitly approved one new bounded end-to-end run after the mixed workflow-admission
+repair. Before startup, the live database had only terminal history, schema 15,
+`quick_check=ok`, `integrity_check=ok`, and zero foreign-key violations. A fresh private backup was
+created at `runtime/e2e-final.dawoVc/before-live.sqlite3` (directory 0700, file 0600; SHA-256
+`281a1e48e539937dd29de35b5007ea5eb155c66a9de747594ec23f6e331ee902`). The backend ran on
+127.0.0.1:8000, the frontend on 127.0.0.1:5174, and the existing Chrome CDP listener remained on
+127.0.0.1:9222. No unrelated task or browser-operation owner was active.
+
+Connection checks were serial and terminal before collection:
+
+- Weibo attempt `ab9a910b-9921-4258-8756-4da85aec532d` briefly projected
+  `action_required/approve_connection`, then completed `connected`, guidance `none`, with no
+  active attempt.
+- Kuaishou attempt `9855d144-676c-4f89-9545-e3d86a50a3ba` completed `connected`, guidance `none`.
+- Xiaohongshu attempt `4707ef61-2337-4153-bebd-f726089653f3` completed `connected`, guidance
+  `none`. Douyin and Toutiao were not checked.
+
+The normal APIs created rule 9 (`2026-09-01验收·最终三平台链路`) with the single effective query
+`深圳坪山龙田街道 投诉`, and disabled-by-default task 3
+(`2026-09-01验收·最终三平台各一条`) with exact platforms `wb/ks/xhs`, cap 1, and a dormant
+43,200-minute schedule. The only run-now request was
+`f8833b56-1133-4cfd-8d99-b33e10d49eb8`; it created run 3. No run retry, analysis retry, manual
+report, or second run was issued. Rule 9 was disabled by full replacement after the terminal run;
+task 3 remained disabled.
+
+### Live stage outcomes
+
+| Stage | Child | Durable result |
+| --- | --- | --- |
+| Collection | batch 3 | completed; input 3, success 3, failure 0 |
+| Initial analysis | job 2 | completed; total 3, completed 2, failed 1; 3 attempted/accounted model requests; 2,237 prompt + 1,497 completion = 3,734 total tokens |
+| Topic report | no child | failed before report admission; input/success/failure 0; no report/model usage |
+
+Batch 3 retained exactly one observation per selected platform. Weibo search run 7 completed with
+one repeated result (content 1); Kuaishou run 8 completed with one new result (content 12);
+Xiaohongshu run 9 completed with one repeated result (content 7). Run membership and analysis-job
+position order are exactly `(1, 7, 12)`.
+
+The best-effort content contract was exercised live rather than short-circuited:
+
+- Weibo content 1 acquired partial detail text plus an explicitly incomplete/unsafe image
+  inventory (`detail_text`, text available but incomplete). Its one model request consumed 1,476
+  tokens and settled failed because the provider response was invalid JSON. The input and error
+  remain inspectable; the source was not mislabeled complete.
+- Xiaohongshu content 7 acquired complete detail text while its one expected image remained
+  unavailable. Its analysis completed in 1,271 tokens and correctly retained the missing-image
+  limitation; the text is a generic complaint/legal-guide result with no proved Longtian locality.
+- Kuaishou content 12 acquired partial detail text for a Shenzhen resident complaint while video
+  and audio remained unavailable/unknown. Its analysis completed in 987 tokens and explicitly
+  noted that the street/district was unspecified rather than asserting Longtian relevance.
+
+This proves the repaired scheduling/admission and evidence-driven enrichment path through saved
+LLM understanding for two of three samples. It does not prove media acquisition: all observed
+image/video/audio assets remained unavailable under the existing safe-media URL boundary.
+
+### Report-admission root cause
+
+Run 3 reached report attempt 1 only after job 2 had genuinely settled, so the earlier admission
+wrapper/timing and mixed-membership defects are no longer the blocker. The report attempt failed in
+about seven milliseconds with `child_id=null`; the runtime table `topic_report_runs` remained
+empty. A private post-run copy at `runtime/e2e-final.dawoVc/after-live.sqlite3` reproduced the exact
+repository call without network/model work and exposed the hidden SQLite error:
+
+```text
+sqlite3.OperationalError: no such column: workflow_operation_key
+```
+
+The live database reported `user_version=15`, but its historical `topic_report_runs` schema had no
+`workflow_operation_key`. The cause was migration drift: the v14 report migration had later been
+edited to include the workflow field, while the v15 automation migration did not alter report
+tables that an older installation had already created. Fresh test databases therefore had the
+column, but a genuine upgraded v15 database did not. The workflow service sanitized this storage
+exception to the durable generic `stage_failed`, so no traceback appeared in the API log.
+
+### Offline schema-16 repair proof
+
+The source repair restores the historically accurate v14 report migration and adds a forward-only
+v15-to-v16 normalization. Schema 16 validates the complete owned report table/index/trigger shape,
+not only the new column; preserves report/source/node/request rows, IDs, JSON, timestamps,
+foreign-key graph and `sqlite_sequence`; restores `foreign_keys` and `legacy_alter_table` after
+success or failure; and rolls back the whole table swap on error.
+
+Independent offline verification passed Ruff, compile smoke, `git diff --check`, 23 focused
+migration/workflow tests, and the full backend suite (`1,023 passed`). A separate private copy
+`runtime/e2e-final.dawoVc/migration-probe.sqlite3` was migrated from the actual post-run v15 shape
+to v16. On that copy only, the same run-3 report admission then succeeded without starting the
+report runner or calling the model: report 1 was queued with exact workflow-run selection,
+coverage total 3 / ready 2 / unavailable 1, three frozen source rows, two judgment nodes,
+`quick_check=ok`, and zero foreign-key violations.
+
+The live runtime database itself was not migrated during this repair and no report was retried.
+At final live shutdown it remained schema 15 with rule 9/task 3 disabled, run/batch/job history
+preserved, `quick_check=ok`, `integrity_check=ok`, and zero foreign-key violations. Applying schema
+16 to the live database and running another paid report attempt require a separate explicit action.
+
+### Follow-up matrix
+
+| Capability | Status | Evidence / limitation |
+| --- | --- | --- |
+| WB/KS/XHS connection | **PASS** | Three serial checks connected with no terminal login/challenge/rate-limit blocker |
+| Three-platform collection | **PASS** | Batch 3 completed 3/3; one retained result per platform |
+| Best-effort enrichment | **PARTIAL/PASS** | All three produced evidence-bearing inputs; media assets stayed unavailable/unknown |
+| Initial LLM analysis | **PARTIAL/PASS** | Job 2 waited to settlement; 2 saved, 1 invalid-JSON failure; 3 calls / 3,734 tokens |
+| Automatic report | **FAIL (migration)** | Historical v15 table lacked workflow operation key; no child/report/citations were created |
+| Schema repair | **OFFLINE PASS** | Schema 16 full suite passed and the actual copied v15 DB admitted the exact report graph |
+| Cleanup/preservation | **PASS** | Rule 9 and task 3 disabled; no retries; backups, history, original rule/config and FK integrity preserved |

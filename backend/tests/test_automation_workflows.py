@@ -105,7 +105,7 @@ def test_v15_is_additive_and_does_not_convert_old_schedules(tmp_path: Path):
         assert (
             connection.execute("PRAGMA user_version").fetchone()[0]
             == CURRENT_DATABASE_VERSION
-            == 15
+            == 16
         )
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         assert (

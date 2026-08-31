@@ -53,6 +53,10 @@ SQLite v15 appends `automation_tasks`, `automation_task_platforms`,
 `automation_task_contents`, `automation_run_contents` and
 `automation_requests`. It also adds the unique workflow operation key to search
 batches. Do not rewrite or convert v13 collection-schedule rows during upgrade.
+SQLite v16 repairs historical v15 report tables that predate
+`topic_report_runs.workflow_operation_key`; it preserves all report graph rows
+and normalizes the complete table/index/trigger contract before automatic
+report admission is allowed.
 
 The initial-analysis child boundary is explicit:
 
@@ -216,9 +220,11 @@ Never expose raw SQLite, browser, model or credential-bearing exception text.
 
 ## 6. Tests Required
 
-- Genuine v14-to-v15 migration, populated v13 preservation, reopen, forward
-  version rejection and transactional rollback; assert no schedule conversion
-  and no startup browser/model call.
+- Genuine v14-to-v15-to-v16 migration, populated v13/report-graph preservation,
+  reopen, forward version rejection and transactional rollback; assert no
+  schedule conversion, no report history rewrite and no startup browser/model
+  call. Cover both historical v15 report tables and already-canonical v15
+  tables; column presence alone is not sufficient schema proof.
 - Interval and daily timing across IANA timezone/DST boundaries, exact due,
   offline/clock-jump recovery, idempotent occurrence admission and same-task
   overlap handling.

@@ -8,7 +8,6 @@ def migrate(connection: sqlite3.Connection) -> None:
         """CREATE TABLE topic_report_runs (
           id INTEGER PRIMARY KEY AUTOINCREMENT,
           request_id TEXT UNIQUE,
-          workflow_operation_key TEXT UNIQUE,
           trigger TEXT NOT NULL CHECK(trigger IN ('automatic','interval','retry')),
           initial_job_id INTEGER REFERENCES content_analysis_jobs(id) ON DELETE
           RESTRICT,
@@ -34,16 +33,13 @@ def migrate(connection: sqlite3.Connection) -> None:
           CHECK((status IN ('queued','judging','composing'))=(finished_at IS NULL)),
           CHECK((status='completed')=(root_section_id IS NOT NULL)),
           CHECK((status='empty')=(empty_reason IS NOT NULL)),
-          CHECK((trigger='automatic' AND request_id IS NULL AND parent_report_id IS NULL
-            AND ((completion_event_id IS NOT NULL AND initial_job_id IS NOT NULL
-                  AND workflow_operation_key IS NULL)
-              OR (completion_event_id IS NULL
-                  AND workflow_operation_key IS NOT NULL))) OR
+          CHECK((trigger='automatic' AND request_id IS NULL AND completion_event_id
+          IS NOT NULL
+            AND initial_job_id IS NOT NULL AND parent_report_id IS NULL) OR
             (trigger='interval' AND request_id IS NOT NULL AND completion_event_id
-          IS NULL AND workflow_operation_key IS NULL
+          IS NULL
             AND initial_job_id IS NULL AND parent_report_id IS NULL) OR
             (trigger='retry' AND request_id IS NOT NULL AND completion_event_id IS NULL
-            AND workflow_operation_key IS NULL
             AND parent_report_id IS NOT NULL)),
           CHECK(parent_report_id IS NULL OR parent_report_id<id)
         )""",
@@ -126,7 +122,7 @@ def migrate(connection: sqlite3.Connection) -> None:
           topic_report_sources
           BEGIN SELECT RAISE(ABORT,'immutable report source'); END""",
         """CREATE TRIGGER topic_report_snapshot_immutable BEFORE UPDATE OF
-          request_id,workflow_operation_key,trigger,
+          request_id,trigger,
           initial_job_id,completion_event_id,parent_report_id,selection_json,
           prompt_json,
           configuration_revision,base_url,model,created_at ON topic_report_runs
