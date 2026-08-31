@@ -169,6 +169,7 @@ class TopicReportRepository:
             (row["report_id"], f"judgment:{row['content_id']}"),
         ).fetchone()
         judgment = None
+        evidence = None
         if row["unavailable_reason"] is not None:
             state = "unavailable"
             if node is not None:
@@ -212,6 +213,7 @@ class TopicReportRepository:
         return ReportSource(
             position=row["position"],
             source=source,
+            evidence_coverage=(evidence.input.evidence_coverage if evidence else None),
             first_seen_at=row["first_seen_at"],
             initial_attempt_id=row["initial_attempt_id"],
             initial_status=row["initial_status"],

@@ -135,18 +135,18 @@ def test_smoke_normal_handoff_cross_page_citations_and_report_only_override_retr
         job = client.get(f"/api/v1/content-analysis-jobs/{job_id}").json()
         assert job["status"] == "completed"
         assert job["counts"]["total"] == 103
-        assert job["counts"]["completed"] == 101
-        assert job["counts"]["input_incomplete"] == 2
+        assert job["counts"]["completed"] == 103
+        assert job["counts"]["input_incomplete"] == 0
         assert original["status"] == "completed"
         assert original["trigger"] == "interval"
         assert original["request_id"] is not None
         assert original["coverage"] == {
             "total": 104,
-            "ready": 101,
-            "unavailable": 3,
+            "ready": 103,
+            "unavailable": 1,
             "pending": 0,
             "judging": 0,
-            "relevant": 96,
+            "relevant": 98,
             "irrelevant": 3,
             "uncertain": 2,
             "failed": 0,
@@ -182,7 +182,7 @@ def test_smoke_normal_handoff_cross_page_citations_and_report_only_override_retr
             page = client.get(
                 f"/api/v1/topic-reports/{report_id}/sections?kind=leaf&limit=5&offset={offset}"
             ).json()
-            assert page["total"] == 12
+            assert page["total"] == 13
             leaves.extend(page["sections"])
         citations = {
             source_id
@@ -199,22 +199,22 @@ def test_smoke_normal_handoff_cross_page_citations_and_report_only_override_retr
         root = client.get(
             f"/api/v1/topic-reports/{report_id}/sections/{original['root_section_id']}"
         ).json()
-        assert root["kind"] == "overview" and root["source_count"] == 96
+        assert root["kind"] == "overview" and root["source_count"] == 98
         assert root["sources"] == [] and len(root["children"]) == 2
         baseline = counters(client)
         assert baseline == {
             **ZERO_COUNTERS,
             "synthetic_media_calls": 103,
-            "synthetic_initial_calls": 101,
-            "synthetic_judgment_calls": 101,
-            "synthetic_leaf_calls": 12,
+            "synthetic_initial_calls": 103,
+            "synthetic_judgment_calls": 103,
+            "synthetic_leaf_calls": 13,
             "synthetic_overview_calls": 3,
-            "synthetic_composition_calls": 15,
-            "synthetic_model_calls": 217,
+            "synthetic_composition_calls": 16,
+            "synthetic_model_calls": 222,
         }
-        assert job["usage"]["attempted_requests"] == 101
-        assert original["usage"]["judgment"]["attempted_requests"] == 101
-        assert original["usage"]["composition"]["attempted_requests"] == 15
+        assert job["usage"]["attempted_requests"] == 103
+        assert original["usage"]["judgment"]["attempted_requests"] == 103
+        assert original["usage"]["composition"]["attempted_requests"] == 16
         assert client.get("/api/v1/analysis-settings").json() == defaults
         assert counters(client) == baseline
 
@@ -242,10 +242,10 @@ def test_smoke_normal_handoff_cross_page_citations_and_report_only_override_retr
         failed_calls = counters(client)
         assert failed_calls == {
             **baseline,
-            "synthetic_judgment_calls": 202,
-            "synthetic_leaf_calls": 24,
-            "synthetic_composition_calls": 27,
-            "synthetic_model_calls": 330,
+            "synthetic_judgment_calls": 206,
+            "synthetic_leaf_calls": 26,
+            "synthetic_composition_calls": 29,
+            "synthetic_model_calls": 338,
         }
         replay = client.post(f"/api/v1/topic-reports/{report_id}/retry", json=intent)
         assert replay.status_code == 202 and replay.json() == failed
@@ -267,15 +267,15 @@ def test_smoke_normal_handoff_cross_page_citations_and_report_only_override_retr
         assert retried["coverage"] == original["coverage"]
         assert retried["usage"]["judgment"]["attempted_requests"] == 0
         assert retried["usage"]["composition"]["attempted_requests"] == 4
-        assert retried["nodes"]["judgments"]["reused"] == 101
-        assert retried["nodes"]["composition"]["reused"] == 11
+        assert retried["nodes"]["judgments"]["reused"] == 103
+        assert retried["nodes"]["composition"]["reused"] == 12
         after = counters(client)
         assert after == {
             **failed_calls,
-            "synthetic_leaf_calls": 25,
+            "synthetic_leaf_calls": 27,
             "synthetic_overview_calls": 6,
-            "synthetic_composition_calls": 31,
-            "synthetic_model_calls": 334,
+            "synthetic_composition_calls": 33,
+            "synthetic_model_calls": 342,
         }
         assert client.get("/api/v1/analysis-settings").json() == defaults
         assert client.get(f"/api/v1/topic-reports/{report_id}").json() == original

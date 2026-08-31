@@ -211,6 +211,7 @@ class SummaryService:
                             source_id=record.item.source.result_id,
                             title=record.input.text.title,
                             body=record.input.text.body,
+                            evidence_coverage=record.input.evidence_coverage,
                             reason=record.item.reason,
                             evidence_summary=record.item.evidence_summary,
                         )

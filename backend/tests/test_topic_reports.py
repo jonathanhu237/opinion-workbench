@@ -33,15 +33,15 @@ def test_ten_members_eight_successes_settle_one_report(tmp_path):
             report.coverage.relevant,
             report.coverage.irrelevant,
             report.coverage.uncertain,
-        ) == (8, 2, 6, 1, 1)
-        assert model.counts == {"initial": 8, "judgment": 8, "leaf": 1}
+        ) == (10, 0, 8, 1, 1)
+        assert model.counts == {"initial": 10, "judgment": 10, "leaf": 1}
         assert len(worker.calls) == 10 and coordinator._owner is None
         await reports.initial_analysis_finished(job.id)
         await finish(reports)
         assert len(reports.repository.list().reports) == 1
         assert (
             reports.repository.section(report.id, report.root_section_id).source_count
-            == 6
+            == 8
         )
         assert len(reports.repository.sources(report.id, limit=1, offset=9).items) == 1
         await initial.shutdown()
@@ -125,12 +125,11 @@ def test_empty_outcomes_do_not_invent_calls(tmp_path, ready):
         else:
             worker.partial.update({"1000", "1001"})
         _, report = await analyse_all(db, initial, reports)
-        assert report.status == "empty", report
-        assert report.empty_reason == (
-            "no_relevant_sources" if ready else "no_ready_sources"
-        )
-        assert model.counts["judgment"] == (2 if ready else 0)
-        assert model.counts["leaf"] == model.counts["overview"] == 0
+        assert report.status == ("empty" if ready else "completed"), report
+        assert report.empty_reason == ("no_relevant_sources" if ready else None)
+        assert model.counts["judgment"] == 2
+        assert model.counts["leaf"] == (0 if ready else 1)
+        assert model.counts["overview"] == 0
         await initial.shutdown()
         await reports.shutdown()
         await ai.shutdown()

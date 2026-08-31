@@ -179,6 +179,21 @@ export function SavedAnalysisEvidence({
             已保存的正文与输入覆盖
           </summary>
           <dl className="my-3 grid gap-2 text-sm sm:grid-cols-2">
+            {attempt.input.coverage && (
+              <div>
+                <dt className="text-muted-foreground">证据级别</dt>
+                <dd>
+                  {
+                    {
+                      search_preview: '搜索摘要预览',
+                      detail_text: '详情文字（媒体部分）',
+                      validated_media: '已校验媒体（文字部分）',
+                      full_source: '完整来源',
+                    }[attempt.input.coverage.level]
+                  }
+                </dd>
+              </div>
+            )}
             <div>
               <dt className="text-muted-foreground">正文覆盖</dt>
               <dd>
@@ -199,6 +214,26 @@ export function SavedAnalysisEvidence({
               </dd>
             </div>
           </dl>
+          {attempt.input.coverage && (
+            <p className="text-sm text-muted-foreground">
+              文字来源：
+              {attempt.input.coverage.text_origin === 'search_preview'
+                ? '搜索结果标题/摘要'
+                : '详情页'}
+              {' · '}图片已校验 {attempt.input.coverage.image.ready}/
+              {attempt.input.coverage.image.expected}，视频已校验{' '}
+              {attempt.input.coverage.video.ready}/
+              {attempt.input.coverage.video.expected}，音频已确认{' '}
+              {attempt.input.coverage.audio.ready}/
+              {attempt.input.coverage.audio.expected}
+              {attempt.input.coverage.image.unknown +
+                attempt.input.coverage.video.unknown +
+                attempt.input.coverage.audio.unknown >
+              0
+                ? '；仍有未能枚举的媒体'
+                : ''}
+            </p>
+          )}
           <p className="text-sm font-medium [overflow-wrap:anywhere] whitespace-pre-wrap">
             {attempt.input.text.title}
           </p>

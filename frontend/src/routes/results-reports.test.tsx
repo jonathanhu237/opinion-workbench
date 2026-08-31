@@ -186,7 +186,7 @@ describe('automatic second-stage report views', () => {
     ).toBeVisible()
     expect(screen.getByText(/已保存 8\/10 条初步文本/)).toBeVisible()
     expect(
-      screen.getByText('冻结范围 10 条 · 可用初步文本 8 条 · 未覆盖 2 条'),
+      screen.getByText('冻结范围 10 条 · 可分析初步证据 8 条 · 未覆盖 2 条'),
     ).toBeVisible()
     expect(
       await screen.findAllByRole('article', { name: '报告章节 501' }),
@@ -279,7 +279,7 @@ describe('automatic second-stage report views', () => {
       expect(
         await screen.findByText(
           empty_reason === 'no_ready_sources'
-            ? /冻结范围内没有可用的初步文本/
+            ? /冻结范围内没有可分析的初步证据/
             : /已完成的文字判断没有确认相关材料/,
         ),
       ).toBeVisible()

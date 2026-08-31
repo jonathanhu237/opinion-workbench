@@ -145,6 +145,14 @@ origins and legacy history as well as list/settings/job queries. A failed detail
 read must have a visible recovery action without losing selection or requiring
 full page navigation. Test all failed selected-source queries through that action.
 
+Saved initial-analysis and report-source projections may include versioned
+`evidence_coverage`. Decode its exact level, text origin/completeness and bounded
+text/image/video/audio counts; reject contradictory shapes at the API boundary.
+Render `search_preview`, `detail_text`, `validated_media` and `full_source` with
+distinct Chinese labels, and disclose unknown media inventory. Coverage is read-
+only evidence state: route entry, disclosure toggles and polling must not trigger
+acquisition or model work.
+
 ## Legacy Manual AI Summary State
 
 - Keep versions and item analyses in TanStack Query; reads/polling never create or resume a summary.

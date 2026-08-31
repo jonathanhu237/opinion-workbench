@@ -440,3 +440,38 @@ The complete current path is therefore collection-successful but not a valid end
 LLM/report acceptance. The remaining blockers are the code-backed automation wait/admission bug
 and the provider-side incomplete media acquisition observed on this run. No further retry,
 provider/model test, login action, or report bypass was performed.
+
+## Best-Effort Evidence Repair — Offline Verification 2026-08-31
+
+After the separately committed automation-wait fix, the user approved changing the current
+independent initial-analysis/report workflow from strict all-or-nothing admission to truthful
+best-effort evidence admission. The implementation keeps `EnrichedContent.status=ready` as the
+strict complete-source claim and adds a separate versioned `EvidenceCoverage` contract for
+`search_preview`, `detail_text`, `validated_media`, and `full_source` inputs.
+
+The independent check fixed one issue found during review: an empty detail shell originally
+prevented fallback to a nonblank frozen search title/snippet. Detail and preview eligibility are
+now separate; empty detail falls back to preview, while completely empty evidence settles
+`input_incomplete` without a model call. Preview fingerprints use a separate domain, so later
+richer detail cannot reuse an analysis that only saw the search preview.
+
+Coverage is frozen with saved input and propagated through the report engine, API decoders, and
+Results/report UI. Only stored text and media bytes that passed the existing media validator are
+eligible for model input. The implementation does not persist media bytes, locators, signed URLs,
+credentials, or provider payloads. Legacy rows without stored coverage derive a conservative
+manifest; contradictory stored coverage fails closed.
+
+Offline verification after the independent fix:
+
+- Backend full suite: 1,014 passed; affected backend suites: 257 passed; Ruff check/format passed.
+- Frontend: 25 files / 503 tests passed; lint, typecheck, format and production build passed.
+- MediaCrawler: 280 tests passed with one existing warning; no platform safety allowlist was
+  widened and the unrelated Toutiao `?channel=` compatibility worktree changes were preserved.
+- `git diff --check` and Trellis task validation passed.
+
+No live platform, browser-session, LLM/provider, or runtime-database operation was performed.
+WB/KS/XHS exact media-host/token and field-completeness improvements remain conservative until
+fixture or bounded live evidence can prove a safe change. The legacy manual `/ai-summaries` path
+also remains strict; this repair targets the current independent analysis -> automatic report
+workflow. Isolated loopback browser smoke was not run; frontend behavior is covered by component
+tests, strict decoder tests, typecheck and production build pending a later bounded live check.

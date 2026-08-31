@@ -19,6 +19,7 @@ from longtian_api.services.ai_errors import AIError
 from longtian_api.services.ai_summaries import SummaryService
 from longtian_api.services.analysis_errors import AnalysisError
 from longtian_api.services.browser_operations import BrowserOperationOwner
+from longtian_api.services.media_crawler_auth_worker import EnrichmentWorkerResult
 
 
 def test_independent_neutral_media_understanding_and_unique_settlement(tmp_path):
@@ -33,25 +34,28 @@ def test_independent_neutral_media_understanding_and_unique_settlement(tmp_path)
         job = service.repository.read(admission.job.id)
         assert job.status == "completed"
         assert (
-            job.counts.completed == 8
-            and job.counts.input_incomplete == 1
+            job.counts.completed == 9
+            and job.counts.input_incomplete == 0
             and job.counts.failed == 1
         )
-        assert job.usage.attempted_requests == job.usage.accounted_requests == 9
-        assert len(worker.calls) == 10 and len(model.calls) == 9
+        assert job.usage.attempted_requests == job.usage.accounted_requests == 10
+        assert len(worker.calls) == 10 and len(model.calls) == 10
         assert all(stage == "analysis" for stage, _ in model.calls)
         assert coordinator._owner is None
         items = service.repository.items(job.id).items
         assert items[0].output.summary == UNDERSTANDING["summary"]
         assert items[0].input.text.body == worker.body
-        assert items[-1].usage is not None and items[-1].error.code == "invalid_json"
+        assert items[8].input.evidence_coverage.level == "detail_text"
+        assert items[8].input.evidence_coverage.image.unknown == 1
+        assert items[8].usage is not None and items[8].error.code == "invalid_json"
+        assert items[-1].output is not None
         text = model.calls[0][1][0]["content"]
         assert job.initial_prompt.instructions in text
         assert "monitoring_scope" not in str(model.calls)
         assert "image_url" in str(model.calls)
         assert "blob_ref" not in items[0].model_dump_json()
         events = service.repository.completion_events()
-        assert len(events) == 1 and len(events[0]["successful_attempt_ids"]) == 8
+        assert len(events) == 1 and len(events[0]["successful_attempt_ids"]) == 9
         assert events[0]["job"].report_prompt == job.report_prompt
         service.repository.finish(job.id, "completed")
         assert len(service.repository.completion_events()) == 1
@@ -76,15 +80,17 @@ def test_zero_successes_still_publish_one_normally_settled_handoff(tmp_path, out
         admission = await service.create(request(database))
         await finish(service)
         job = service.repository.read(admission.job.id)
-        assert job.status == "completed" and job.counts.completed == 0
-        assert getattr(job.counts, outcome) == job.counts.total == 2
+        expected_completed = 2 if outcome == "input_incomplete" else 0
+        assert job.status == "completed" and job.counts.completed == expected_completed
+        assert getattr(job.counts, outcome) == 2 - expected_completed
         assert all(
-            attempt.status == outcome and attempt.output is None
+            attempt.status == ("completed" if expected_completed else outcome)
+            and (attempt.output is not None) == bool(expected_completed)
             for attempt in service.repository.items(job.id).items
         )
         events = service.repository.completion_events()
         assert len(events) == 1
-        assert events[0]["successful_attempt_ids"] == []
+        assert len(events[0]["successful_attempt_ids"]) == expected_completed
         assert events[0]["job"] == job and events[0]["state"] == "pending"
         assert job.completion_event_id == events[0]["id"]
         assert service.repository.completion_events(after_id=events[0]["id"]) == []
@@ -94,7 +100,7 @@ def test_zero_successes_still_publish_one_normally_settled_handoff(tmp_path, out
         assert ResultsRepository(database).list().active_count == 0
         assert ResultsRepository(database).list().eligible_count == 0
         assert len(worker.calls) == 2
-        assert len(model.calls) == (2 if outcome == "failed" else 0)
+        assert len(model.calls) == 2
         assert all(stage == "analysis" for stage, _ in model.calls)
         assert coordinator._owner is None
         await service.shutdown()
@@ -145,6 +151,56 @@ def test_prompts_freeze_both_stages_without_requeue_and_cache_reuses_no_usage(tm
         await finish(service)
         assert service.repository.read(reanalysis.job.id).counts.reused == 0
         assert len(model.calls) == len(worker.calls) == 2
+        await service.shutdown()
+        await ai.shutdown()
+
+    asyncio.run(run())
+
+
+def test_search_preview_reuse_is_invalidated_by_richer_detail_evidence(tmp_path):
+    async def run():
+        database, _, service, ai, model, worker, _ = environment(tmp_path, count=1)
+        detail_enrich = worker.enrich
+
+        async def preview_only(**kwargs):
+            worker.calls.append((kwargs["content_id"], kwargs["term"]))
+            return EnrichmentWorkerResult("lookup_miss")
+
+        worker.enrich = preview_only
+        first = await service.create(request(database))
+        await finish(service)
+        original = service.repository.items(first.job.id).items[0]
+        assert (
+            original.status == "completed"
+            and original.input.extractor_version == "wb-search-preview-v1"
+            and original.input.evidence_coverage.level == "search_preview"
+        )
+        assert len(worker.calls) == len(model.calls) == 1
+
+        reused = await service.create(
+            request(database, kind="reanalysis", result_ids=[1])
+        )
+        await finish(service)
+        reused_item = service.repository.items(reused.job.id).items[0]
+        assert reused_item.reused_from_attempt_id == original.id
+        assert reused_item.input_fingerprint == original.input_fingerprint
+        assert len(worker.calls) == len(model.calls) == 1
+
+        worker.enrich = detail_enrich
+        worker.body = "后来保存的详情正文，与搜索摘要不同。"
+        richer = await service.create(
+            request(
+                database,
+                kind="reanalysis",
+                result_ids=[1],
+                force_refresh=True,
+            )
+        )
+        await finish(service)
+        richer_item = service.repository.items(richer.job.id).items[0]
+        assert richer_item.reused_from_attempt_id is None
+        assert richer_item.input_fingerprint != original.input_fingerprint
+        assert len(worker.calls) == len(model.calls) == 2
         await service.shutdown()
         await ai.shutdown()
 

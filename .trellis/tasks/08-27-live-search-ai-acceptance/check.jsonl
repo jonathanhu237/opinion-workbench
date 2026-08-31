@@ -5,3 +5,8 @@
 {"file":".trellis/tasks/08-27-live-search-ai-acceptance/research/current-boundary.md","reason":"Independent read-only review baseline; no source fixes or live actions are permitted."}
 {"file":".trellis/tasks/08-27-live-search-ai-acceptance/research/media-cost-probe-plan.md","reason":"Review explicit follow-up media/call limits and diagnostic safety without making provider calls."}
 {"file":".trellis/tasks/08-27-live-search-ai-acceptance/research/media-cost-probe-verification.md","reason":"Actual three-request usage, two valid judgments, first local format failure, cost assumptions and cleanup/preservation evidence."}
+{"file":".trellis/spec/backend/media-projection-guidelines.md","reason":"Review platform-specific completeness claims, exact-source checks, and safe media validation."}
+{"file":".trellis/spec/backend/initial-analysis-guidelines.md","reason":"Verify partial-evidence admission never overstates coverage and empty evidence never calls the model."}
+{"file":".trellis/spec/backend/topic-report-guidelines.md","reason":"Verify evidence coverage survives report selection, storage, citations, API, and UI."}
+{"file":".trellis/spec/backend/auth-state-guidelines.md","reason":"Verify no repair weakens session ownership, credential handling, or manual-action stops."}
+{"file":".trellis/tasks/08-27-live-search-ai-acceptance/research/content-enrichment-direct-fix.md","reason":"Cross-check implementation against the proven current-code failure paths and test seams."}

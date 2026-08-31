@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { AI_ERROR_CONTRACTS } from '@/lib/api/ai-settings'
 import {
   boundedAnalysisText,
+  evidenceCoverageSchema,
   summaryFailureSchema,
   summarySourceSchema,
   tokenUsageSchema,
@@ -270,6 +271,7 @@ export const reportSourceSchema = z
   .strictObject({
     position: safeCount,
     source: summarySourceSchema,
+    evidence_coverage: evidenceCoverageSchema.nullable().optional(),
     first_seen_at: utcDate,
     initial_attempt_id: safeId.nullable(),
     initial_status: attemptStatusSchema.nullable(),
@@ -298,6 +300,9 @@ export const reportSourceSchema = z
       value.state === 'uncertain'
     return (
       (value.state === 'unavailable') === (value.unavailable_reason !== null) &&
+      (value.evidence_coverage === undefined ||
+        (value.state === 'unavailable') ===
+          (value.evidence_coverage === null)) &&
       (value.state === 'unavailable'
         ? value.judgment_node_id === null
         : value.initial_attempt_id !== null &&

@@ -494,12 +494,12 @@ def test_retry_keeps_original_unavailable_member_after_later_initial_success(tmp
             db, initial, reports, _, model, worker, _ = values
             worker.partial.add("1001")
             _, original = await analyse_all(db, initial, reports)
-            unavailable = reports.repository.sources(original.id).items[1]
-            assert original.coverage.ready == original.coverage.unavailable == 1
-            assert unavailable.unavailable_reason == "input_incomplete"
+            partial = reports.repository.sources(original.id).items[1]
+            assert original.coverage.ready == 2 and original.coverage.unavailable == 0
+            assert partial.evidence_coverage.level == "detail_text"
             worker.partial.clear()
             later = await initial.create(
-                request(db, kind="retry", result_ids=[2], force_refresh=True)
+                request(db, kind="reanalysis", result_ids=[2], force_refresh=True)
             )
             await finish(initial)
             await finish(reports)
@@ -509,8 +509,11 @@ def test_retry_keeps_original_unavailable_member_after_later_initial_success(tmp
             await finish(reports)
             retried = reports.repository.read(retried.id)
             assert retried.status == "completed"
-            assert (retried.coverage.total, retried.coverage.ready) == (2, 1)
-            assert reports.repository.sources(retried.id).items[1] == unavailable
+            assert (retried.coverage.total, retried.coverage.ready) == (2, 2)
+            retried_partial = reports.repository.sources(retried.id).items[1]
+            assert retried_partial.source == partial.source
+            assert retried_partial.evidence_coverage == partial.evidence_coverage
+            assert retried_partial.initial_attempt_id == partial.initial_attempt_id
             assert reports.repository.read(original.id) == original
             assert retried.usage.total.attempted_requests == 0
             assert (model.counts, len(worker.calls)) == baseline

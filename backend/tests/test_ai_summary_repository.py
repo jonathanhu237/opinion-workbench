@@ -17,6 +17,7 @@ from longtian_api.repositories.search_runs import (
     SearchRunRepository,
 )
 from longtian_api.schemas.ai_summaries import SummaryCreate
+from longtian_api.services.ai_analysis import MODEL_INPUT_VERSION
 from longtian_api.services.ai_client import MAX_USAGE_TOKENS, AIConfiguration, AIUsage
 from longtian_api.services.ai_summaries import SummaryService
 from longtian_api.services.summary_errors import SummaryError
@@ -176,7 +177,7 @@ def test_startup_interrupts_unfinished_only_without_reanalysis(tmp_path):
             SummaryVersions(
                 "opinion-analysis-v1",
                 "opinion-summary-v1",
-                "enrichment-v1-omni-inline-v1",
+                MODEL_INPUT_VERSION,
             ),
         )
         first = service.repository.records(queued.id)[0]

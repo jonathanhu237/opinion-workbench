@@ -252,7 +252,7 @@ const sourceSchema = z
     ),
   )
 
-const inputIssueSchema = z.enum([
+export const inputIssueSchema = z.enum([
   'text_incomplete',
   'text_unavailable',
   'text_limit',
@@ -279,6 +279,82 @@ const inputIssueSchema = z.enum([
   'probe_failed',
   'structure_changed',
 ])
+const evidenceModalityCoverageSchema = z
+  .strictObject({
+    expected: count.max(25),
+    ready: count.max(25),
+    failed: count.max(25),
+    unknown: count.max(25),
+  })
+  .refine((value) => value.ready + value.failed <= value.expected)
+export const evidenceCoverageSchema = z
+  .strictObject({
+    schema_version: z.literal('evidence-coverage-v1'),
+    input_contract_version: z.literal('analysis-evidence-v2'),
+    level: z.enum([
+      'search_preview',
+      'detail_text',
+      'validated_media',
+      'full_source',
+    ]),
+    text_origin: z.enum(['search_preview', 'detail']),
+    text_available: z.boolean(),
+    text_complete: z.boolean(),
+    text: evidenceModalityCoverageSchema,
+    image: evidenceModalityCoverageSchema,
+    video: evidenceModalityCoverageSchema,
+    audio: evidenceModalityCoverageSchema,
+    issues: z.array(inputIssueSchema).max(32),
+  })
+  .superRefine((coverage, context) => {
+    const textReady = coverage.text_available ? 1 : 0
+    const textFailed = coverage.text_available ? 0 : 1
+    if (
+      coverage.text.expected !== 1 ||
+      coverage.text.ready !== textReady ||
+      coverage.text.failed !== textFailed ||
+      coverage.text.unknown !== 0 ||
+      (!coverage.text_available && coverage.text_complete) ||
+      (coverage.text_origin === 'search_preview' &&
+        (coverage.level !== 'search_preview' || coverage.text_complete)) ||
+      (coverage.level === 'full_source' &&
+        (coverage.text_origin !== 'detail' ||
+          !coverage.text_available ||
+          !coverage.text_complete ||
+          coverage.issues.length > 0 ||
+          [coverage.image, coverage.video, coverage.audio].some(
+            (modality) =>
+              modality.unknown > 0 ||
+              modality.failed > 0 ||
+              modality.ready !== modality.expected,
+          ))) ||
+      (coverage.level === 'validated_media' &&
+        coverage.image.ready + coverage.video.ready + coverage.audio.ready ===
+          0) ||
+      new Set(coverage.issues).size !== coverage.issues.length
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'inconsistent evidence coverage',
+      })
+    }
+    if (coverage.text_origin === 'search_preview') {
+      for (const modality of [coverage.image, coverage.video, coverage.audio]) {
+        if (
+          modality.expected !== 0 ||
+          modality.ready !== 0 ||
+          modality.failed !== 0 ||
+          modality.unknown !== 1
+        ) {
+          context.addIssue({
+            code: 'custom',
+            message: 'preview coverage contains unseen media',
+          })
+          break
+        }
+      }
+    }
+  })
 const summaryItemSchema = z
   .strictObject({
     id: positiveInteger,
@@ -366,7 +442,6 @@ export type AISummaryRequest = {
 export {
   boundedText as boundedAnalysisText,
   failureSchema as summaryFailureSchema,
-  inputIssueSchema,
   sourceSchema as summarySourceSchema,
   tokenUsageSchema,
 }

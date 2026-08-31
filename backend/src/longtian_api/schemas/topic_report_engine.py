@@ -7,7 +7,11 @@ from typing import Annotated, Literal, Self
 from pydantic import AfterValidator, Field, field_validator, model_validator
 
 from longtian_api.schemas.ai_summaries import StrictModel
-from longtian_api.schemas.analysis_evidence import AnalysisSource, SavedInput
+from longtian_api.schemas.analysis_evidence import (
+    AnalysisSource,
+    EvidenceCoverage,
+    SavedInput,
+)
 from longtian_api.schemas.analysis_settings import (
     MAX_SAFE_INTEGER,
     Count,
@@ -17,7 +21,10 @@ from longtian_api.schemas.analysis_settings import (
 from longtian_api.schemas.content_analyses import Understanding, valid_prose
 from longtian_api.services.ai_client import normalize_base_url
 from longtian_api.services.ai_errors import AIError
-from longtian_api.services.enrichment_models import MAX_MEDIA_BYTES
+from longtian_api.services.enrichment_models import (
+    MAX_MEDIA_BYTES,
+    preview_fingerprint,
+)
 
 Sha256 = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
 NodeKind = Literal["judgment", "leaf", "overview"]
@@ -132,20 +139,11 @@ class FrozenTextSource(StrictModel):
         modalities = content.detected_modalities
         if (
             type(content.schema_version) is not int
-            or content.status != "ready"
-            or content.text.coverage != "complete"
-            or not content.media_inventory_complete
-            or content.issues
-            or content.extractor_version != f"{self.source.platform}-enrichment-v1"
             or not 1_000_000_000_000 <= content.acquired_at <= 9_999_999_999_999
             or len(content.text.title) + len(content.text.body) > 20_000
-            or not 1 <= len(modalities) <= 4
-            or "unknown" in modalities
-            or modalities
-            != sorted(set(modalities), key=("text", "image", "video", "audio").index)
             or len(content.assets) > 25
         ):
-            raise ValueError("invalid ready evidence")
+            raise ValueError("invalid saved evidence")
         text_values = [
             content.text.title,
             content.text.body,
@@ -157,7 +155,84 @@ class FrozenTextSource(StrictModel):
         ]
         for value in text_values:
             valid_text(value)
+        try:
+            derived_coverage = EvidenceCoverage.from_saved_input(content)
+        except (AttributeError, TypeError, ValueError):
+            raise ValueError("invalid evidence coverage") from None
+        if content.coverage is not None and content.coverage != derived_coverage:
+            raise ValueError("invalid evidence coverage")
+        extractor = f"{self.source.platform}-enrichment-v1"
+        preview_extractor = f"{self.source.platform}-search-preview-v1"
+        if content.status == "ready":
+            if (
+                content.text.coverage != "complete"
+                or not content.media_inventory_complete
+                or content.issues
+                or content.extractor_version != extractor
+                or not 1 <= len(modalities) <= 4
+                or "unknown" in modalities
+                or modalities
+                != sorted(
+                    set(modalities), key=("text", "image", "video", "audio").index
+                )
+            ):
+                raise ValueError("invalid ready evidence")
+        elif content.extractor_version == preview_extractor:
+            if (
+                content.status not in ("partial", "unavailable")
+                or content.assets
+                or content.media_inventory_complete
+                or not content.evidence_coverage.analysis_eligible
+                or content.evidence_coverage.level != "search_preview"
+                or self.input_fingerprint
+                != preview_fingerprint(
+                    platform=self.source.platform,
+                    content_id=self.source.platform_content_id,
+                    content_url=self.source.content_url,
+                    title=self.source.title,
+                    snippet=self.source.snippet,
+                )
+            ):
+                raise ValueError("invalid search preview evidence")
+        elif content.extractor_version == extractor:
+            if (
+                content.status not in ("partial", "unavailable", "unsupported")
+                or not content.evidence_coverage.analysis_eligible
+                or content.evidence_coverage.text_origin != "detail"
+                or content.evidence_coverage.level == "full_source"
+                or modalities
+                != sorted(
+                    set(modalities),
+                    key=("text", "image", "video", "audio", "unknown").index,
+                )
+            ):
+                raise ValueError("invalid partial evidence")
+        else:
+            raise ValueError("invalid evidence extractor")
         actual = {asset.kind for asset in content.assets}
+        if content.status != "ready":
+            for position, asset in enumerate(content.assets):
+                if asset.position != position:
+                    raise ValueError("invalid partial asset position")
+                if asset.status == "ready" and (
+                    asset.sha256 is None
+                    or len(asset.sha256) != 64
+                    or any(char not in "0123456789abcdef" for char in asset.sha256)
+                    or asset.byte_size is None
+                    or not 1 <= asset.byte_size <= MAX_MEDIA_BYTES
+                    or asset.width is None
+                    or not 1 <= asset.width <= 32_768
+                    or asset.height is None
+                    or not 1 <= asset.height <= 32_768
+                    or asset.coverage != "complete"
+                    or asset.issue_code is not None
+                ):
+                    raise ValueError("invalid partial ready asset")
+                if asset.status != "ready" and (
+                    asset.coverage != "unknown" or asset.issue_code is None
+                ):
+                    raise ValueError("invalid partial unavailable asset")
+            return self
         if (
             actual != set(modalities) & {"image", "video"}
             or ("audio" in modalities) != ("video" in actual)

@@ -2,6 +2,7 @@ import { z } from 'zod'
 
 import {
   boundedAnalysisText,
+  evidenceCoverageSchema,
   inputIssueSchema,
   summaryFailureSchema,
   summarySourceSchema,
@@ -156,9 +157,30 @@ const savedInputSchema = z
     media_inventory_complete: z.boolean(),
     assets: z.array(assetSchema).max(25),
     issues: z.array(inputIssueSchema).max(32),
+    coverage: evidenceCoverageSchema.nullable().optional(),
   })
   .refine((input) => {
     if (!uniqueIds(input.assets.map((asset) => asset.position))) return false
+    if (input.coverage) {
+      const textAvailable =
+        input.text.title.trim().length > 0 || input.text.body.trim().length > 0
+      const preview = input.extractor_version.endsWith('-search-preview-v1')
+      if (
+        input.coverage.text_available !== textAvailable ||
+        input.coverage.text_complete !== (input.text.coverage === 'complete') ||
+        input.coverage.text.ready !== (textAvailable ? 1 : 0) ||
+        input.coverage.text.failed !== (textAvailable ? 0 : 1) ||
+        (input.coverage.text_origin === 'search_preview') !== preview ||
+        (input.status === 'ready') !==
+          (input.coverage.level === 'full_source') ||
+        (preview &&
+          (input.status === 'ready' ||
+            input.assets.length > 0 ||
+            input.media_inventory_complete ||
+            input.detected_modalities.join(',') !== 'text,unknown'))
+      )
+        return false
+    }
     if (input.status !== 'ready') return true
     const actualMedia = new Set(input.assets.map((asset) => asset.kind))
     return (
@@ -207,7 +229,10 @@ export const analysisAttemptSchema = z
       completed === (value.output !== null) &&
       isActiveAnalysisAttempt(value.status) === (value.finished_at === null) &&
       (!completed ||
-        (value.input?.status === 'ready' &&
+        (value.input !== null &&
+          (value.input.text.title.trim().length > 0 ||
+            value.input.text.body.trim().length > 0 ||
+            value.input.assets.some((asset) => asset.status === 'ready')) &&
           value.input_fingerprint !== null &&
           value.error === null &&
           (value.attempted || reused))) &&

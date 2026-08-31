@@ -243,7 +243,7 @@ describe('Results and Analysis', () => {
       await screen.findByRole('region', { name: '文字报告 31' }),
     ).toBeVisible()
     expect(
-      screen.getByText('冻结范围 10 条 · 可用初步文本 8 条 · 未覆盖 2 条'),
+      screen.getByText('冻结范围 10 条 · 可分析初步证据 8 条 · 未覆盖 2 条'),
     ).toBeVisible()
     expect(
       await screen.findByText(

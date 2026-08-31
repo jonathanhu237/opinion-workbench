@@ -25,6 +25,7 @@ from longtian_api.services.enrichment_models import (
     EnrichmentOutcome,
     EnrichmentValidationError,
     evidence_fingerprint,
+    preview_fingerprint,
     valid_source_url,
     validate_content,
 )
@@ -84,6 +85,7 @@ class EnrichmentItem:
     content: EnrichedContent | None = field(default=None, repr=False)
     input_fingerprint: str | None = None
     media: tuple[ValidatedMedia, ...] = field(default=(), repr=False)
+    preview: bool = False
 
     @property
     def ready(self) -> bool:
@@ -91,6 +93,53 @@ class EnrichmentItem:
             self.outcome == "completed"
             and self.content is not None
             and self.content.status == "ready"
+        )
+
+    @property
+    def detail_analysis_eligible(self) -> bool:
+        """Whether the acquired detail document contains usable evidence."""
+
+        return self.content is not None and bool(
+            self.content.text.title.strip()
+            or self.content.text.body.strip()
+            or any(asset.status == "ready" for asset in self.content.assets)
+        )
+
+    @property
+    def preview_analysis_eligible(self) -> bool:
+        """Whether the frozen search result has usable preview text."""
+
+        return bool(self.source.title.strip() or self.source.snippet.strip())
+
+    @property
+    def analysis_eligible(self) -> bool:
+        """At least one trustworthy text or validated media item is present.
+
+        This is intentionally broader than :attr:`ready`: a partial detail
+        response can still contain useful text or media, and the frozen search
+        title/snippet is a safe final fallback when detail acquisition fails.
+        """
+
+        return self.detail_analysis_eligible or self.preview_analysis_eligible
+
+    def as_preview(self) -> "EnrichmentItem":
+        """Return a text-only view over the immutable stored search preview."""
+
+        if self.preview or not self.preview_analysis_eligible:
+            return self
+        return EnrichmentItem(
+            source=self.source,
+            outcome=self.outcome,
+            content=None,
+            input_fingerprint=preview_fingerprint(
+                platform=self.source.platform,
+                content_id=self.source.platform_content_id,
+                content_url=self.source.content_url,
+                title=self.source.title,
+                snippet=self.source.snippet,
+            ),
+            media=(),
+            preview=True,
         )
 
 

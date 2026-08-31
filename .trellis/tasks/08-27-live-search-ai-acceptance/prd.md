@@ -162,3 +162,82 @@ boundary only for the analysis child wait path.
   instead of being treated as a wrapper with a missing top-level status.
 - Do not change platform enrichment, media safety, source completeness, database
   contents, browser state, AI configuration, or invoke any live platform/model work.
+
+## Best-Effort Content-Enrichment Repair Proposal — 2026-08-31
+
+The product is a private, local self-use application and is not being prepared for
+open-source publication or distribution. Continue from the existing customized
+MediaCrawler integration. A clean-room crawler rewrite, dependency replacement, and
+commercial-license procurement are not part of this repair.
+
+### Goal
+
+Acquire as much trustworthy source evidence as the logged-in platform session makes
+available, analyse every usable subset, and state exactly what evidence each model
+result and report conclusion used. Missing text, image, video, or audio must not cause
+otherwise useful evidence to be discarded, and partial evidence must never be
+presented as a complete-source reading.
+
+### Requirements
+
+- Preserve strict source acquisition truth. Existing `ready` semantics continue to
+  mean a complete source, while partial and unavailable modalities retain their real
+  statuses and issues.
+- Add a separate analysis-eligibility contract. Any non-empty trustworthy evidence
+  may be analysed: full detail text, partial detail text, validated images/video/audio,
+  or the stored search title/snippet when nothing richer is available.
+- Record a durable evidence-coverage manifest for every analysis: text origin and
+  completeness plus expected, acquired, failed, and unknown counts for each media
+  modality. Version the model input contract so changed evidence is not incorrectly
+  reused as an old result.
+- Send only stored text and validated media bytes to the model. Prompts must include
+  the coverage manifest and forbid claims about unseen detail text or missing media.
+- Preserve evidence level and modality coverage through saved understanding, report
+  source/citation records, API responses, and UI. Preview-only observations must be
+  visibly distinguishable from detail-text, validated-media, and full-source results.
+- Improve WB, KS, and XHS extraction incrementally inside the existing CDP worker and
+  security boundary. Keep exact-source checks, manual login/challenge stops, private
+  staging, DNS/redirect/size/MIME validation, and the prohibition on ambient-cookie
+  forwarding or guessed wildcard media hosts.
+- External GitHub projects may be used as narrow field-map, fixture, or parser
+  references where they demonstrably improve coverage. Do not replace the working
+  browser/session owner or add a second cookie/storage system.
+
+### Acceptance Criteria
+
+- A preview-only record makes exactly one fake model request, is stored as
+  `search_preview`, and cannot produce claims about unseen body or media.
+- Partial text and any successfully validated media are analysed even when another
+  modality fails; the saved result lists both acquired and missing evidence.
+- A truly complete record retains the strongest `full_source` evidence level and
+  remains compatible with the existing strict readiness contract.
+- Reports include eligible partial analyses, preserve source identity/citations, and
+  expose evidence coverage rather than flattening all findings to equal confidence.
+- WB, KS, and XHS adapter fixtures cover long text/caption, post type, exhaustive or
+  explicitly unknown media inventory, malformed payloads, and source mismatch.
+- Old records remain readable after any additive migration; database reopen,
+  integrity, foreign-key, replay, and fingerprint/version checks pass.
+- Backend, worker/protocol, frontend decoder/UI, and full existing test gates pass
+  without live platform or provider calls.
+- A later separately approved bounded live check may sample one source per platform;
+  it must stop on login, permission, challenge, or rate-limit intervention.
+
+### Out of Scope
+
+- Guaranteeing that protected, deleted, unavailable, or platform-withheld content can
+  always be acquired.
+- Circumventing access controls, challenges, rate limits, or platform protections.
+- Rewriting MediaCrawler, replacing the current browser owner, publishing the code,
+  or building a general-purpose downloader.
+- Running live platform/model acceptance during implementation without a separate
+  explicit go-ahead.
+
+### Confirmed Decisions
+
+- Acquisition is best effort; analysis is evidence-driven rather than all-or-nothing.
+- Search title/snippet is acceptable evidence when labelled as preview-only.
+- The implementation is direct-repair-led; external repositories are optional,
+  narrowly audited references rather than a wholesale replacement.
+- The current private-use MediaCrawler integration remains in place.
+- Open product questions: none. Implementation still requires explicit approval of
+  this proposal.

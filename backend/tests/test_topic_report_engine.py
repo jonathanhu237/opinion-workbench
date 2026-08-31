@@ -604,8 +604,6 @@ def test_nested_mutations_are_revalidated_not_trusted_frozen_models(mutation):
 @pytest.mark.parametrize(
     "field,value",
     [
-        ("status", "partial"),
-        ("media_inventory_complete", False),
         ("acquired_at", 1),
         ("extractor_version", "xhs-enrichment-v1"),
     ],
@@ -617,6 +615,29 @@ def test_ready_saved_input_metadata_guard(field, value):
     )
     with pytest.raises(AIAnalysisError, match="input_incomplete"):
         prepare_judgment(context(), changed)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("status", "partial"), ("media_inventory_complete", False)],
+)
+def test_partial_saved_input_keeps_text_evidence_for_report(field, value):
+    item = source()
+    changed = item.model_copy(
+        update={
+            "input": item.input.model_copy(
+                update={
+                    field: value,
+                    "status": "partial",
+                    "coverage": None,
+                }
+            )
+        }
+    )
+    call = prepare_judgment(context(), changed)
+    payload = json.loads(call.user_text)["source"]
+    assert payload["evidence_coverage"]["level"] == "detail_text"
+    assert payload["evidence_coverage"]["text_available"]
 
 
 @pytest.mark.parametrize(

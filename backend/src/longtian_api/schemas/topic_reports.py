@@ -13,7 +13,7 @@ from longtian_api.schemas.ai_summaries import (
     SummaryFailure,
     TokenUsage,
 )
-from longtian_api.schemas.analysis_evidence import AnalysisSource
+from longtian_api.schemas.analysis_evidence import AnalysisSource, EvidenceCoverage
 from longtian_api.schemas.analysis_settings import Count, PositiveId
 from longtian_api.schemas.collection_schedules import UtcTimestamp
 from longtian_api.schemas.content_analyses import (
@@ -321,6 +321,7 @@ class Judgment(StrictModel):
 class ReportSource(StrictModel):
     position: Count
     source: AnalysisSource
+    evidence_coverage: EvidenceCoverage | None = None
     first_seen_at: UtcTimestamp
     initial_attempt_id: PositiveId | None
     initial_status: AttemptStatus | None
@@ -352,6 +353,8 @@ class ReportSource(StrictModel):
             self.judgment_node_id is not None or self.error is not None
         ):
             raise ValueError("unavailable judgment projection")
+        if unavailable != (self.evidence_coverage is None):
+            raise ValueError("invalid evidence coverage projection")
         if (self.initial_attempt_id is None) != (self.initial_status is None):
             raise ValueError("invalid initial attempt projection")
         if unavailable:

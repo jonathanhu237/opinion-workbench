@@ -61,6 +61,12 @@ const unavailableLabels: Record<
   interrupted: '初步分析已中断',
   stale_evidence: '冻结时没有兼容的有效初步证据',
 }
+const evidenceLevelLabels = {
+  search_preview: '搜索摘要预览',
+  detail_text: '详情文字（媒体部分）',
+  validated_media: '已校验媒体（文字部分）',
+  full_source: '完整来源',
+} as const
 const sectionLabels: Record<ReportSection['status'], string> = {
   queued: '等待合成',
   running: '正在合成',
@@ -88,7 +94,7 @@ export function ReportCoverage({ report }: { report: ReportRun }) {
       <div role="status" aria-live="polite" className="space-y-2">
         <p className="font-medium">报告：{reportStatusLabels[report.status]}</p>
         <p className="text-sm">
-          冻结范围 {coverage.total} 条 · 可用初步文本 {coverage.ready} 条 ·
+          冻结范围 {coverage.total} 条 · 可分析初步证据 {coverage.ready} 条 ·
           未覆盖 {coverage.unavailable} 条
         </p>
         <p className="text-sm text-muted-foreground">
@@ -114,7 +120,7 @@ export function ReportCoverage({ report }: { report: ReportRun }) {
       {report.empty_reason && (
         <p className="rounded-lg bg-muted p-3 text-sm leading-6">
           {report.empty_reason === 'no_ready_sources'
-            ? '冻结范围内没有可用的初步文本，本报告未调用模型。这不代表没有相关情况；原有内容与失败原因仍保留。'
+            ? '冻结范围内没有可分析的初步证据，本报告未调用模型。这不代表没有相关情况；原有内容与失败原因仍保留。'
             : '已完成的文字判断没有确认相关材料，未调用报告合成；不相关和不确定内容仍保留。这不代表没有相关情况。'}
         </p>
       )}
@@ -459,6 +465,23 @@ export function ReportDetails({
                     首次入库 {formatEvidenceDate(item.first_seen_at)} ·
                     原文发布时间 {item.source.published_at_text || '未知'}
                   </p>
+                  {item.evidence_coverage && (
+                    <p className="text-xs text-muted-foreground">
+                      证据：{evidenceLevelLabels[item.evidence_coverage.level]}{' '}
+                      · 文字
+                      {item.evidence_coverage.text_complete ? '完整' : '部分'} ·
+                      图片 {item.evidence_coverage.image.ready}/
+                      {item.evidence_coverage.image.expected} · 视频{' '}
+                      {item.evidence_coverage.video.ready}/
+                      {item.evidence_coverage.video.expected}
+                      {item.evidence_coverage.image.unknown +
+                        item.evidence_coverage.video.unknown +
+                        item.evidence_coverage.audio.unknown >
+                      0
+                        ? ' · 媒体清单仍有未知项'
+                        : ''}
+                    </p>
+                  )}
                   {item.judgment && (
                     <p className="text-sm leading-6 wrap-anywhere whitespace-pre-wrap">
                       {item.judgment.reason}

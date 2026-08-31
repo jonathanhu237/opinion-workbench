@@ -634,10 +634,14 @@ class ContentAnalysisRepository(AnalysisRepository):
             if cached is None:
                 return False
             validated = self._attempt(cached)
+            accepted_extractors = {
+                f"{validated.source.platform}-enrichment-v1",
+                f"{validated.source.platform}-search-preview-v1",
+            }
             if (
                 validated.input is None
-                or validated.input.extractor_version
-                != f"{validated.source.platform}-enrichment-v1"
+                or not validated.input.analysis_eligible
+                or validated.input.extractor_version not in accepted_extractors
             ):
                 return False
             connection.execute(

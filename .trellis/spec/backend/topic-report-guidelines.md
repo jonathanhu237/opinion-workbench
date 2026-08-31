@@ -86,9 +86,10 @@ strict shapes, partitioning, serialization and output validation.
   report, all-history accumulation, later-arrival expansion or callback-owned
   progression.
 - Freeze exact successful attempt IDs, full accepted input text, structured
-  understanding, source identity/origin, first-entry time, initial prompt/provider
-  provenance and the report prompt/provider intent. Current source fields cannot
-  replace this evidence when reading, retrying or citing the report.
+  understanding, `EvidenceCoverage`, source identity/origin, first-entry time,
+  initial prompt/provider provenance and the report prompt/provider intent.
+  Current source fields cannot replace this evidence when reading, retrying or
+  citing the report. Coverage is part of the frozen source hash and model request.
 - Explicit interval selection uses global `first_seen_at` in `[from,to)`, not
   publication or last-observation time. Freeze unavailable coverage too. Never
   resurrect older evidence behind a known newer acquired-input fingerprint whose
@@ -120,9 +121,11 @@ strict shapes, partitioning, serialization and output validation.
 
 ### Bounded saved-text execution
 
-1. Every ready source receives one text-only judgment with the frozen report
+1. Every analysis-eligible source receives one text-only judgment with the frozen report
    instructions: `relevant | irrelevant | uncertain`, with a nonblank reason of
-   at most 600 characters. A technical error is not an unrelated judgment.
+   at most 600 characters. Its serialized input includes the coverage manifest;
+   preview and partial sources cannot claim unseen detail or media. A technical
+   error is not an unrelated judgment.
 2. Partition relevant evidence in frozen order into leaves of at most eight
    sources. Use full accepted text and all saved understanding fields, not only
    a short abstract. Leaf output is an overview plus 1–16 cited paragraphs,
@@ -185,8 +188,10 @@ disjoint union of real child members, not just have the same total count.
 Report status is `queued`, `judging`, `composing`, `completed`, `empty`, `failed`,
 `cancelled`, `interrupted` or `configuration_blocked`. `completed` has a root;
 `empty` has `no_ready_sources` or `no_relevant_sources` and no root. No ready
-sources means zero model calls; no relevant judgments means zero composition
-calls. Failed reports retain inspectable validated draft sections.
+sources means zero model calls; the historical `ready` count now means frozen
+analysis-eligible saved inputs, not only strict full-source acquisition. No
+relevant judgments means zero composition calls. Failed reports retain
+inspectable validated draft sections.
 
 Coverage reconciles `total = ready + unavailable`; ready reconciles pending,
 judging, relevant, irrelevant, uncertain, failed, cancelled and interrupted.
@@ -199,6 +204,10 @@ overview sections have no expanded source array; they contain bounded children
 and `section_ids` mapped to this report version's actual child rows. Never expose
 the old version's child IDs after reuse. Resolve links only from validated frozen
 source URLs/XHS origin tuples; model prose is text, not executable HTML or links.
+
+Source projections expose `evidence_coverage`; report UI labels preview, detail,
+validated-media and full-source evidence and shows modality counts. It may not
+flatten preview evidence to the same coverage presentation as a full source.
 
 Keep selected report/version and source/section pagination in URL state, separate
 from result filters and initial-job selection. One-click initial analysis stays
@@ -221,6 +230,9 @@ turn an empty report-list response into authorization to create one.
 | Shared prompt changed before explicit create | 409 `analysis_prompt_changed`; override does not bypass the displayed-default revision check. |
 | Incompatible/unavailable provider lease | Configuration blocked; report-only execution failures retain `ai_configuration_required`, `ai_configuration_changed`, `ai_credentials_unavailable` or `ai_settings_storage_unavailable` with existing constant AI messages. Do not widen the legacy/A failure union or silently substitute a provider. |
 | Corrupt stored prompt, source, node, graph, usage or state | Sanitized 503 `topic_report_storage_unavailable`, not fabricated success or raw SQLite/source text. |
+| Eligible preview/partial saved input | Freeze coverage, judge available evidence, and retain its limits in citations/UI. |
+| No analysis-eligible saved input | Empty `no_ready_sources`; zero report model calls. |
+| Coverage conflicts with frozen saved input | Storage failure; do not judge or silently repair it. |
 | Closed/unavailable service | 503 `topic_report_unavailable`. |
 | Invalid/omitted citation, invalid JSON/schema or leaked credential | Visible node/report failure, saved upstream evidence retained, observed usage preserved. |
 
@@ -235,8 +247,12 @@ exception detail to make a report error more descriptive.
   composes only the relevant subset. Retrying it preserves those ten snapshots.
 - Base: all ready sources are unrelated/uncertain. The report is empty without
   composition, while each initial summary and relevance reason remains readable.
+- Base: a preview-only source may be judged and cited, but its report source keeps
+  `search_preview`, partial text and unknown media coverage visibly attached.
 - Bad: a 1,001-member job silently stops after the first 100, or the UI sends a
   second generation request when polling sees no report yet.
+- Bad: omit coverage from the report hash/request or present a preview citation as
+  a detail/full-source reading.
 - Bad: changing the report instructions reruns image/video understanding or
   overwrites the old report's evidence/prompt version.
 
@@ -253,6 +269,9 @@ exception detail to make a report error more descriptive.
   graph member substitution, digest mismatch and persisted-message tampering.
 - Fresh/compatible/incompatible/corrupt reuse, current-version child-ID mapping,
   unknown/overflow usage, parse failure after usage and zero report-only media.
+- Preview, partial detail, validated-media and full-source frozen inputs. Assert
+  coverage survives repository round-trip, request serialization, source hashing,
+  API decoding and visible report source labels; conflicting coverage fails closed.
 - Settled cancellation/shutdown, queue-exit admission race, configuration changes
   and recovered metadata remaining non-runnable after a later unrelated wake.
 - Strict HTTP/decoder errors, UUID replay and ambiguous transport retry, saved
@@ -285,3 +304,19 @@ proof = check_request(call, configuration)
 Wrong: retry by selecting today's successful evidence for the old time range.
 Correct: copy the parent report's frozen source/evidence rows into a new version;
 an explicit new interval report is how the user chooses today's eligible scope.
+
+Wrong: report a preview source using only its understanding and omit input limits.
+
+```python
+payload = {"text": source.input.text, "understanding": source.understanding}
+```
+
+Correct: freeze and serialize the evidence limits with the source.
+
+```python
+payload = {
+    "text": source.input.text,
+    "understanding": source.understanding,
+    "evidence_coverage": source.input.evidence_coverage,
+}
+```

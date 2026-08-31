@@ -163,7 +163,7 @@ class AnalysisAttempt(StrictModel):
             raise ValueError("invalid output state")
         if self.status == "completed" and (
             self.input is None
-            or self.input.status != "ready"
+            or not self.input.analysis_eligible
             or self.error is not None
             or not self.input_fingerprint
             or not (self.attempted or self.reused_from_attempt_id)

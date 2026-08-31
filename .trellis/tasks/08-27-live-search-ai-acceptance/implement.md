@@ -102,3 +102,32 @@ uncommitted frontend changes; do not treat them as part of this data cleanup.
 3. Run the focused automation workflow tests, backend lint/type checks relevant to the
    changed files, then dispatch an independent `trellis-check` review.
 4. Do not run live collection, enrichment, AI, reporting, or mutate runtime data.
+
+## Proposed Best-Effort Content Enrichment Repair — 2026-08-31
+
+This phase starts only after explicit approval of the converged PRD/design.
+
+1. Add characterization tests for current WB/KS/XHS projection, strict enrichment
+   readiness, analysis rejection, report admission, and frontend decoding. Preserve
+   unrelated dirty-worktree changes.
+2. Define the versioned evidence-coverage schema and additive persistence/API
+   migration, including conservative decoding for existing analysis rows.
+3. Change initial analysis to select the best trustworthy evidence bundle from
+   enrichment plus frozen search preview. Keep strict acquisition statuses unchanged;
+   only empty evidence remains `input_incomplete` without a model request.
+4. Update model message construction, fingerprints/reuse, saved understanding, topic
+   report inputs, citations, and source projections to carry and enforce coverage.
+5. Add frontend evidence-level badges and per-modality coverage details to analysis
+   and report views, with decoder tests for new and legacy payloads.
+6. Repair XHS projection/download eligibility using exact observed hosts and fixture-
+   proven token semantics without weakening media safety.
+7. Repair WB long-text and media-inventory projection, retaining explicit `unknown`
+   whenever the source cannot prove exhaustiveness.
+8. Repair KS status/type/caption and image/video/audio projection with the same
+   complete-or-explicitly-unknown rule.
+9. Run worker projection/snapshot/transport/media-probe tests; backend enrichment,
+   analysis, report, automation, migration, lint and type checks; frontend decoder/UI
+   checks; then the complete existing test suites and an independent Trellis check.
+10. Do not make platform/provider calls during implementation. After all offline gates
+    pass, propose a separate bounded live validation of at most one source per WB, KS,
+    and XHS, stopping immediately for any manual intervention or rate limit.

@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import time
 from typing import cast
 from uuid import UUID
 
@@ -257,14 +258,35 @@ class ContentAnalysisService:
                 result_id=source.result_id,
                 expected_source=expected,
             ) as acquired:
-                if acquired.content is not None:
+                if acquired.detail_analysis_eligible:
+                    candidate = acquired
+                    saved_input = SavedInput.from_content(acquired.content)
+                    input_fingerprint = acquired.input_fingerprint
+                elif acquired.preview_analysis_eligible:
+                    # The stored search title/snippet is a safe, immutable
+                    # fallback when detail acquisition cannot produce a
+                    # document. It is explicitly labelled preview evidence
+                    # in the persisted input and model envelope.
+                    candidate = acquired.as_preview()
+                    saved_input = SavedInput.from_preview(
+                        platform=source.platform,
+                        title=source.title,
+                        snippet=source.snippet,
+                        acquired_at=time.time_ns() // 1_000_000,
+                    )
+                    input_fingerprint = candidate.input_fingerprint
+                else:
+                    candidate = acquired
+                    saved_input = None
+                    input_fingerprint = None
+                if saved_input is not None:
                     await database_call(
                         self.repository.save_input,
                         attempt.id,
-                        SavedInput.from_content(acquired.content),
-                        acquired.input_fingerprint,
+                        saved_input,
+                        input_fingerprint,
                     )
-                if not acquired.ready:
+                if not candidate.analysis_eligible:
                     status = (
                         "unsupported"
                         if acquired.content and acquired.content.status == "unsupported"
@@ -284,7 +306,7 @@ class ContentAnalysisService:
                     return
                 messages = await settle(
                     asyncio.to_thread(
-                        build_understanding_messages, configuration, acquired, prompt
+                        build_understanding_messages, configuration, candidate, prompt
                     )
                 )
                 await database_call(self.repository.mark_attempt, attempt.id)

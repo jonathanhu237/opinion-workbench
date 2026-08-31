@@ -357,3 +357,34 @@ def evidence_fingerprint(content: EnrichedContent) -> str:
         data, sort_keys=True, ensure_ascii=False, separators=(",", ":")
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def preview_fingerprint(
+    *,
+    platform: SearchPlatform,
+    content_id: str,
+    content_url: str,
+    title: str,
+    snippet: str,
+) -> str:
+    """Hash only the frozen search evidence used by preview analysis.
+
+    Search previews intentionally have a separate fingerprint from enriched
+    content.  A later successful detail acquisition therefore cannot silently
+    reuse a model result that only saw a title/snippet.
+    """
+
+    encoded = json.dumps(
+        {
+            "schema": "search-preview-v1",
+            "platform": platform,
+            "content_id": content_id,
+            "content_url": content_url,
+            "title": title,
+            "snippet": snippet,
+        },
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()

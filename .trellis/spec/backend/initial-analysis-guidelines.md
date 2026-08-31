@@ -45,6 +45,13 @@ All HTTP paths have `/api/v1` prefix:
   accepts exactly `{}` and returns settled state.
 - `ContentAnalysisRepository.completion_events(after_id=0, limit=100)` reads
   immutable normal-settlement events with the job and successful attempt IDs.
+- `SavedInput.coverage` is optional on legacy reads and required on new writes.
+  It is an `EvidenceCoverage` with fixed versions
+  `evidence-coverage-v1` / `analysis-evidence-v2`; `level` is
+  `search_preview | detail_text | validated_media | full_source`.
+- `EvidenceCoverage` records `text_origin`, text availability/completeness,
+  normalized issues, and bounded `{expected,ready,failed,unknown}` counts for
+  text, image, video and audio. API projections expose the same strict object.
 
 Migration v12 appends `analysis_prompt_versions`, `analysis_settings`,
 `content_analysis_jobs`, `content_analysis_attempts`, `content_analysis_claims`,
@@ -90,16 +97,33 @@ Migration v12 appends `analysis_prompt_versions`, `analysis_settings`,
   no acquisition/network work belongs inside a transaction.
 - Coordinate admission with the runner's empty-queue exit. A persisted new job
   must not remain stranded behind a runner that already decided to stop.
-- Save accepted full text and bounded media metadata using `SavedInput`; never
-  persist temporary media bytes, locators, credentials or raw provider responses.
-  Revalidate actual media through the existing acquisition/model boundary.
+- Acquisition fidelity and analysis eligibility are separate. `EnrichedContent`
+  `status="ready"` still means complete text, proven media inventory and all
+  required validated media. A partial detail is analysis-eligible when it has
+  nonblank detail text or at least one ready asset. If detail has no usable
+  evidence, fall back to the frozen result title/snippet and label it
+  `search_preview`; do not treat an empty detail shell as stronger evidence.
+- Save the effective evidence as `SavedInput`, including its coverage manifest.
+  Send only saved text and media bytes that passed the existing validation
+  boundary. Never persist temporary media bytes, locators, credentials, signed
+  URLs or raw provider responses. Completely empty detail and preview evidence
+  settles `input_incomplete` without a model request.
+- The model input contains `evidence_coverage` and an instruction not to claim
+  unseen detail text or missing media. `search_preview` text is the frozen title
+  and snippet only. Partial input does not become `full_source` merely because
+  the model returned a valid understanding.
 - Understanding has only `summary` (1–1500 code points), `location_clues` (0–12
   excerpt/modality pairs, excerpt 1–200), `time_context` (1–500),
   `media_observations` (0–12 strings, each 1–400), `uncertainties` (1–500).
   Combined prose is at most 6000. There is no relevance verdict in stage one.
   Preserve source attribution, unknown geography/time, and unverified claims.
 - Reuse only canonical compatible completed evidence, respecting the latest known
-  acquired fingerprint. A newer failed analysis cannot revive older stale input.
+  acquired fingerprint and input-contract version. Search-preview fingerprints
+  include platform, content identity, canonical URL, title and snippet and use a
+  distinct domain from detail fingerprints. A later richer detail fingerprint
+  therefore cannot reuse a preview result. Both `<platform>-enrichment-v1` and
+  `<platform>-search-preview-v1` are accepted only when their saved input is
+  analysis-eligible. A newer failed analysis cannot revive older stale input.
   Reused history adds no new attempted requests or historical token usage.
 - Normal job settlement writes exactly one completion event transactionally.
   Failed members do not block that event once all members settle. Cancellation,
@@ -126,6 +150,10 @@ Migration v12 appends `analysis_prompt_versions`, `analysis_settings`,
   retry selected-source/evidence/history reads as well as the list.
 - Independently decode strict status/count/source/usage contracts. Display
   incomplete input and technical failure separately from successful uncertainty.
+- Decode `coverage` conservatively when present. Evidence views show the level,
+  text origin/completeness and per-modality ready/expected/unknown counts. A
+  preview result must never use the same label as a complete source; legacy rows
+  without stored coverage derive a conservative manifest from immutable input.
 - Read history without submitting work. Keep cancellation accessible for active
   jobs while viewing old jobs. Focus selected evidence; restore focus on close.
 - Source links use frozen application-owned data; XHS uses the stored source-run
@@ -144,6 +172,10 @@ Migration v12 appends `analysis_prompt_versions`, `analysis_settings`,
 | Invalid first-entry interval | 422 `invalid_result_interval` |
 | SQLite failure / closed execution service | 503 `analysis_storage_unavailable` / `content_analysis_unavailable` |
 | Changed provider configuration | Existing AI error before model work; never redirect intent |
+| Detail incomplete but has text or validated media | Analyse only that evidence; persist actual coverage |
+| Detail empty, frozen title/snippet nonblank | Analyse one `search_preview` input with a preview fingerprint |
+| Detail and frozen title/snippet empty | `input_incomplete`; zero provider requests |
+| Stored coverage conflicts with immutable saved input | Fail closed as invalid stored evidence |
 | Model/input failure | Constant bounded saved failure; no fabricated relevance verdict |
 
 All success/error responses are `Cache-Control: no-store`; mutations retain local
@@ -155,8 +187,13 @@ Host/Origin/JSON guards. Never echo database errors, credentials or provider bod
   concurrent automatic/manual admission cannot process the same content twice.
 - Base: one saved source becomes neutral understanding and a completion event,
   independently readable before a downstream report succeeds.
+- Base: failed detail acquisition with a nonblank frozen snippet produces a
+  preview-labelled understanding; later complete detail produces a distinct
+  fingerprint and may be analysed again.
 - Bad: use visible IDs as bulk scope, mark legacy judgment as new understanding,
   clear failure history when a prompt changes, or start paid work from a GET.
+- Bad: set partial enrichment to `ready`, send failed asset locators, or describe a
+  preview-only analysis as if the detail page and media had been inspected.
 
 ## 6. Tests Required
 
@@ -166,6 +203,13 @@ Host/Origin/JSON guards. Never echo database errors, credentials or provider bod
   no-op replay after new arrivals, repeat discovery, historical/legacy exclusion.
 - Neutral output/media bounds, malformed JSON, usage after validation failure,
   forced refresh, canonical reuse and latest-known-input invalidation.
+- Preview-only, partial detail text, validated-media-only, empty detail with
+  preview fallback and fully empty evidence. Assert exactly one fake model call
+  for eligible evidence, zero for empty evidence, coverage in the exact request,
+  and a different fingerprint when richer evidence later appears.
+- Legacy `SavedInput` without `coverage` derives conservative readable coverage;
+  conflicting persisted coverage fails closed. Frontend decoders and visible
+  evidence/report labels cover preview, partial and full-source inputs.
 - Busy leases, queue-exit/admission barriers, provider revision change, cancelled
   writes/calls, shutdown/reopen, exactly-once normal completion and suppressed events.
 - Strict frontend decoding; prompt CAS/draft recovery; ambiguous UUID replay;
@@ -195,4 +239,18 @@ if not report_succeeded:
 # Correct: settle independent evidence, then expose a durable downstream event.
 repository.finish(job_id, "completed")
 events = repository.completion_events(after_id=last_event_id)
+```
+
+```python
+# Wrong: weakening acquisition truth to make useful partial input pass.
+if has_any_text:
+    enriched.status = "ready"
+
+# Correct: keep acquisition truth and choose a separate analysis input.
+if item.detail_analysis_eligible:
+    candidate = item
+elif item.preview_analysis_eligible:
+    candidate = item.as_preview()
+else:
+    settle_without_model("input_incomplete")
 ```

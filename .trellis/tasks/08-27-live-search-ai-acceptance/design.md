@@ -125,3 +125,69 @@ the lifecycle owner and avoids weakening the generic poller for unrelated shapes
 The regression must exercise a nonterminal admitted job followed by a settled read,
 and assert that the workflow observes the settled job rather than failing on a
 missing envelope-level `status`. Media-enrichment behavior remains unchanged.
+
+## Best-Effort Content Enrichment Design — 2026-08-31
+
+### Boundary and Data Flow
+
+Keep the existing local CDP/MediaCrawler worker as the sole browser-session owner:
+
+`search preview -> best-effort detail enrichment -> evidence coverage -> eligible model input -> saved understanding -> coverage-aware report`
+
+Acquisition fidelity and analysis eligibility are independent. `ready` remains the
+strict full-source state. `partial` or `unavailable` enrichment may still yield an
+eligible analysis input when at least one trustworthy evidence item exists.
+
+### Evidence Contract
+
+Introduce a versioned `EvidenceCoverage` value shared across repository, service,
+prompt, report, and frontend projections. It carries:
+
+- evidence level: `search_preview`, `detail_text`, `validated_media`, or
+  `full_source`;
+- text origin (`search_preview` or `detail`), completeness, and non-empty status;
+- for image, video, and audio: expected, ready, failed, and unknown counts;
+- normalized acquisition issues and an input-contract version.
+
+The level is a display summary; modality fields remain authoritative because text
+and media completeness are not always ordinal. Search-preview fallback uses only the
+frozen source title/snippet and canonical identity already stored by the product.
+
+### Analysis and Reporting
+
+The analysis service first attempts enrichment, then builds the best available
+evidence bundle instead of rejecting every non-`ready` record. It sends only stored
+text and media that passed the existing downloader validations. The model message
+contains the coverage manifest and explicit limits on unseen modalities. Empty
+evidence still yields `input_incomplete` without a provider request.
+
+Saved analysis projections retain coverage and input version. Reuse/fingerprints
+include the effective evidence bundle so richer later acquisition can trigger a new
+analysis. Topic-report inputs and citation/source projections preserve the coverage;
+the UI shows an evidence badge and per-modality details so preview-only findings are
+not visually equivalent to full-source findings.
+
+### Platform Repair Order
+
+1. Implement the cross-layer best-effort evidence contract first. This makes useful
+   existing title/snippet/text/media analysable without pretending enrichment is
+   complete.
+2. Repair XHS exact observed media-host/token handling and inventory proof within the
+   existing safe downloader boundary.
+3. Repair WB long-text and complete-or-explicitly-unknown media projection.
+4. Repair KS post status/type, caption, and image/video/audio inventory semantics.
+5. Evaluate an optional narrow video parser only if offline fixtures prove it adds
+   coverage that the direct adapters cannot provide.
+
+### Compatibility and Safety
+
+Use an additive schema migration if coverage is persisted in new columns/tables.
+Existing analyses remain readable with a conservative legacy/unknown coverage
+projection. Existing strict evidence keeps `full_source`; old fingerprints are not
+silently reused for a new input contract.
+
+Do not persist raw cookies, authorization headers, signed media URLs, navigation
+tokens, or media bytes. Do not wildcard media hosts, guess unknown platform domains,
+forward ambient browser cookies to downloads, or weaken redirect, DNS, size, MIME,
+and media-probe validation. Login, permission, challenge, and rate-limit states remain
+manual stop conditions.
