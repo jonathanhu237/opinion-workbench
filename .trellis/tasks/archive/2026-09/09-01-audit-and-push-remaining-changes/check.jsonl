@@ -1,0 +1,5 @@
+{"file":".trellis/spec/backend/initial-analysis-guidelines.md","reason":"Review exact URL acceptance, preservation, and test-matrix compliance."}
+{"file":".trellis/spec/backend/quality-guidelines.md","reason":"Review backend validation expectations and avoid inventing unsupported gates."}
+{"file":".trellis/spec/infra/submodule-guidelines.md","reason":"Verify clean child, reachable SHA, mode 160000, and fresh-clone proof."}
+{"file":".trellis/tasks/09-01-audit-and-push-remaining-changes/research/backend-review.md","reason":"Cross-check the implementation against identified risks and missing tests."}
+{"file":".trellis/tasks/09-01-audit-and-push-remaining-changes/research/meta-submodule-review.md","reason":"Cross-check commit boundaries and publication order."}
