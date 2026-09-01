@@ -44,4 +44,4 @@
 
 - [x] 汇总变更、测试与任何未验证项供用户复核。
 - [x] 按 Conventional Commits 创建本地提交，标题 `fix(automation): allow deleting obsolete tasks`。
-- [ ] 完成 Trellis wrap-up；不执行 Centaurus 同步或远端推送。
+- [x] 完成 Trellis wrap-up；不执行 Centaurus 同步或远端推送。
