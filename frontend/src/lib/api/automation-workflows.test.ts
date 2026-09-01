@@ -4,6 +4,7 @@ import {
   AUTOMATION_ERROR_CONTRACTS,
   AutomationApiError,
   createAutomationTask,
+  deleteAutomationTask,
   fetchAutomationRun,
   fetchAutomationTasks,
   retryAutomationRun,
@@ -185,6 +186,21 @@ describe('automation workflow HTTP boundary', () => {
     expect(fetchMock.mock.calls[1][1]).toMatchObject({
       body: JSON.stringify({ request_id: requestId, expected_revision: 4 }),
     })
+  })
+
+  it('sends the expected task revision and accepts only an empty 204 delete', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(null, { status: 204 }))
+
+    await expect(
+      deleteAutomationTask(7, { expectedRevision: 2 }, signal),
+    ).resolves.toBeUndefined()
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/automation-tasks/7',
+      expect.objectContaining({
+        method: 'DELETE',
+        body: JSON.stringify({ expected_revision: 2 }),
+      }),
+    )
   })
 
   it('rejects impossible stage order and exact product error contracts', async () => {

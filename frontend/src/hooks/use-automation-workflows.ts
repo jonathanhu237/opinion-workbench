@@ -14,6 +14,7 @@ import {
   type AutomationTask,
   type AutomationTaskPage,
 } from '@/lib/api/automation-workflows'
+import { WORKBENCH_QUERY_KEY } from '@/lib/api/workbench'
 
 export const AUTOMATION_PAGE_SIZE = 20
 
@@ -145,6 +146,29 @@ export async function cacheSavedAutomationTask(
         : current,
   )
   void client.invalidateQueries({ queryKey: AUTOMATION_TASKS_QUERY_KEY })
+}
+
+export async function cacheDeletedAutomationTask(
+  client: QueryClient,
+  taskId: number,
+) {
+  await client.cancelQueries({ queryKey: AUTOMATION_TASKS_QUERY_KEY })
+  client.removeQueries({
+    queryKey: automationTaskDetailKey(taskId),
+    exact: true,
+  })
+  client.setQueriesData<AutomationTaskPage>(
+    { queryKey: automationTaskListKey },
+    (current) =>
+      current
+        ? {
+            ...current,
+            tasks: current.tasks.filter((task) => task.id !== taskId),
+          }
+        : current,
+  )
+  void client.invalidateQueries({ queryKey: AUTOMATION_TASKS_QUERY_KEY })
+  void client.invalidateQueries({ queryKey: WORKBENCH_QUERY_KEY })
 }
 
 export async function cacheSavedAutomationRun(

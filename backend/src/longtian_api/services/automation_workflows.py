@@ -55,6 +55,7 @@ from longtian_api.schemas.automation_workflows import (
     AutomationStageName,
     AutomationTask,
     AutomationTaskCreate,
+    AutomationTaskDelete,
     AutomationTaskList,
     AutomationTaskReplace,
 )
@@ -417,6 +418,33 @@ class AutomationWorkflowService:
         except AutomationRepositoryUnavailableError:
             raise AutomationWorkflowError("automation_storage_unavailable") from None
         return self._to_task(record)
+
+    def delete_task(
+        self,
+        task_id: int,
+        payload: AutomationTaskDelete,
+    ) -> None:
+        """Remove a task from the editable/scheduled surface.
+
+        Repository deletion is revision-fenced and refuses active runs.  The
+        service deliberately does not check ``available``: deletion only
+        changes local task metadata and must remain possible while workflow
+        execution is disabled.
+        """
+        try:
+            self.repository.delete_task(
+                task_id,
+                expected_revision=payload.expected_revision,
+                now=_as_utc(self._clock()),
+            )
+        except AutomationTaskNotFoundError:
+            raise AutomationWorkflowError("automation_task_not_found") from None
+        except AutomationTaskChangedError:
+            raise AutomationWorkflowError("automation_task_changed") from None
+        except AutomationRunActiveError:
+            raise AutomationWorkflowError("automation_run_active") from None
+        except AutomationRepositoryUnavailableError:
+            raise AutomationWorkflowError("automation_storage_unavailable") from None
 
     def get_task(self, task_id: int) -> AutomationTask:
         return self._to_task(self._get_task_record(task_id))

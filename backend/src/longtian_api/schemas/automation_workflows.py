@@ -127,6 +127,12 @@ class AutomationTaskReplace(AutomationTaskCreate):
     enabled: bool
 
 
+class AutomationTaskDelete(StrictModel):
+    """Revision fence for removing an automatic task configuration."""
+
+    expected_revision: int = Field(ge=1, lt=MAX_SAFE_INTEGER)
+
+
 class AutomationSnapshot(StrictModel):
     """Immutable intent copied into each accepted run."""
 

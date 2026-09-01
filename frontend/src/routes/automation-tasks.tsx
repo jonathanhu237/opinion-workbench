@@ -13,9 +13,10 @@ import {
   RefreshCw,
   Settings2,
   TimerReset,
+  Trash2,
   XCircle,
 } from 'lucide-react'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 
 import {
@@ -38,6 +39,7 @@ import {
   useAutomationTask,
   useAutomationTasks,
   automationTaskDetailKey,
+  cacheDeletedAutomationTask,
   cacheSavedAutomationRun,
   cacheSavedAutomationTask,
 } from '@/hooks/use-automation-workflows'
@@ -46,6 +48,7 @@ import {
   automationErrorMessage,
   automationScheduleLabel,
   automationTaskUpdatePayload,
+  deleteAutomationTask,
   formatAutomationDate,
   isAutomationRunActive,
   isAutomationTaskActive,
@@ -62,6 +65,7 @@ import { searchPlatformPresenters } from '@/routes/search-run-presenters'
 
 type ActionState =
   | { kind: 'run'; task: AutomationTask; requestId: string }
+  | { kind: 'delete'; task: AutomationTask }
   | { kind: 'toggle'; task: AutomationTask }
   | null
 
@@ -199,11 +203,15 @@ function AutomationTaskCard({
   onEdit,
   onRun,
   onToggle,
+  onDelete,
+  deletePending,
 }: {
   task: AutomationTask
   onEdit: (task: AutomationTask) => void
   onRun: (task: AutomationTask) => void
   onToggle: (task: AutomationTask) => void
+  onDelete: (task: AutomationTask) => void
+  deletePending: boolean
 }) {
   const active = isAutomationTaskActive(task)
   const canEnable = task.rule_state === 'enabled' && task.available
@@ -304,6 +312,17 @@ function AutomationTaskCard({
             )}
             {task.enabled ? '停用' : '启用'}
           </Button>
+          <Button
+            variant="destructive"
+            className="min-h-11"
+            aria-label={`删除“${task.name}”${active ? '（请先取消运行）' : ''}`}
+            title={active ? '任务正在运行，请先取消后再删除。' : undefined}
+            disabled={active || deletePending}
+            onClick={() => onDelete(task)}
+          >
+            <Trash2 aria-hidden />
+            删除
+          </Button>
         </div>
       </div>
     </article>
@@ -321,21 +340,36 @@ function TaskActionDialog({
   onClose: () => void
   onConfirm: () => void
 }) {
-  const open = action?.kind === 'run'
+  const open = action?.kind === 'run' || action?.kind === 'delete'
   if (!open) return null
+  const deleting = action.kind === 'delete'
   return (
     <AlertDialog open onOpenChange={(value) => !value && !pending && onClose()}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>立即运行自动任务？</AlertDialogTitle>
+          <AlertDialogTitle>
+            {deleting ? `删除“${action.task.name}”？` : '立即运行自动任务？'}
+          </AlertDialogTitle>
           <AlertDialogDescription>
-            这会按顺序采集、分析并生成报告，不会改变下一次计划时间。如果任务已经在运行，本次不会重复启动。
+            {deleting
+              ? '删除后会停止未来计划并从任务列表移除；已有运行、分析结果和报告会保留。此操作无法恢复。'
+              : '这会按顺序采集、分析并生成报告，不会改变下一次计划时间。如果任务已经在运行，本次不会重复启动。'}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel disabled={pending}>返回</AlertDialogCancel>
-          <AlertDialogAction disabled={pending} onClick={onConfirm}>
-            {pending ? '正在提交…' : '确认立即运行'}
+          <AlertDialogAction
+            disabled={pending}
+            variant={deleting ? 'destructive' : 'default'}
+            onClick={onConfirm}
+          >
+            {pending
+              ? deleting
+                ? '正在删除…'
+                : '正在提交…'
+              : deleting
+                ? '确认删除'
+                : '确认立即运行'}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
@@ -390,6 +424,8 @@ export function AutomationTasks() {
   )
   const [action, setAction] = useState<ActionState>(null)
   const [feedback, setFeedback] = useState<string | null>(null)
+  const [focusRefreshAfterDelete, setFocusRefreshAfterDelete] = useState(false)
+  const refreshButtonRef = useRef<HTMLButtonElement>(null)
   const createButtonRef = useRef<HTMLButtonElement>(null)
   const toggleMutation = useMutation({
     mutationFn: (task: AutomationTask) =>
@@ -428,6 +464,24 @@ export function AutomationTasks() {
       setFeedback('任务未能启动，请刷新后重试。')
     },
   })
+  const deleteMutation = useMutation({
+    mutationFn: (task: AutomationTask) =>
+      deleteAutomationTask(task.id, { expectedRevision: task.revision }),
+    retry: false,
+    onSuccess: async (_result, deletedTask) => {
+      await cacheDeletedAutomationTask(client, deletedTask.id)
+      setAction(null)
+      setFeedback(
+        `已删除“${deletedTask.name}”。未来计划已停止，已有运行和报告仍会保留。`,
+      )
+      setFocusRefreshAfterDelete(true)
+    },
+    onError: (error) => {
+      void client.invalidateQueries({ queryKey: AUTOMATION_TASKS_QUERY_KEY })
+      setAction(null)
+      setFeedback(`任务未删除。${automationErrorMessage(error)}`)
+    },
+  })
 
   function changeBefore(value: number | null) {
     setParams((previous) => {
@@ -442,6 +496,12 @@ export function AutomationTasks() {
     setEditor(undefined)
     queueMicrotask(() => createButtonRef.current?.focus())
   }
+
+  useEffect(() => {
+    if (!focusRefreshAfterDelete || list.isFetching) return
+    setFocusRefreshAfterDelete(false)
+    refreshButtonRef.current?.focus()
+  }, [focusRefreshAfterDelete, list.isFetching])
 
   return (
     <div className="space-y-6">
@@ -463,6 +523,7 @@ export function AutomationTasks() {
               </div>
               <div className="flex shrink-0 flex-wrap gap-2">
                 <Button
+                  ref={refreshButtonRef}
                   variant="outline"
                   className="min-h-11"
                   disabled={
@@ -580,6 +641,12 @@ export function AutomationTasks() {
                       setAction({ kind: 'toggle', task: value })
                       toggleMutation.mutate(value)
                     }}
+                    onDelete={(value) => {
+                      deleteMutation.reset()
+                      setFeedback(null)
+                      setAction({ kind: 'delete', task: value })
+                    }}
+                    deletePending={deleteMutation.isPending}
                   />
                 ))}
               </div>
@@ -611,10 +678,15 @@ export function AutomationTasks() {
       )}
       <TaskActionDialog
         action={action}
-        pending={runMutation.isPending}
+        pending={
+          action?.kind === 'delete'
+            ? deleteMutation.isPending
+            : runMutation.isPending
+        }
         onClose={() => setAction(null)}
         onConfirm={() => {
           if (action?.kind === 'run') runMutation.mutate(action)
+          if (action?.kind === 'delete') deleteMutation.mutate(action.task)
         }}
       />
     </div>

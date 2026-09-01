@@ -7,11 +7,13 @@ import { RouterProvider } from 'react-router/dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
+  AutomationApiError,
   fetchAutomationOccurrences,
   fetchAutomationRun,
   fetchAutomationRuns,
   fetchAutomationTask,
   fetchAutomationTasks,
+  deleteAutomationTask,
   runAutomationTaskNow,
 } from '@/lib/api/automation-workflows'
 import { fetchMonitoringRules } from '@/lib/api/monitoring-rules'
@@ -35,6 +37,7 @@ vi.mock('@/lib/api/automation-workflows', async (importOriginal) => ({
   fetchAutomationRuns: vi.fn(),
   fetchAutomationTask: vi.fn(),
   fetchAutomationTasks: vi.fn(),
+  deleteAutomationTask: vi.fn(),
   runAutomationTaskNow: vi.fn(),
 }))
 
@@ -49,6 +52,7 @@ const mockedRuns = vi.mocked(fetchAutomationRuns)
 const mockedOccurrences = vi.mocked(fetchAutomationOccurrences)
 const mockedRun = vi.mocked(fetchAutomationRun)
 const mockedRunNow = vi.mocked(runAutomationTaskNow)
+const mockedDelete = vi.mocked(deleteAutomationTask)
 
 function renderRoute(
   routes: Parameters<typeof createMemoryRouter>[0],
@@ -81,6 +85,7 @@ beforeEach(() => {
   mockedOccurrences.mockResolvedValue({ occurrences: [], next_before_id: null })
   mockedRun.mockResolvedValue(automationRun())
   mockedRunNow.mockResolvedValue(automationRun({ id: 102, revision: 1 }))
+  mockedDelete.mockResolvedValue(undefined)
   vi.mocked(fetchMonitoringRules).mockResolvedValue({
     rules: [
       {
@@ -169,6 +174,125 @@ describe('automation task route', () => {
       expect(router.state.location.pathname).toBe('/automation-runs/102'),
     )
   })
+
+  it('lets the operator cancel deletion without sending a request', async () => {
+    const user = userEvent.setup()
+    renderRoute(
+      [{ path: '/automation-tasks', element: <AutomationTasks /> }],
+      '/automation-tasks',
+    )
+
+    await user.click(
+      await screen.findByRole('button', { name: '删除“街道公共事务值守”' }),
+    )
+    const dialog = screen.getByRole('alertdialog', {
+      name: '删除“街道公共事务值守”？',
+    })
+    expect(dialog).toHaveTextContent(/已有运行、分析结果和报告会保留/u)
+    await user.click(within(dialog).getByRole('button', { name: '返回' }))
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+    expect(
+      screen.getByRole('heading', { name: '街道公共事务值守' }),
+    ).toBeVisible()
+    expect(mockedDelete).not.toHaveBeenCalled()
+  })
+
+  it('locks deletion while pending, removes the card, reports success and restores focus', async () => {
+    const user = userEvent.setup()
+    let resolveDelete: (() => void) | undefined
+    mockedDelete.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveDelete = resolve
+        }),
+    )
+    mockedTasks.mockReset()
+    mockedTasks
+      .mockResolvedValueOnce({
+        tasks: [automationTask()],
+        next_before_id: null,
+      })
+      .mockResolvedValue({ tasks: [], next_before_id: null })
+    renderRoute(
+      [{ path: '/automation-tasks', element: <AutomationTasks /> }],
+      '/automation-tasks',
+    )
+
+    await user.click(
+      await screen.findByRole('button', { name: '删除“街道公共事务值守”' }),
+    )
+    await user.click(screen.getByRole('button', { name: '确认删除' }))
+    await waitFor(() => expect(mockedDelete).toHaveBeenCalledOnce())
+    expect(screen.getByRole('button', { name: '正在删除…' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '返回' })).toBeDisabled()
+    expect(document.querySelector('article h3')).toHaveTextContent(
+      '街道公共事务值守',
+    )
+
+    resolveDelete?.()
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('heading', { name: '街道公共事务值守' }),
+      ).toBeNull(),
+    )
+    expect(screen.getByRole('status')).toHaveTextContent(
+      /已删除“街道公共事务值守”/u,
+    )
+    expect(screen.getByRole('button', { name: '刷新任务' })).toHaveFocus()
+  })
+
+  it('keeps an active task undeletable and preserves the card after a conflict', async () => {
+    const user = userEvent.setup()
+    mockedTasks.mockResolvedValue({
+      tasks: [
+        automationTask({
+          latest_run: automationRun({
+            status: 'collecting',
+            active_stage: 'collection',
+            finished_at: null,
+          }),
+        }),
+      ],
+      next_before_id: null,
+    })
+    renderRoute(
+      [{ path: '/automation-tasks', element: <AutomationTasks /> }],
+      '/automation-tasks',
+    )
+
+    const deleteButton = await screen.findByRole('button', {
+      name: '删除“街道公共事务值守”（请先取消运行）',
+    })
+    expect(deleteButton).toBeDisabled()
+    expect(mockedDelete).not.toHaveBeenCalled()
+
+    mockedTasks.mockResolvedValue({
+      tasks: [automationTask()],
+      next_before_id: null,
+    })
+    mockedDelete.mockRejectedValueOnce(
+      new AutomationApiError('automation_task_changed', 409),
+    )
+    // Re-render a settled task to exercise the server-conflict feedback path.
+    mockedTasks.mockResolvedValueOnce({
+      tasks: [automationTask()],
+      next_before_id: null,
+    })
+    await user.click(screen.getByRole('button', { name: '刷新任务' }))
+    const settledDelete = await screen.findByRole('button', {
+      name: '删除“街道公共事务值守”',
+    })
+    await user.click(settledDelete)
+    await user.click(screen.getByRole('button', { name: '确认删除' }))
+    await waitFor(() =>
+      expect(screen.getByRole('status')).toHaveTextContent(
+        /任务未删除。自动任务已更新，请刷新后重试/u,
+      ),
+    )
+    expect(
+      screen.getByRole('heading', { name: '街道公共事务值守' }),
+    ).toBeVisible()
+  })
 })
 
 describe('automation run routes', () => {
@@ -191,7 +315,7 @@ describe('automation run routes', () => {
     expect(screen.getByText(/计划记录/u)).toBeVisible()
   })
 
-  it('keeps the empty zero-model outcome and report link visible in run detail', async () => {
+  it('keeps an independent run detail navigable after its task is removed', async () => {
     const empty = automationRun({ outcome: 'no_new_sources' })
     mockedRun.mockResolvedValue(empty)
     renderRoute(
@@ -202,6 +326,10 @@ describe('automation run routes', () => {
     expect(screen.getByText('这次没有新的可分析内容')).toBeVisible()
     expect(screen.getByText('处理过程')).toBeVisible()
     expect(screen.getByText('本次任务设置')).toBeVisible()
+    expect(screen.getByRole('link', { name: '返回自动任务' })).toHaveAttribute(
+      'href',
+      '/automation-tasks',
+    )
     expect(screen.getByRole('link', { name: /查看本轮报告/u })).toHaveAttribute(
       'href',
       '/results?report=401',

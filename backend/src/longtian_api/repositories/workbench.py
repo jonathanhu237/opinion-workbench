@@ -101,7 +101,7 @@ class WorkbenchRepository:
                 WHERE task_id=t.id AND task_revision=t.revision
                 ORDER BY id DESC LIMIT 1
               )
-              WHERE t.enabled=1 ORDER BY t.id"""
+              WHERE t.deleted_at IS NULL AND t.enabled=1 ORDER BY t.id"""
         ).fetchall()
         items = []
         for row in rows:
@@ -155,7 +155,7 @@ class WorkbenchRepository:
               WHERE a.status NOT IN ('queued','collecting','analysing','reporting')
             )
             SELECT a.*,t.name AS task_name FROM terminal a
-            JOIN automation_tasks t ON t.id=a.task_id
+            JOIN automation_tasks t ON t.id=a.task_id AND t.deleted_at IS NULL
             WHERE a.ordinal=1 AND a.status IN
               ('failed','interrupted','configuration_blocked')
             ORDER BY a.id"""
@@ -347,9 +347,11 @@ class WorkbenchRepository:
     @staticmethod
     def _automation_activity(connection) -> WorkbenchAutomationActivity | None:
         row = connection.execute(
-            """SELECT * FROM automation_runs WHERE status IN
+            """SELECT a.* FROM automation_runs a
+              JOIN automation_tasks t ON t.id=a.task_id AND t.deleted_at IS NULL
+              WHERE a.status IN
               ('queued','collecting','analysing','reporting')
-              ORDER BY id DESC LIMIT 1"""
+              ORDER BY a.id DESC LIMIT 1"""
         ).fetchone()
         if row is None:
             return None
@@ -451,7 +453,7 @@ class WorkbenchRepository:
               t.daily_time,t.timezone
               FROM automation_tasks t JOIN monitoring_rules r
                 ON r.id=t.monitoring_rule_id AND r.enabled=1
-              WHERE t.enabled=1 AND t.next_due_at>=?
+              WHERE t.deleted_at IS NULL AND t.enabled=1 AND t.next_due_at>=?
               ORDER BY t.next_due_at,t.id""",
             (observed_at,),
         ).fetchall()

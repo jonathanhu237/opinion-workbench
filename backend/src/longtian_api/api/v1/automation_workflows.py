@@ -17,6 +17,7 @@ from longtian_api.schemas.automation_workflows import (
     AutomationRunRetry,
     AutomationTask,
     AutomationTaskCreate,
+    AutomationTaskDelete,
     AutomationTaskList,
     AutomationTaskReplace,
 )
@@ -116,6 +117,19 @@ def replace_task(
     task_id: Identity, payload: AutomationTaskReplace, service: Service
 ) -> AutomationTask:
     return service.replace_task(task_id, payload)
+
+
+@router.delete(
+    "/automation-tasks/{task_id}",
+    status_code=204,
+    response_class=Response,
+    dependencies=[Depends(require_local_mutation)],
+)
+def delete_task(
+    task_id: Identity, payload: AutomationTaskDelete, service: Service
+) -> Response:
+    service.delete_task(task_id, payload)
+    return Response(status_code=204, headers={"Cache-Control": "no-store"})
 
 
 @router.get("/automation-tasks/{task_id}/occurrences")

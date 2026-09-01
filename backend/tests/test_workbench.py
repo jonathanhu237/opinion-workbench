@@ -12,6 +12,7 @@ from test_content_analysis_api import api_fixture
 from topic_report_fixtures import analyse_all, environment
 
 from longtian_api.database import Database
+from longtian_api.repositories.automation_workflows import AutomationWorkflowRepository
 from longtian_api.repositories.search_batches import SearchBatchRepository
 from longtian_api.services.workbench import WorkbenchService
 from longtian_api.services.workbench_errors import ERRORS, WorkbenchError
@@ -148,6 +149,7 @@ def test_automation_issue_clears_on_revision_and_disabled_task_is_ignored(tmp_pa
             (NOW.isoformat(), task_id),
         )
     assert service(owner).read().attention == []
+
     with owner.connect() as connection:
         connection.execute(
             """UPDATE monitoring_rules SET enabled=0,updated_at=? WHERE id=1""",
@@ -162,6 +164,37 @@ def test_automation_issue_clears_on_revision_and_disabled_task_is_ignored(tmp_pa
             (NOW.isoformat(), task_id),
         )
     assert service(owner).read().attention == []
+
+
+def test_deleted_automation_task_is_omitted_from_attention_and_next_plan(tmp_path):
+    owner = database(tmp_path)
+    with owner.connect() as connection:
+        task_id = _automation_task(
+            connection,
+            "已删除任务",
+            (NOW + timedelta(minutes=15)).isoformat(),
+        )
+        connection.execute(
+            """INSERT INTO automation_occurrences(task_id,task_revision,
+              due_at,status,reason,missed_count,missed_until,created_at)
+              VALUES (?,1,?,'missed','offline',1,?,?)""",
+            (
+                task_id,
+                (NOW - timedelta(minutes=15)).isoformat(),
+                NOW.isoformat(),
+                NOW.isoformat(),
+            ),
+        )
+
+    AutomationWorkflowRepository(owner).delete_task(
+        task_id,
+        expected_revision=1,
+        now=NOW,
+    )
+
+    snapshot = service(owner).read()
+    assert snapshot.attention == []
+    assert snapshot.next_automation is None
 
 
 def test_collection_activity_and_latest_owner_success_clears_failure(tmp_path):

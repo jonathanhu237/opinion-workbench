@@ -311,6 +311,58 @@ class AutomationWorkflowRepository:
             self._insert_platforms(connection, task_id, payload.platforms)
             return _read_task(connection, task_id)
 
+    def delete_task(
+        self,
+        task_id: int,
+        *,
+        expected_revision: int,
+        now: datetime,
+    ) -> None:
+        """Soft-delete one task while preserving every historical child row.
+
+        The write lock serializes this fence with due-time claims and run
+        admission.  A retry carrying the revision immediately before the
+        deletion is treated as an idempotent success; other reads of the
+        tombstone are intentionally indistinguishable from an unknown task.
+        """
+        timestamp = _utc(now)
+        with self._connection(write=True) as connection:
+            row = connection.execute(
+                "SELECT * FROM automation_tasks WHERE id=?", (task_id,)
+            ).fetchone()
+            if row is None:
+                raise AutomationTaskNotFoundError
+            deleted_at = row["deleted_at"]
+            current_revision = int(row["revision"])
+            if deleted_at is not None:
+                if current_revision == expected_revision + 1:
+                    return
+                raise AutomationTaskNotFoundError
+            if current_revision != expected_revision:
+                raise AutomationTaskChangedError
+            active = connection.execute(
+                """SELECT 1 FROM automation_runs WHERE task_id=? AND status IN
+                   ('queued','collecting','analysing','reporting') LIMIT 1""",
+                (task_id,),
+            ).fetchone()
+            if active is not None:
+                raise AutomationRunActiveError
+            tombstone = f"\x00automation-task:{task_id}:{expected_revision}"
+            changed = connection.execute(
+                """UPDATE automation_tasks SET normalized_name=?,enabled=0,
+                   next_due_at=NULL,anchor_at=NULL,deleted_at=?,updated_at=?,
+                   revision=revision+1 WHERE id=? AND revision=? AND deleted_at IS NULL""",
+                (
+                    tombstone,
+                    timestamp,
+                    timestamp,
+                    task_id,
+                    expected_revision,
+                ),
+            ).rowcount
+            if changed != 1:
+                raise AutomationTaskChangedError
+
     def get_task(self, task_id: int) -> AutomationTaskRecord:
         with self._connection() as connection:
             return _read_task(connection, task_id)
@@ -321,7 +373,8 @@ class AutomationWorkflowRepository:
         with self._connection() as connection:
             rows = connection.execute(
                 """SELECT id FROM automation_tasks
-                   WHERE (? IS NULL OR id<?) ORDER BY id DESC LIMIT ?""",
+                   WHERE deleted_at IS NULL AND (? IS NULL OR id<?)
+                   ORDER BY id DESC LIMIT ?""",
                 (before_id, before_id, limit + 1),
             ).fetchall()
             records = tuple(_read_task(connection, int(row[0])) for row in rows[:limit])
@@ -395,7 +448,7 @@ class AutomationWorkflowRepository:
             return (
                 connection.execute(
                     """SELECT 1 FROM automation_tasks
-                       WHERE enabled=1 AND next_due_at<=? LIMIT 1""",
+                       WHERE deleted_at IS NULL AND enabled=1 AND next_due_at<=? LIMIT 1""",
                     (timestamp,),
                 ).fetchone()
                 is not None
@@ -414,7 +467,7 @@ class AutomationWorkflowRepository:
         with self._connection(write=True) as connection:
             rows = connection.execute(
                 """SELECT * FROM automation_tasks WHERE enabled=1 AND next_due_at<=?
-                   ORDER BY next_due_at,id LIMIT 100""",
+                   AND deleted_at IS NULL ORDER BY next_due_at,id LIMIT 100""",
                 (timestamp,),
             ).fetchall()
             for row in rows:
@@ -1048,7 +1101,8 @@ class AutomationWorkflowRepository:
 
 def _task_row(connection: sqlite3.Connection, task_id: int) -> sqlite3.Row:
     row = connection.execute(
-        "SELECT * FROM automation_tasks WHERE id=?", (task_id,)
+        "SELECT * FROM automation_tasks WHERE id=? AND deleted_at IS NULL",
+        (task_id,),
     ).fetchone()
     if row is None:
         raise AutomationTaskNotFoundError

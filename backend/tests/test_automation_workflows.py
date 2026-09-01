@@ -1,6 +1,7 @@
 """Focused fake-only coverage for the fixed automatic workflow backend."""
 
 import asyncio
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -12,6 +13,9 @@ from longtian_api import database as database_migrations
 from longtian_api.database import CURRENT_DATABASE_VERSION, Database
 from longtian_api.main import create_app
 from longtian_api.repositories.automation_workflows import (
+    AutomationRunActiveError,
+    AutomationTaskChangedError,
+    AutomationTaskNotFoundError,
     AutomationWorkflowRepository,
     BatchContentRecord,
 )
@@ -23,6 +27,7 @@ from longtian_api.schemas.automation_workflows import (
     AutomationRunNow,
     AutomationRunRetry,
     AutomationTaskCreate,
+    AutomationTaskDelete,
     AutomationTaskReplace,
 )
 from longtian_api.schemas.content_analyses import (
@@ -105,7 +110,7 @@ def test_v15_is_additive_and_does_not_convert_old_schedules(tmp_path: Path):
         assert (
             connection.execute("PRAGMA user_version").fetchone()[0]
             == CURRENT_DATABASE_VERSION
-            == 16
+            == 17
         )
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         assert (
@@ -119,6 +124,24 @@ def test_v15_is_additive_and_does_not_convert_old_schedules(tmp_path: Path):
             row[1] for row in connection.execute("PRAGMA table_info(search_batches)")
         }
         assert "workflow_operation_key" in columns
+        task_columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(automation_tasks)")
+        }
+        assert "deleted_at" in task_columns
+        trigger_names = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='trigger' "
+                "AND tbl_name='automation_tasks'"
+            )
+        }
+        assert {
+            "automation_task_deleted_state_insert",
+            "automation_task_deleted_state_update",
+            "automation_task_deleted_immutable",
+            "automation_task_rule_deleted",
+        } <= trigger_names
 
 
 def test_v15_failure_rolls_back_real_schema_changes(tmp_path: Path, monkeypatch):
@@ -152,6 +175,67 @@ def test_v15_failure_rolls_back_real_schema_changes(tmp_path: Path, monkeypatch)
             row[1] for row in connection.execute("PRAGMA table_info(search_batches)")
         }
         assert "workflow_operation_key" not in columns
+
+
+def test_v17_failure_rolls_back_soft_delete_schema(tmp_path: Path, monkeypatch):
+    import longtian_api.migrations.automation_workflows_v17 as migration
+
+    database = _v14_database(tmp_path)
+    with database.connect() as connection:
+        database_migrations._migrate_to_version_15(connection)
+        database_migrations._migrate_to_version_16(connection)
+    original = migration.migrate
+
+    def fail(connection):
+        original(connection)
+        raise RuntimeError("synthetic v17 failure")
+
+    monkeypatch.setattr(migration, "migrate", fail)
+    with pytest.raises(RuntimeError, match="v17 failure"):
+        database.initialize()
+
+    with database.connect() as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 16
+        columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(automation_tasks)")
+        }
+        assert "deleted_at" not in columns
+        trigger_names = {
+            row[0]
+            for row in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='trigger' "
+                "AND tbl_name='automation_tasks'"
+            )
+        }
+        assert not trigger_names & {
+            "automation_task_deleted_state_insert",
+            "automation_task_deleted_state_update",
+            "automation_task_deleted_immutable",
+        }
+
+
+def test_v17_keeps_existing_automation_tasks_visible_by_default(tmp_path: Path):
+    database = _v14_database(tmp_path)
+    with database.connect() as connection:
+        database_migrations._migrate_to_version_15(connection)
+        database_migrations._migrate_to_version_16(connection)
+        connection.execute(
+            """INSERT INTO automation_tasks(
+              name,normalized_name,monitoring_rule_id,max_results_per_term,
+              analysis_goal,schedule_kind,interval_minutes,enabled,revision,
+              next_due_at,anchor_at,created_at,updated_at)
+              VALUES ('历史自动任务','历史自动任务',1,10,
+                '保留迁移前的自动任务','interval',30,0,1,NULL,NULL,?,?)""",
+            ("2026-08-30T00:00:00+00:00", "2026-08-30T00:00:00+00:00"),
+        )
+
+    database.initialize()
+    with database.connect() as connection:
+        row = connection.execute(
+            "SELECT name,deleted_at FROM automation_tasks"
+        ).fetchone()
+        assert tuple(row) == ("历史自动任务", None)
 
 
 def test_schedule_validation_and_dst_gap(tmp_path: Path):
@@ -221,6 +305,153 @@ def test_occurrence_claim_and_run_snapshot_are_idempotent(tmp_path: Path):
     )
     assert created is True and replayed is False and replay.id == first.id
     assert repository.occurrence(claims[0].id).run_id == first.id
+
+
+def test_task_delete_is_revision_fenced_idempotent_and_preserves_history(
+    tmp_path: Path,
+):
+    database, _, repository = _repository(tmp_path)
+    now = datetime(2026, 8, 30, 0, 0, tzinfo=UTC)
+    task = repository.create_task(_task_payload(name="可清理任务"), now=now)
+    run, created = repository.create_run(
+        task_id=task.id,
+        trigger="manual",
+        admission_key="manual:delete-history",
+        request_id=None,
+        snapshot=_snapshot(task, now),
+        now=now,
+    )
+    assert created
+    repository.set_run_terminal(run.id, "completed", outcome="completed")
+
+    repository.delete_task(task.id, expected_revision=task.revision, now=now)
+    # Retrying the same revision after a lost 204 is an idempotent success.
+    repository.delete_task(task.id, expected_revision=task.revision, now=now)
+    with pytest.raises(AutomationTaskNotFoundError):
+        repository.get_task(task.id)
+    with pytest.raises(AutomationTaskNotFoundError):
+        repository.delete_task(task.id, expected_revision=task.revision + 1, now=now)
+
+    preserved = repository.get_run(run.id)
+    assert preserved.id == run.id and preserved.status == "completed"
+    with database.connect() as connection:
+        row = connection.execute(
+            "SELECT name,normalized_name,enabled,next_due_at,anchor_at,"
+            "deleted_at,revision "
+            "FROM automation_tasks WHERE id=?",
+            (task.id,),
+        ).fetchone()
+        assert row["name"] == task.name
+        assert row["normalized_name"].startswith("\x00")
+        assert str(task.id) in row["normalized_name"]
+        assert row["enabled"] == 0
+        assert row["next_due_at"] is None and row["anchor_at"] is None
+        assert row["deleted_at"] == now.isoformat()
+        assert row["revision"] == task.revision + 1
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "UPDATE automation_tasks SET enabled=1 WHERE id=?", (task.id,)
+            )
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "UPDATE automation_tasks SET name='不应修改' WHERE id=?", (task.id,)
+            )
+
+    replacement = repository.create_task(_task_payload(name=task.name), now=now)
+    assert replacement.id != task.id
+
+
+def test_task_delete_rejects_stale_revision_and_active_run(tmp_path: Path):
+    database, _, repository = _repository(tmp_path)
+    now = datetime(2026, 8, 30, 0, 0, tzinfo=UTC)
+    task = repository.create_task(_task_payload(), now=now)
+    with pytest.raises(AutomationTaskChangedError):
+        repository.delete_task(task.id, expected_revision=2, now=now)
+
+    run, _ = repository.create_run(
+        task_id=task.id,
+        trigger="manual",
+        admission_key="manual:active-delete",
+        request_id=None,
+        snapshot=_snapshot(task, now),
+        now=now,
+    )
+    with pytest.raises(AutomationRunActiveError):
+        repository.delete_task(task.id, expected_revision=task.revision, now=now)
+    assert repository.get_task(task.id).id == task.id
+    repository.set_run_terminal(run.id, "cancelled", outcome="cancelled")
+    # The task remains editable after an active-run rejection.
+    repository.delete_task(task.id, expected_revision=task.revision, now=now)
+    with database.connect() as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM automation_occurrences WHERE task_id=?", (task.id,)
+        ).fetchone()[0] == 0
+
+
+def test_deleted_task_allows_monitoring_rule_cleanup(tmp_path: Path):
+    database, rules, repository = _repository(tmp_path)
+    now = datetime(2026, 8, 30, 0, 0, tzinfo=UTC)
+    task = repository.create_task(_task_payload(), now=now)
+
+    repository.delete_task(task.id, expected_revision=task.revision, now=now)
+    rules.delete_rule(1)
+
+    with database.connect() as connection:
+        row = connection.execute(
+            "SELECT monitoring_rule_id,deleted_at,enabled "
+            "FROM automation_tasks WHERE id=?",
+            (task.id,),
+        ).fetchone()
+    assert row["monitoring_rule_id"] is None
+    assert row["deleted_at"] == now.isoformat()
+    assert row["enabled"] == 0
+
+
+def test_deleted_task_is_not_schedulable(tmp_path: Path):
+    database, _, repository = _repository(tmp_path)
+    now = datetime(2026, 8, 30, 0, 0, tzinfo=UTC)
+    task = repository.create_task(_task_payload(), now=now)
+    enabled = AutomationTaskReplace(
+        **_task_payload().model_dump(),
+        expected_revision=task.revision,
+        enabled=True,
+    )
+    task = repository.replace_task(
+        task.id,
+        enabled,
+        now=now,
+        anchor_at=now.isoformat(),
+        next_due_at=(now + timedelta(minutes=30)).isoformat(),
+    )
+    repository.delete_task(task.id, expected_revision=task.revision, now=now)
+    assert repository.has_due(now + timedelta(minutes=30)) is False
+    assert repository.advance_due(now + timedelta(minutes=30)) == ()
+
+
+def test_service_delete_maps_repository_errors_and_works_when_unavailable(
+    tmp_path: Path,
+):
+    database, rules, repository = _repository(tmp_path)
+    now = datetime(2026, 8, 30, 0, 0, tzinfo=UTC)
+    task = repository.create_task(_task_payload(name="服务删除任务"), now=now)
+    service = AutomationWorkflowService(
+        database,
+        monitoring_rules=rules,
+        repository=repository,
+        clock=lambda: now,
+        available=False,
+    )
+
+    service.delete_task(task.id, AutomationTaskDelete(expected_revision=task.revision))
+    with pytest.raises(AutomationWorkflowError) as missing:
+        service.delete_task(
+            task.id, AutomationTaskDelete(expected_revision=task.revision + 1)
+        )
+    assert missing.value.code == "automation_task_not_found"
+
+    with pytest.raises(AutomationWorkflowError) as unknown:
+        service.delete_task(999, AutomationTaskDelete(expected_revision=1))
+    assert unknown.value.code == "automation_task_not_found"
 
 
 class _FakeBatch:
@@ -962,3 +1193,50 @@ def test_http_contract_replaces_old_schedule_route_and_replays_run_now(tmp_path:
             json={"request_id": REQUEST},
         )
         assert replay.status_code == 202 and replay.json() == finished
+
+        openapi = client.get("/openapi.json").json()
+        delete_operation = openapi["paths"][
+            "/api/v1/automation-tasks/{task_id}"
+        ]["delete"]
+        assert set(delete_operation["responses"]) >= {"204", "404", "409", "422", "503"}
+        assert delete_operation["requestBody"]["required"] is True
+
+        invalid_delete = client.request(
+            "DELETE",
+            f"/api/v1/automation-tasks/{task['id']}",
+            json={"expected_revision": task["revision"], "extra": True},
+        )
+        assert invalid_delete.status_code == 422
+        assert invalid_delete.headers["cache-control"] == "no-store"
+        assert invalid_delete.json()["detail"]["code"] == "invalid_request"
+        forbidden_delete = client.request(
+            "DELETE",
+            f"/api/v1/automation-tasks/{task['id']}",
+            json={"expected_revision": task["revision"]},
+            headers={"Origin": "https://evil.example"},
+        )
+        assert forbidden_delete.status_code == 403
+        assert forbidden_delete.headers["cache-control"] == "no-store"
+
+        deleted = client.request(
+            "DELETE",
+            f"/api/v1/automation-tasks/{task['id']}",
+            json={"expected_revision": task["revision"]},
+        )
+        assert deleted.status_code == 204
+        assert deleted.content == b""
+        assert deleted.headers["cache-control"] == "no-store"
+        assert client.get("/api/v1/automation-tasks").json()["tasks"] == []
+        assert client.get(f"/api/v1/automation-tasks/{task['id']}").status_code == 404
+        assert client.get(f"/api/v1/automation-runs/{run_id}").status_code == 200
+        replay_delete = client.request(
+            "DELETE",
+            f"/api/v1/automation-tasks/{task['id']}",
+            json={"expected_revision": task["revision"]},
+        )
+        assert replay_delete.status_code == 204 and replay_delete.content == b""
+        recreated = client.post(
+            "/api/v1/automation-tasks",
+            json=_task_payload().model_dump(mode="json"),
+        )
+        assert recreated.status_code == 201 and recreated.json()["id"] != task["id"]

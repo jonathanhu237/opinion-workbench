@@ -357,6 +357,9 @@ const replaceSchema = createSchema.extend({
   expected_revision: safeExpectedRevision,
   enabled: z.boolean(),
 })
+const deletePayloadSchema = z.strictObject({
+  expected_revision: safeExpectedRevision,
+})
 
 export type AutomationSchedule = z.infer<typeof automationScheduleSchema>
 export type AutomationTask = z.infer<typeof taskSchema>
@@ -370,6 +373,7 @@ export type AutomationRunPage = z.infer<typeof runPageSchema>
 export type AutomationPlatform = SearchPlatform
 export type AutomationTaskCreate = z.infer<typeof createSchema>
 export type AutomationTaskReplace = z.infer<typeof replaceSchema>
+export type AutomationTaskDelete = { expectedRevision: number }
 
 export const AUTOMATION_ERROR_CONTRACTS = {
   invalid_request: { status: 422, message: '请求内容不正确。' },
@@ -521,6 +525,11 @@ async function request(
       throw error
     throw new AutomationApiError('service_unavailable')
   }
+  if (response.status === 204) {
+    if (!response.ok || response.status !== expectedStatus)
+      throw invalidResponse(response.status)
+    return undefined
+  }
   let payload: unknown
   try {
     payload = await response.json()
@@ -644,6 +653,23 @@ export async function replaceAutomationTask(
     throw invalidResponse()
   }
   return task
+}
+
+export async function deleteAutomationTask(
+  id: number,
+  input: AutomationTaskDelete,
+  signal?: AbortSignal,
+): Promise<void> {
+  if (!Number.isSafeInteger(id) || id < 1)
+    throw new AutomationApiError('invalid_request')
+  const payload = { expected_revision: input.expectedRevision }
+  decode(deletePayloadSchema, payload)
+  await request(
+    'automation-tasks',
+    `/${encodeURIComponent(id)}`,
+    mutation('DELETE', payload, signal),
+    204,
+  )
 }
 
 export async function fetchAutomationOccurrences(
@@ -779,7 +805,7 @@ function assertRequestId(value: string) {
 }
 
 function mutation(
-  method: 'POST' | 'PUT',
+  method: 'DELETE' | 'POST' | 'PUT',
   payload: unknown,
   signal?: AbortSignal,
 ): RequestInit {

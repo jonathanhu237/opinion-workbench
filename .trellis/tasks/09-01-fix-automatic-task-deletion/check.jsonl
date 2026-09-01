@@ -1,0 +1,6 @@
+{"file":".trellis/spec/backend/automation-workflow-guidelines.md","reason":"Review deletion against scheduler fences, history retention, API and workbench contracts"}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Review v17 migration shape, atomicity, rollback, foreign keys and historical preservation"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Review exact 404/409/503 translation, no-store behavior and storage sanitization"}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Review list/detail/workbench cache invalidation and authoritative refetch behavior"}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Review AlertDialog semantics, destructive styling, focus, touch targets and responsive layout"}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Review strict empty-204 decoding and status/code/message validation"}

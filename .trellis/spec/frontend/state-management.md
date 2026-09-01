@@ -39,6 +39,9 @@ Valid future candidates might include a cross-route upload queue or an unsaved m
   Query's normal cache lifetime. Do not set `gcTime: 0` merely to force fresh route renders; use
   mutation invalidation, active-state polling, or explicit refetch based on the resource contract.
 - Mutations invalidate or update the relevant query cache instead of copying server data into component/global state.
+- A successful automatic-task deletion removes the task from every cached task
+  list page, removes its detail query, and invalidates the workbench; it does
+  not remove cached run details or other history addressed by independent IDs.
 - URL-addressable filters remain in React Router even when they also participate in a query key.
 - Network policy, API base URL, and response validation belong in `lib/api/`, not in generic providers.
 

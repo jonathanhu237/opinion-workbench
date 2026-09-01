@@ -285,7 +285,10 @@ def test_v16_repairs_historical_v15_report_graph_without_rewriting_rows(tmp_path
     after = _historical_report_projection(database)
     assert after == before
     with database.connect() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 16
+        assert (
+            connection.execute("PRAGMA user_version").fetchone()[0]
+            == CURRENT_DATABASE_VERSION
+        )
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         assert connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
         assert tuple(
@@ -326,7 +329,10 @@ def test_v16_repairs_an_empty_historical_v15_database(tmp_path):
 
     database.initialize()
     with database.connect() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 16
+        assert (
+            connection.execute("PRAGMA user_version").fetchone()[0]
+            == CURRENT_DATABASE_VERSION
+        )
         assert (
             connection.execute("SELECT COUNT(*) FROM topic_report_runs").fetchone()[0]
             == 0
@@ -370,7 +376,10 @@ def test_v16_accepts_already_new_v15_report_shape_without_rewrite(tmp_path):
     database.initialize()
     assert _historical_report_projection(database) == before
     with database.connect() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 16
+        assert (
+            connection.execute("PRAGMA user_version").fetchone()[0]
+            == CURRENT_DATABASE_VERSION
+        )
 
 
 def test_v16_repairs_a_new_column_with_an_old_trigger_shape(tmp_path):
@@ -389,7 +398,10 @@ def test_v16_repairs_a_new_column_with_an_old_trigger_shape(tmp_path):
     database.initialize()
     assert _historical_report_projection(database) == expected
     with database.connect() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 16
+        assert (
+            connection.execute("PRAGMA user_version").fetchone()[0]
+            == CURRENT_DATABASE_VERSION
+        )
         trigger_sql = connection.execute(
             "SELECT sql FROM sqlite_master WHERE name='topic_report_snapshot_immutable'"
         ).fetchone()[0]

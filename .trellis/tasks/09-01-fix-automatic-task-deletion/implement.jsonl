@@ -1,0 +1,6 @@
+{"file":".trellis/spec/backend/automation-workflow-guidelines.md","reason":"Preserve automatic task scheduling, immutable run history, concurrency and public workflow contracts while adding deletion"}
+{"file":".trellis/spec/backend/database-guidelines.md","reason":"Follow forward-only SQLite migration, transaction, rollback and temporary-database rules"}
+{"file":".trellis/spec/backend/error-handling.md","reason":"Keep exact stable product errors and sanitize storage failures at the HTTP boundary"}
+{"file":".trellis/spec/frontend/state-management.md","reason":"Coordinate task deletion through TanStack Query while preserving URL and server-state ownership"}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Reuse existing shadcn Base UI primitives, accessible focus and responsive interaction conventions"}
+{"file":".trellis/spec/frontend/type-safety.md","reason":"Validate DELETE responses and exact error contracts at the untrusted HTTP boundary"}

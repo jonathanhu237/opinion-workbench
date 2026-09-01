@@ -373,10 +373,10 @@ export function AutomationRunDetail() {
             variant: 'ghost',
             className: 'min-h-11 px-0',
           })}
-          to={`/automation-tasks/${run.task_id}/runs`}
+          to="/automation-tasks"
         >
           <ArrowLeft aria-hidden />
-          返回运行记录
+          返回自动任务
         </Link>
         <span className="font-utility text-xs text-muted-foreground">
           运行 #{run.id}

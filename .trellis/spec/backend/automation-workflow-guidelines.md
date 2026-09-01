@@ -29,6 +29,7 @@ All HTTP routes use the `/api/v1` prefix:
 | POST `/automation-tasks` | Creates a disabled task; HTTP 201. |
 | GET `/automation-tasks/{id}` | Current task configuration and latest run. |
 | PUT `/automation-tasks/{id}` | Full replacement with `expected_revision` and explicit `enabled`. |
+| DELETE `/automation-tasks/{id}` | Revision-fenced soft deletion with a strict `expected_revision` body; HTTP 204. |
 | GET `/automation-tasks/{id}/occurrences` | Cursor-paginated scheduled admission history. |
 | GET `/automation-tasks/{id}/runs` | Cursor-paginated workflow-run history. |
 | POST `/automation-tasks/{id}/run-now` | Idempotent manual admission; HTTP 202. |
@@ -56,7 +57,9 @@ batches. Do not rewrite or convert v13 collection-schedule rows during upgrade.
 SQLite v16 repairs historical v15 report tables that predate
 `topic_report_runs.workflow_operation_key`; it preserves all report graph rows
 and normalizes the complete table/index/trigger contract before automatic
-report admission is allowed.
+report admission is allowed. SQLite v17 adds nullable `automation_tasks.deleted_at`
+and deletion-state triggers; it preserves existing task and run rows while
+fencing deleted tasks from ordinary task and scheduler reads.
 
 The initial-analysis child boundary is explicit:
 
@@ -166,6 +169,25 @@ table.
   transaction as the run admission/state change. A request-proof failure rolls
   back the entire mutation.
 
+### Task deletion and retained history
+
+- `DELETE /automation-tasks/{id}` accepts only `{"expected_revision": n}` and
+  atomically disables the task, clears future scheduling fields, records
+  `deleted_at`, increments the task revision and releases the normalized name
+  for reuse. It returns an empty 204 response with no response body.
+- Deletion is rejected with `automation_run_active` while any run is queued or
+  executing; it never cancels or waits for a run. A retry carrying the revision
+  immediately before the deletion is an idempotent 204; other reads or stale
+  revisions cannot mutate the tombstone.
+- Ordinary task, occurrence, run-list, edit and run-now reads treat a deleted
+  task as not found. Direct run-detail and report/child-resource reads remain
+  available from their independent IDs, and must not depend on the deleted task
+  projection. The run-detail return link therefore goes to the stable task
+  entry rather than the deleted task's scoped history route.
+- The deletion-state trigger keeps tombstones immutable while allowing the
+  existing monitoring-rule `ON DELETE SET NULL` referential cleanup update.
+  That cleanup must not rewrite the tombstone or its schedule state.
+
 ## 4. Validation & Error Matrix
 
 Every response uses `Cache-Control: no-store`; mutations retain the existing
@@ -176,6 +198,8 @@ coercing them.
 | Condition | Required result |
 | --- | --- |
 | Unknown task or run | 404 `automation_task_not_found` / `automation_run_not_found` |
+| Unknown/deleted task on delete, or a non-idempotent tombstone revision | 404 `automation_task_not_found` |
+| Delete with an active run | 409 `automation_run_active`; the run remains active and the task remains visible |
 | Duplicate normalized task name | 409 `automation_task_name_conflict` |
 | Stale task or run revision | 409 `automation_task_changed` / `automation_run_changed` |
 | Same task already has active run | 409 `automation_run_active`; scheduled occurrence is skipped |
@@ -217,6 +241,12 @@ Never expose raw SQLite, browser, model or credential-bearing exception text.
   `admission.status`; the missing field makes a live nested job look terminal.
 - Bad: polling an empty run list creates work, two active runs overlap for one
   task, or a historical collection schedule is exposed as a live automation.
+- Good: deleting an idle task hides it from task/scheduler/workbench reads,
+  preserves its direct run/report history, and allows a new task to reuse its
+  name; replaying the same revision-fenced delete returns 204.
+- Bad: physically deleting a task with restrictive history foreign keys,
+  deleting an active task by implicitly cancelling it, or allowing a stale
+  delete to remove a newly edited task.
 
 ## 6. Tests Required
 
@@ -230,6 +260,10 @@ Never expose raw SQLite, browser, model or credential-bearing exception text.
   overlap handling.
 - Run-now replay/conflict, frozen snapshots, one active run per task, cancellation
   fencing, restart interruption and retry from collection, analysis and report.
+- v16-to-v17 deletion migration, tombstone trigger constraints, active-run and
+  stale-revision delete conflicts, idempotent 204 replay, name reuse, scheduler
+  fencing, workbench filtering, retained direct run/report history, and the
+  monitoring-rule referential cleanup update.
 - Analysis admission-envelope regression: admit a nested queued/running job,
   return a settled job from `read(job.id)`, and assert the workflow polls exactly
   that ID, projects terminal counts/usage and advances only after settlement.
