@@ -613,3 +613,25 @@ Rewrote user-facing frontend copy in plain Chinese, removed redundant helper tex
 ### Status
 
 [OK] **Completed**
+
+
+## Session 27: Fix automatic task deletion
+<!-- trellis-session: v=2 fp=d2d1cc0b0efca03f -->
+
+**Date**: 2026-09-01
+**Task**: Fix automatic task deletion
+**Branch**: `fix/automatic-task-deletion`
+
+### Summary
+
+Implemented revision-fenced soft deletion for automatic tasks, preserved run/report history, added frontend confirmation and cache cleanup, and verified the change with full backend/frontend suites plus an isolated local browser smoke test.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `25c18f6` | fix(automation): allow deleting obsolete tasks |
+
+### Status
+
+[OK] **Completed**
