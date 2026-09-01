@@ -214,9 +214,11 @@ Host/Origin/JSON guards. Never echo database errors, credentials or provider bod
   writes/calls, shutdown/reopen, exactly-once normal completion and suppressed events.
 - Strict frontend decoding; prompt CAS/draft recovery; ambiguous UUID replay;
   polling refresh, history/focus/cancel controls and synthetic HTTP browser checks.
-- Run backend/frontend gates on isolated Centaurus source snapshots. Browser
-  acceptance uses a temporary database and fake acquisition/provider, forwarding
-  both frontend and API ports. Mocks do not establish real model quality.
+- Run backend/frontend gates locally by default under the root `AGENTS.md`
+  local-first policy. Browser acceptance uses a temporary database and fake
+  acquisition/provider. Use Centaurus and port forwarding only when the user
+  explicitly requests it for the current task. Mocks do not establish real model
+  quality.
 
 ## 7. Wrong vs Correct
 
