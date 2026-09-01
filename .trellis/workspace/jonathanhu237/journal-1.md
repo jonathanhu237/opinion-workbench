@@ -635,3 +635,25 @@ Implemented revision-fenced soft deletion for automatic tasks, preserved run/rep
 ### Status
 
 [OK] **Completed**
+
+
+## Session 28: Two-stage analysis prompts
+<!-- trellis-session: v=2 fp=3355435f61ab3b83 -->
+
+**Date**: 2026-09-02
+**Task**: Two-stage analysis prompts
+**Branch**: `main`
+
+### Summary
+
+Implemented fixed built-in initial/report prompts with per-task default or custom choices across automatic and manual workflows; added immutable snapshots, v18 migration, cache isolation, strict APIs, UI controls, regression tests, and local browser acceptance.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `abccb91` | feat(analysis): add task-scoped two-stage prompts |
+
+### Status
+
+[OK] **Completed**
