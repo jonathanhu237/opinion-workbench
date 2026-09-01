@@ -589,3 +589,27 @@ Rewrote user-facing frontend copy in plain Chinese, removed redundant helper tex
 ### Status
 
 [OK] **Completed**
+
+
+## Session 26: 审查并推送遗留改动
+<!-- trellis-session: v=2 fp=cdc026ab9da35179 -->
+
+**Date**: 2026-09-01
+**Task**: 审查并推送遗留改动
+**Branch**: `main`
+
+### Summary
+
+审查并拆分提交本地运行策略、Trellis 模板哈希与头条历史链接兼容修复；MediaCrawler 子模块先行提交推送并验证远端可递归拉取；后端与可本地运行的子模块测试通过。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `e779144` | docs: make local runtime the default |
+| `d5fb917` | chore(trellis): refresh template hashes |
+| `749e06c` | fix(analysis): accept legacy Toutiao source URLs |
+
+### Status
+
+[OK] **Completed**
