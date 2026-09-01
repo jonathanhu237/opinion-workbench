@@ -92,17 +92,17 @@ export function formatLocalDate(value: string | null) {
 const batchStatusLabels: Record<SearchBatchStatus, string> = {
   queued: '等待开始',
   running: '采集中',
-  paused_for_manual_action: '等待人工处理',
+  paused_for_manual_action: '等待你处理',
   completed: '全部完成',
   completed_with_failures: '部分平台未完成',
   cancelled: '已取消',
-  internal_error: '批次异常',
+  internal_error: '采集失败',
 }
 
 const batchItemStatusLabels: Record<SearchBatchItemStatus, string> = {
   queued: '等待中',
   running: '采集中',
-  paused_for_manual_action: '等待人工处理',
+  paused_for_manual_action: '等待你处理',
   completed: '已完成',
   failed: '未完成',
   skipped: '已跳过',
@@ -119,21 +119,21 @@ export function searchBatchItemStatusLabel(status: SearchBatchItemStatus) {
 
 export function batchPauseGuidance(item: SearchBatchItem) {
   if (item.pause_reason === 'process_interrupted') {
-    return '服务中断，采集已暂停。确认谷歌浏览器可用后，可以继续采集。'
+    return '服务中断，采集已暂停。确认谷歌浏览器可用后，可以继续。'
   }
   switch (item.latest_attempt?.run.status) {
     case 'login_required':
       return '请打开平台，在当前谷歌浏览器中登录后继续采集。'
     case 'manual_challenge_required':
-      return '平台要求安全验证。请打开平台查看；如有验证提示，请手动完成后继续。页面也可能只显示平台首页。'
+      return '平台要求安全验证。请打开平台完成验证，再继续采集。'
     case 'platform_blocked_or_rate_limited':
       return '平台暂时限制了访问。可以打开平台检查，稍后继续，或先跳过此平台。'
     case 'browser_unavailable':
       return '无法连接谷歌浏览器。请确认浏览器已开启远程调试，并允许本应用连接。'
     case 'structure_changed':
-      return '平台页面或接口发生变化，暂时无法可靠读取结果。登录不一定能解决，可以先跳过此平台。'
+      return '平台页面发生变化，暂时无法可靠读取结果。可以先跳过此平台。'
     case 'timed_out':
-      return '采集等待超时。请检查网络和平台页面，再继续采集。'
+      return '采集等待超时。请检查网络和平台页面后继续。'
     default:
       return '本次采集未能完成。可以打开平台检查后继续，或先跳过此平台。'
   }

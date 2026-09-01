@@ -74,7 +74,7 @@ const taskStatusLabels: Record<AutomationRun['status'], string> = {
   failed: '最近一轮失败',
   cancelled: '最近一轮已取消',
   interrupted: '最近一轮被中断',
-  configuration_blocked: 'AI 配置阻断',
+  configuration_blocked: 'AI 设置不可用',
 }
 
 const stageLabels: Record<AutomationStage['name'], string> = {
@@ -90,12 +90,12 @@ const stageStatusLabels: Record<AutomationStage['status'], string> = {
   failed: '失败',
   cancelled: '已取消',
   interrupted: '已中断',
-  configuration_blocked: '配置阻断',
+  configuration_blocked: '配置有问题',
 }
 
 const occurrenceStatusLabels: Record<AutomationOccurrence['status'], string> = {
-  claimed: '已排入调度',
-  admitted: '已创建运行',
+  claimed: '已安排',
+  admitted: '已启动',
   skipped: '本轮跳过',
   missed: '错过执行',
   interrupted: '调度中断',
@@ -110,7 +110,7 @@ function parseId(value: string | undefined | null) {
 
 function outcomeLabel(run: AutomationRun | null) {
   if (run === null) return '尚未运行'
-  if (run.outcome === 'no_new_sources') return '本轮无新增舆情'
+  if (run.outcome === 'no_new_sources') return '本轮没有新内容'
   if (run.outcome === 'cancelled') return '本轮已取消'
   if (run.outcome === 'completed') return '本轮已完成'
   return taskStatusLabels[run.status]
@@ -152,7 +152,7 @@ function platformLabel(task: AutomationTask) {
 function LatestRun({ task }: { task: AutomationTask }) {
   const run = task.latest_run
   if (run === null) {
-    return <p className="text-sm text-muted-foreground">尚无运行记录</p>
+    return <p className="text-sm text-muted-foreground">还没有运行记录</p>
   }
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -238,7 +238,9 @@ function AutomationTaskCard({
               {automationScheduleLabel(task.schedule)}
             </p>
             <p>
-              <span className="font-medium text-foreground">每词上限：</span>
+              <span className="font-medium text-foreground">
+                每个搜索词上限：
+              </span>
               {task.max_results_per_term} 条
             </p>
             <p>
@@ -327,8 +329,7 @@ function TaskActionDialog({
         <AlertDialogHeader>
           <AlertDialogTitle>立即运行自动任务？</AlertDialogTitle>
           <AlertDialogDescription>
-            将按固定顺序完成“采集 → 初步分析 →
-            相关性判断与报告”。这不会改变下一次计划时间；同一任务已有运行时不会排队。
+            这会按顺序采集、分析并生成报告，不会改变下一次计划时间。如果任务已经在运行，本次不会重复启动。
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
@@ -403,7 +404,7 @@ export function AutomationTasks() {
       setFeedback(
         saved.enabled
           ? '自动任务已启用，将在下一次计划时间运行。'
-          : '自动任务已停用，仅停止后续触发；已接受的运行继续保留。',
+          : '任务已停用，之后不再按计划运行；正在运行的任务会继续。',
       )
     },
     onError: () => {
@@ -419,12 +420,12 @@ export function AutomationTasks() {
     onSuccess: async (run) => {
       await cacheSavedAutomationRun(client, run)
       setAction(null)
-      setFeedback('运行已接受，正在按固定链路推进。')
+      setFeedback('任务已开始，正在处理。')
       void navigate(`/automation-runs/${run.id}`)
     },
     onError: () => {
       void client.invalidateQueries({ queryKey: AUTOMATION_TASKS_QUERY_KEY })
-      setFeedback('立即运行未能接受，请刷新后重试。请求未被自动改写。')
+      setFeedback('任务未能启动，请刷新后重试。')
     },
   })
 
@@ -449,9 +450,6 @@ export function AutomationTasks() {
           <CardHeader className="border-b bg-card/90">
             <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
               <div className="space-y-2">
-                <p className="font-utility text-[10px] tracking-[0.16em] text-primary uppercase">
-                  Fixed watch pipeline
-                </p>
                 <h1
                   id="automation-tasks-title"
                   className="font-display text-2xl tracking-[-0.04em] sm:text-3xl"
@@ -460,7 +458,7 @@ export function AutomationTasks() {
                 </h1>
                 <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
                   每个任务有自己的分析目标。启用后，系统会按“采集 → 初步分析 →
-                  相关性判断与报告”完成一轮；你可以观察、取消或从失败阶段重试。
+                  相关性判断与报告”完成一轮；你可以查看进度、取消任务，或从失败阶段重试。
                 </p>
               </div>
               <div className="flex shrink-0 flex-wrap gap-2">
@@ -498,7 +496,7 @@ export function AutomationTasks() {
               aria-live="polite"
               className="min-h-6 text-sm text-muted-foreground"
             >
-              {feedback ?? '新建任务默认停用；启用后才会按计划触发。'}
+              {feedback ?? '新建任务默认停用，启用后才会按计划运行。'}
             </p>
             {invalidLink && (
               <div role="alert" className="space-y-2 text-sm text-destructive">
@@ -528,7 +526,7 @@ export function AutomationTasks() {
               >
                 <p className="font-medium">自动任务暂时无法读取</p>
                 <p className="text-sm text-muted-foreground">
-                  {automationErrorMessage(list.error)} 重新读取不会启动任务。
+                  {automationErrorMessage(list.error)}
                 </p>
                 <Button
                   variant="outline"
@@ -549,7 +547,7 @@ export function AutomationTasks() {
                   还没有自动任务
                 </h2>
                 <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-muted-foreground">
-                  创建一个有明确分析目标的任务，再单独启用它。手工采集仍可在“手工采集”入口使用。
+                  创建任务后，启用它才会按计划运行。
                 </p>
                 <Button
                   className="mt-5 min-h-11"
@@ -642,7 +640,7 @@ function RunRow({ run }: { run: AutomationRun }) {
           </div>
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
             <span>创建于 {formatAutomationDate(run.created_at)}</span>
-            <span>修订 {run.task_revision}</span>
+            <span>版本 {run.task_revision}</span>
             {failed && (
               <span className="text-destructive">
                 失败阶段：{stageLabels[failed.name]}
@@ -711,15 +709,15 @@ function OccurrenceRow({ occurrence }: { occurrence: AutomationOccurrence }) {
 
 function occurrenceReasonLabel(reason: string) {
   const labels: Record<string, string> = {
-    previous_run_active: '上一轮仍在运行，未排队',
-    offline: '服务离线期间未补跑',
-    clock_jump: '系统时间变化，未补跑',
-    dispatch_interrupted: '派发过程被中断',
+    previous_run_active: '上一轮还在运行，本次未启动',
+    offline: '服务离线时错过，本次没有运行',
+    clock_jump: '系统时间变化，本次没有运行',
+    dispatch_interrupted: '任务启动被中断',
     monitoring_rule_not_found: '监控规则已删除',
     monitoring_rule_disabled: '监控规则已停用',
-    invalid_monitoring_rule: '监控规则不可执行',
-    configuration_unavailable: 'AI 配置不可用',
-    storage_unavailable: '本机存储暂不可用',
+    invalid_monitoring_rule: '监控规则有问题',
+    configuration_unavailable: 'AI 设置不可用',
+    storage_unavailable: '本机数据暂时无法读取',
   }
   return labels[reason] ?? reason
 }
@@ -831,7 +829,7 @@ export function AutomationTaskRuns() {
                 </h1>
               </div>
               <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
-                固定链路的每次接受运行都保留冻结修订、阶段尝试和最终结果。计划跳过与错过信息单独列出，不会被折算成成功。
+                每次运行都会保留任务版本、各阶段结果和最终状态。错过或跳过的计划也会单独记录。
               </p>
             </CardHeader>
             <CardContent className="space-y-4 pt-5">
@@ -859,7 +857,7 @@ export function AutomationTaskRuns() {
                 </div>
               ) : runs.data.runs.length === 0 ? (
                 <p className="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">
-                  还没有被接受的运行。启用任务或点击“立即运行”后，这里会保留完整阶段时间线。
+                  还没有运行记录。启用任务或点击“立即运行”后，记录会显示在这里。
                 </p>
               ) : (
                 <div className="space-y-3">

@@ -103,7 +103,7 @@ export function CollectionBatchResults({
             {searchPlatformPresenters[item.platform].label} · 采集结果
           </h2>
           <p className="mt-1 text-sm text-muted-foreground">
-            合并该平台的全部尝试，重复内容只显示一次。
+            同一条内容只显示一次。
           </p>
         </div>
         <Tabs
@@ -163,7 +163,7 @@ export function CollectionBatchResults({
                   }
                   openFeedback={
                     browserBusy && result.platform === 'xhs'
-                      ? '批次正在使用浏览器，请结束或取消批次后再打开原文。'
+                      ? '采集正在使用浏览器，请等采集结束或取消后再打开原文。'
                       : feedback?.resultId === result.id
                         ? feedback.message
                         : null

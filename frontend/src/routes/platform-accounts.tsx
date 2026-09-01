@@ -89,16 +89,16 @@ function rowRecoveryMessage(connection: PlatformConnection) {
     connection.status === 'action_required' &&
     connection.guidance === 'complete_login'
   ) {
-    return `请在当前打开的谷歌浏览器中登录${connection.display_name}，完成后系统会继续检测。`
+    return `请在当前打开的谷歌浏览器中登录${connection.display_name}。`
   }
   if (connection.status === 'action_required') {
-    return `请在当前打开的谷歌浏览器中完成${connection.display_name}的操作，完成后系统会继续检测。`
+    return `请在当前打开的谷歌浏览器中完成${connection.display_name}的操作。`
   }
   if (connection.status === 'disconnected') {
     return `请在当前打开的谷歌浏览器中登录${connection.display_name}，然后重新检查。`
   }
   if (connection.status === 'failed') {
-    return `本次检查未通过。请在当前打开的谷歌浏览器中登录${connection.display_name}，然后重新检查。`
+    return `检查失败。请确认已登录${connection.display_name}，然后重新检查。`
   }
   return null
 }
@@ -259,7 +259,7 @@ export function PlatformAccounts() {
     : null
   const healthMessage =
     healthState.status === 'unavailable'
-      ? '本机服务不可用。请确认 FastAPI 已在 127.0.0.1:8000 启动。'
+      ? '应用服务暂时不可用，请重新启动应用。'
       : null
   const panelAlertMessage =
     platforms.length > 0
@@ -382,7 +382,7 @@ export function PlatformAccounts() {
           平台账号
         </h2>
         <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-          在这里查看各平台账号的登录状态。需要登录、扫码或安全验证时，请在打开的谷歌浏览器中完成。
+          需要登录、扫码或安全验证时，请在打开的谷歌浏览器中完成。
         </p>
       </section>
 
@@ -444,7 +444,7 @@ export function PlatformAccounts() {
                   {queryMessage}
                 </p>
                 <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                  请确认 FastAPI 已在 127.0.0.1:8000 启动。
+                  请重新启动应用后再试。
                 </p>
                 <Button
                   type="button"

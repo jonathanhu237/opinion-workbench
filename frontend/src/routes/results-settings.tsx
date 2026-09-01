@@ -121,8 +121,7 @@ function PromptEditor({ prompt }: { prompt: PromptVersion }) {
         <FieldDescription id={`${id}-help`}>
           {prompt.stage === 'initial'
             ? '理解每条内容，保留地点、时间、媒体观察和不确定性；不先按主题剔除内容。'
-            : '以后续保存的文字判断主题相关性并生成报告，不重新获取媒体。'}{' '}
-          保存不会重新分析历史内容。
+            : '根据已有内容判断是否相关，并生成报告。'}
         </FieldDescription>
         <Textarea
           id={id}
@@ -145,13 +144,13 @@ function PromptEditor({ prompt }: { prompt: PromptVersion }) {
         </FieldError>
       </Field>
       <p className="text-xs text-muted-foreground">
-        版本 {editingVersion.id} · {codePointLength(form.watch('instructions'))}{' '}
-        / 8000 字
+        第 {editingVersion.id} 版 ·{' '}
+        {codePointLength(form.watch('instructions'))} / 8000 字
       </p>
       {prompt.id !== editingVersion.id && isDirty && (
         <div className="space-y-2">
           <p role="alert" className="text-sm text-warning-foreground">
-            默认提示词已在其他位置更新。当前草稿保留，保存时会检查版本。
+            默认提示词已被更新。当前草稿仍保留，保存前请重新确认。
           </p>
           <Button
             type="button"
@@ -161,7 +160,7 @@ function PromptEditor({ prompt }: { prompt: PromptVersion }) {
             onClick={() => {
               setEditingVersion(prompt)
               mutation.reset()
-              setFeedback('已保留草稿并采用最新版本；核对后再次点击保存。')
+              setFeedback('草稿已保留，请确认最新内容后再次保存。')
             }}
           >
             保留草稿并采用最新版本
@@ -240,7 +239,7 @@ export function ResultsSettings({
       >
         <h3 className="font-medium">新内容自动分析</h3>
         <p className="text-sm leading-6 text-muted-foreground">
-          仅处理新采集且从未尝试分析的内容。历史内容、失败重试与重新分析仍需明确选择；编辑提示词和打开页面不会发起分析。
+          只自动分析新采集、还没分析过的内容。历史内容、失败重试和重新分析需要手动选择。
         </p>
         <p className="text-sm">
           {!settings.automation.available
@@ -249,11 +248,11 @@ export function ResultsSettings({
               ? '已启用新内容自动分析。'
               : '自动分析未启用。'}
           {settings.automation.enabled &&
-            ` 已保存模型配置版本 ${settings.automation.approved_configuration_revision} 的授权。`}
+            ` 已确认使用第 ${settings.automation.approved_configuration_revision} 版模型设置。`}
         </p>
         {stale && (
           <p role="status" className="text-sm text-warning-foreground">
-            模型配置已变化；需要重新确认授权，不会改用新的模型服务。
+            模型设置已变化，请重新确认；系统不会自动切换模型服务。
           </p>
         )}
         <div className="flex flex-wrap gap-3">
@@ -332,7 +331,7 @@ export function ResultsSettings({
               <DialogTitle>确认自动分析授权</DialogTitle>
               <DialogDescription>
                 新采集内容的正文、图片和视频会发送到以下模型服务，之后的文字报告也可能消耗
-                API 额度。不会自动补做历史内容或重试失败项。
+                API 额度。历史内容和失败项不会自动重做。
               </DialogDescription>
             </DialogHeader>
             <dl className="space-y-3 rounded-lg border p-3 text-sm">
@@ -343,7 +342,7 @@ export function ResultsSettings({
                 </dd>
               </div>
               <div>
-                <dt>模型 · 配置版本 {confirmation.provider.revision}</dt>
+                <dt>模型</dt>
                 <dd className="mt-1 [overflow-wrap:anywhere]">
                   {confirmation.provider.model}
                 </dd>
@@ -351,7 +350,7 @@ export function ResultsSettings({
             </dl>
             {!settings.automation.available && (
               <p className="text-sm text-warning-foreground">
-                本次只保存授权。完整流程尚未启用，不会立即自动执行。
+                本次只保存授权，自动分析功能还未启用。
               </p>
             )}
             {mutation.isError && (

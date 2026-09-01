@@ -114,7 +114,7 @@ function ActiveBatch({ batch }: { batch: SearchBatchSummary }) {
             )}
             <p className="font-medium">
               {paused
-                ? '采集已暂停，等待人工处理'
+                ? '采集已暂停，等待你处理'
                 : `正在采集“${batch.rule_name}”`}
             </p>
           </div>
@@ -138,7 +138,7 @@ function BatchHistory({ batches }: { batches: SearchBatchSummary[] }) {
   if (batches.length === 0) {
     return (
       <div className="rounded-lg border border-dashed p-8 text-center">
-        <p className="font-medium">还没有采集记录</p>
+        <p className="font-medium">还没有采集任务</p>
         <p className="mt-1 text-sm text-muted-foreground">
           选择监控规则和平台，开始第一次采集。
         </p>

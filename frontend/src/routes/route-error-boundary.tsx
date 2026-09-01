@@ -2,15 +2,16 @@ import { isRouteErrorResponse, useRouteError } from 'react-router'
 
 export function RouteErrorBoundary() {
   const error = useRouteError()
-  const detail = isRouteErrorResponse(error)
-    ? error.statusText || '无法打开此页面。'
-    : '无法打开此页面。'
+  const detail =
+    isRouteErrorResponse(error) && error.status === 404
+      ? '找不到这个页面。'
+      : '页面加载失败，请稍后再试。'
 
   return (
     <main className="grid min-h-svh place-items-center px-6 py-16">
       <div className="max-w-md text-center">
         <p className="font-utility text-xs font-semibold tracking-[0.18em] text-primary uppercase">
-          Local watch desk
+          舆情监测
         </p>
         <h1 className="mt-4 font-display text-3xl font-semibold tracking-[-0.04em] text-foreground">
           页面暂时无法显示

@@ -243,7 +243,7 @@ describe('Results and Analysis', () => {
       await screen.findByRole('region', { name: '文字报告 31' }),
     ).toBeVisible()
     expect(
-      screen.getByText('冻结范围 10 条 · 可分析初步证据 8 条 · 未覆盖 2 条'),
+      screen.getByText('本次内容 10 条 · 可判断 8 条 · 无法判断 2 条'),
     ).toBeVisible()
     expect(
       await screen.findByText(
@@ -287,8 +287,10 @@ describe('Results and Analysis', () => {
     const dialog = screen.getByRole('dialog', {
       name: '一键初步分析全部未分析内容',
     })
-    expect(dialog).toHaveTextContent('当前全库有 101 条')
-    expect(dialog).toHaveTextContent('不受筛选或分页影响')
+    expect(dialog).toHaveTextContent(
+      '当前有 101 条内容还没做初步分析，包括历史内容。',
+    )
+    expect(dialog).toHaveTextContent('已在其他任务中的内容不会重复处理')
     expect(start).not.toHaveBeenCalled()
     await user.click(
       within(dialog).getByRole('button', { name: '确认初步分析' }),
@@ -328,12 +330,12 @@ describe('Results and Analysis', () => {
       client.setQueryData(ANALYSIS_SETTINGS_QUERY_KEY, changed)
     })
     const dialog = screen.getByRole('dialog')
-    expect(dialog).toHaveTextContent('配置版本 3')
+    expect(dialog).toHaveTextContent('模型服务')
     expect(dialog).not.toHaveTextContent('changed-model')
     await user.click(
       within(dialog).getByRole('button', { name: '确认初步分析' }),
     )
-    await screen.findByText(/上次提交结果尚不确定/)
+    await screen.findByText(/上次提交结果不确定/)
     await user.click(screen.getByRole('button', { name: '暂时关闭' }))
     await user.click(screen.getByRole('button', { name: '继续确认上次请求' }))
     await user.click(screen.getByRole('button', { name: '确认上次提交' }))
@@ -452,12 +454,8 @@ describe('Results and Analysis', () => {
       )
       await user.click(screen.getByRole('button', { name: '一键初步分析' }))
       const dialog = screen.getByRole('dialog')
-      expect(dialog).toHaveTextContent(
-        '初步分析提示词 · 版本 ' + latestSnapshot.initial_prompt.id,
-      )
-      expect(dialog).toHaveTextContent(
-        '报告提示词 · 版本 ' + latestSnapshot.report_prompt.id,
-      )
+      expect(dialog).toHaveTextContent('初步分析提示词')
+      expect(dialog).toHaveTextContent('报告提示词')
       expect(start).not.toHaveBeenCalled()
     },
   )
@@ -615,7 +613,7 @@ describe('Results and Analysis', () => {
       })
     })
     const dialog = screen.getByRole('dialog', { name: '确认自动分析授权' })
-    expect(dialog).toHaveTextContent('配置版本 3')
+    expect(dialog).toHaveTextContent('模型服务')
     await user.click(
       within(dialog).getByRole('button', { name: '确认并保存授权' }),
     )
@@ -688,11 +686,11 @@ describe('Results and Analysis', () => {
     expect(
       await screen.findByText('无法确认是否位于深圳龙田，也未核实来源陈述。'),
     ).toBeVisible()
-    await user.click(screen.getByText('已保存的正文与输入覆盖'))
+    await user.click(screen.getByText('正文和媒体信息'))
     expect(
       screen.getByText('完整保存的合成正文，未把来源陈述当成事实。'),
     ).toBeVisible()
-    await user.click(screen.getByText('旧版分析与报告 · 1 条'))
+    await user.click(screen.getByText('旧版分析和报告 · 1 条'))
     expect(
       screen.getByRole('link', { name: '查看旧版报告 4' }),
     ).toHaveAttribute('href', '/collection-runs/91?summary=4')
@@ -756,9 +754,13 @@ describe('Results and Analysis', () => {
     renderResults('/results?job=6')
     expect(await screen.findByText('初步分析：已处理 10/10')).toBeVisible()
     expect(
-      screen.getByText('已保存 8 条 · 未成功 2 条 · 待处理 0 条'),
+      screen.getByText('已完成 8 条 · 未完成 2 条 · 待处理 0 条'),
     ).toBeVisible()
-    expect(screen.getByText(/本任务已全部处理并保存完成记录/)).toBeVisible()
+    expect(
+      screen.getByText(
+        /本任务已完成，每条结果都已保存。手动初步分析不会自动生成报告/,
+      ),
+    ).toBeVisible()
     await user.click(screen.getByRole('button', { name: '取消任务 7' }))
     await waitFor(() =>
       expect(cancelAnalysisJob).toHaveBeenCalledWith(7, expect.anything()),
@@ -776,7 +778,7 @@ describe('Results and Analysis', () => {
       await router.navigate('/results?from=2026-08-30&to=2026-08-29')
     })
     expect(
-      screen.getByText('首次入库时间范围不正确，请检查日期及先后顺序。'),
+      screen.getByText('首次发现时间范围不正确，请检查日期及先后顺序。'),
     ).toBeVisible()
     expect(
       vi
@@ -857,7 +859,7 @@ describe('Results and Analysis', () => {
       () => expect(screen.getByText('初步分析：已处理 1/1')).toBeVisible(),
       { timeout: 2500 },
     )
-    expect(await screen.findByText('已保存初步分析')).toBeVisible()
+    expect(await screen.findAllByText('已完成')).toHaveLength(2)
     expect(fetchAnalysisJobItems).toHaveBeenCalledTimes(2)
     expect(start).not.toHaveBeenCalled()
   })

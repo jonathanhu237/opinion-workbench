@@ -212,11 +212,9 @@ export function Results() {
         <CardContent className="space-y-4 p-4 sm:p-5">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div className="min-w-0">
-              <h2 className="font-display text-2xl">
-                先理解内容，再按主题分析
-              </h2>
+              <h2 className="font-display text-2xl">内容与分析</h2>
               <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
-                这里汇集各次采集的原文和独立保存的初步分析。首次入库时间不会因再次采集而改变；地点线索和来源说法仍需核实。
+                这里汇集采集到的原文和分析结果。分析仅供参考，地点线索和来源说法仍需核实。
               </p>
             </div>
             <Button
@@ -237,7 +235,7 @@ export function Results() {
                 全库待首次分析：{results.data?.eligible_count ?? '—'} 条
               </p>
               <p className="mt-1 text-sm text-muted-foreground">
-                包含从未尝试的历史内容；不含已处理、失败、旧版分析或正在处理的内容。
+                包含历史内容；已处理、失败或正在处理的内容不会重复提交。
                 {results.data?.active_count
                   ? ` 另有 ${results.data.active_count} 条正在处理。`
                   : ''}
@@ -263,10 +261,9 @@ export function Results() {
           </div>
           {provider.data?.has_api_key && (
             <p className="text-xs leading-5 [overflow-wrap:anywhere] text-muted-foreground">
-              已保存模型：{provider.data.model} · 配置版本{' '}
-              {provider.data.revision} · {provider.data.base_url}
-              。初步分析会发送正文与媒体并消耗 API
-              额度；手动初步分析不会自动生成报告。
+              已保存模型：{provider.data.model} · {provider.data.base_url}。
+              初步分析会发送正文和媒体，并消耗 API
+              额度；手动分析不会自动生成报告。
             </p>
           )}
           {provider.data && !provider.data.has_api_key && (
@@ -351,7 +348,7 @@ export function Results() {
               </Select>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="result-from">首次入库开始日期</Label>
+              <Label htmlFor="result-from">首次发现开始日期</Label>
               <Input
                 id="result-from"
                 className="min-h-11"
@@ -363,7 +360,7 @@ export function Results() {
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="result-to">首次入库结束日期</Label>
+              <Label htmlFor="result-to">首次发现结束日期</Label>
               <Input
                 id="result-to"
                 className="min-h-11"
@@ -376,11 +373,11 @@ export function Results() {
             </div>
           </div>
           <p id="result-date-help" className="text-xs text-muted-foreground">
-            北京时间，包含结束日期当天。按首次入库筛选，不是原文发布时间，也不限制一键分析范围。
+            按首次发现时间筛选，结束日期当天也包含在内。
           </p>
           {invalidInterval && (
             <p role="alert" className="text-sm text-destructive">
-              首次入库时间范围不正确，请检查日期及先后顺序。
+              首次发现时间范围不正确，请检查日期及先后顺序。
             </p>
           )}
           {!invalidInterval && results.isPending && (
@@ -395,7 +392,7 @@ export function Results() {
           )}
           {!invalidInterval && results.data?.items.length === 0 && (
             <p className="py-6 text-sm text-muted-foreground">
-              当前范围没有结果。可调整筛选，或前往采集任务收集内容；此页不会自动开始采集。
+              当前范围没有结果。请调整筛选条件，或先去采集内容。
             </p>
           )}
           {!invalidInterval && (
@@ -425,8 +422,8 @@ export function Results() {
                         {result.source.title}
                       </h3>
                       <p className="text-sm text-muted-foreground">
-                        首次入库 {formatEvidenceDate(result.first_seen_at)} ·{' '}
-                        {result.origin_count} 次采集来源
+                        首次发现 {formatEvidenceDate(result.first_seen_at)} ·{' '}
+                        被采集 {result.origin_count} 次
                       </p>
                       <p className="text-sm text-muted-foreground">
                         原文发布时间：

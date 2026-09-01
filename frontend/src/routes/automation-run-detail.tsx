@@ -56,9 +56,9 @@ const stageLabels: Record<AutomationStage['name'], string> = {
 }
 
 const stageDescriptions: Record<AutomationStage['name'], string> = {
-  collection: '按冻结的规则、平台和每词上限获取候选条目。',
-  initial_analysis: '不按任务主题预筛，先理解正文、图片、视频等可用内容。',
-  topic_report: '按本任务冻结的分析目标判断相关性，并生成一次报告。',
+  collection: '按本次任务设置、平台和每个搜索词上限获取内容。',
+  initial_analysis: '先理解正文、图片、视频等可用内容。',
+  topic_report: '按本次任务的分析目标判断相关性，并生成报告。',
 }
 
 const stageStatusLabels: Record<AutomationStage['status'], string> = {
@@ -68,7 +68,7 @@ const stageStatusLabels: Record<AutomationStage['status'], string> = {
   failed: '失败',
   cancelled: '已取消',
   interrupted: '已中断',
-  configuration_blocked: '配置阻断',
+  configuration_blocked: '配置有问题',
 }
 
 const runStatusLabels: Record<AutomationRun['status'], string> = {
@@ -80,7 +80,7 @@ const runStatusLabels: Record<AutomationRun['status'], string> = {
   failed: '失败',
   cancelled: '已取消',
   interrupted: '已中断',
-  configuration_blocked: 'AI 配置阻断',
+  configuration_blocked: 'AI 设置不可用',
 }
 
 type ActionKind = 'cancel' | 'retry'
@@ -125,6 +125,15 @@ function stageLinkLabel(stage: AutomationStage) {
   return '查看报告'
 }
 
+function failureMessage(failure: { code: string; message: string }) {
+  return failure.code === 'stage_failed' &&
+    ['自动任务阶段执行失败，请重试。', '自动任务阶段未完成。'].includes(
+      failure.message,
+    )
+    ? '这一步没有完成。'
+    : failure.message
+}
+
 function stageCounts(stage: AutomationStage) {
   if (
     stage.input_count === 0 &&
@@ -132,15 +141,15 @@ function stageCounts(stage: AutomationStage) {
     stage.failure_count === 0
   )
     return null
-  return `${stage.success_count} 成功 · ${stage.failure_count} 未成功 · 共 ${stage.input_count}`
+  return `成功 ${stage.success_count} 条 · 未成功 ${stage.failure_count} 条 · 共 ${stage.input_count} 条`
 }
 
 function stageUsage(stage: AutomationStage) {
-  return `模型请求：${stage.usage_attempted} 次 · Token：${stage.usage_tokens === null ? '未知' : stage.usage_tokens}`
+  return `模型调用：${stage.usage_attempted} 次 · Token：${stage.usage_tokens === null ? '未知' : stage.usage_tokens}`
 }
 
 function runOutcome(run: AutomationRun) {
-  if (run.outcome === 'no_new_sources') return '本轮无新增舆情'
+  if (run.outcome === 'no_new_sources') return '本轮没有新内容'
   if (run.outcome === 'completed') return '本轮已完成'
   if (run.outcome === 'cancelled') return '本轮已取消'
   return runStatusLabels[run.status]
@@ -171,7 +180,7 @@ function RunActionDialog({
           </AlertDialogTitle>
           <AlertDialogDescription>
             {retry
-              ? `将从“${failed ? stageLabels[failed.name] : '失败阶段'}”重新开始，并复用之前已经完成的阶段。运行的冻结规则、平台和分析目标不会改变。`
+              ? `将从“${failed ? stageLabels[failed.name] : '失败阶段'}”重新开始，已完成的阶段不会重复。任务设置、平台和分析目标保持不变。`
               : '取消会停止当前阶段并阻止后续阶段启动，已经保存的采集结果、初步分析和报告历史不会删除。'}
           </AlertDialogDescription>
         </AlertDialogHeader>
@@ -197,16 +206,16 @@ function SnapshotCard({ run }: { run: AutomationRun }) {
   return (
     <Card>
       <CardHeader className="border-b">
-        <h2 className="font-display text-xl">本轮冻结意图</h2>
+        <h2 className="font-display text-xl">本次任务设置</h2>
         <p className="text-sm leading-6 text-muted-foreground">
-          编辑自动任务不会改变这次运行。重试也沿用同一份规则、平台、采集上限和分析目标。
+          编辑自动任务不会改变本次运行。重试时仍使用原来的规则、平台、采集上限和分析目标。
         </p>
       </CardHeader>
       <CardContent className="grid gap-4 pt-5 text-sm sm:grid-cols-2">
         <div>
-          <p className="text-muted-foreground">任务修订</p>
+          <p className="text-muted-foreground">任务版本</p>
           <p className="mt-1 font-medium">
-            {run.snapshot.task_name} · 修订 {run.snapshot.task_revision}
+            {run.snapshot.task_name} · 版本 {run.snapshot.task_revision}
           </p>
         </div>
         <div>
@@ -216,17 +225,15 @@ function SnapshotCard({ run }: { run: AutomationRun }) {
           </p>
         </div>
         <div>
-          <p className="text-muted-foreground">平台与上限</p>
+          <p className="text-muted-foreground">平台与采集上限</p>
           <p className="mt-1 font-medium">
-            {platforms} · 每词 {run.snapshot.max_results_per_term} 条
+            {platforms} · 每个搜索词最多 {run.snapshot.max_results_per_term} 条
           </p>
         </div>
         <div>
           <p className="text-muted-foreground">AI 配置</p>
           <p className="mt-1 font-medium">
-            {run.snapshot.ai_model ?? '未记录模型配置'} · 模板{' '}
-            {run.snapshot.initial_template_version} /{' '}
-            {run.snapshot.report_template_version}
+            {run.snapshot.ai_model ?? '未记录模型配置'}
           </p>
         </div>
         <div className="sm:col-span-2">
@@ -269,8 +276,8 @@ export function AutomationRunDetail() {
       setAction(null)
       setFeedback(
         saved.status === 'cancelled'
-          ? '运行已取消，已保存的领域数据仍然保留。'
-          : '已接受重试，将从第一个失败阶段继续。',
+          ? '任务已取消，已保存的结果仍然保留。'
+          : '已开始重试，将从失败阶段继续。',
       )
     },
     onError: (error) => {
@@ -351,10 +358,12 @@ export function AutomationRunDetail() {
   const retryable = isAutomationRunRetryable(run)
   const failedStage = firstFailedStage(run)
   const liveMessage = active
-    ? `当前正在${run.active_stage ? stageLabels[run.active_stage] : '等待执行'}。页面会自动更新，不会改变焦点。`
+    ? `正在${run.active_stage ? stageLabels[run.active_stage] : '等待执行'}。`
     : run.status === 'completed'
       ? runOutcome(run)
-      : (run.error?.message ?? runOutcome(run))
+      : run.error
+        ? ''
+        : runOutcome(run)
 
   return (
     <div className="space-y-6">
@@ -404,7 +413,7 @@ export function AutomationRunDetail() {
                   {run.snapshot.task_name}
                 </h1>
                 <p className="text-sm text-muted-foreground">
-                  创建于 {formatAutomationDate(run.created_at)} · 任务修订{' '}
+                  创建于 {formatAutomationDate(run.created_at)} · 任务版本{' '}
                   {run.task_revision}
                 </p>
               </div>
@@ -460,7 +469,7 @@ export function AutomationRunDetail() {
                 role="alert"
                 className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm leading-6 text-destructive"
               >
-                {run.error.message}
+                {failureMessage(run.error)}
                 {failedStage
                   ? ` 可从“${stageLabels[failedStage.name]}”重试。`
                   : ''}
@@ -468,9 +477,9 @@ export function AutomationRunDetail() {
             )}
             {run.outcome === 'no_new_sources' && (
               <div className="rounded-lg border border-primary/20 bg-primary/5 p-4 text-sm leading-6">
-                <p className="font-medium">本轮没有新增舆情材料</p>
+                <p className="font-medium">这次没有新的可分析内容</p>
                 <p className="mt-1 text-muted-foreground">
-                  采集阶段完成后没有形成这项任务的新成员，因此没有调用模型，也没有伪装成“没有相关事件”的结论。
+                  采集完成后没有发现新的内容，所以没有调用模型，也不会生成“没有相关事件”的结论。
                 </p>
               </div>
             )}
@@ -481,15 +490,12 @@ export function AutomationRunDetail() {
           <CardHeader className="border-b">
             <div className="flex items-center gap-2">
               <Clock3 className="size-5 text-primary" aria-hidden />
-              <h2 className="font-display text-xl">固定工作流时间线</h2>
+              <h2 className="font-display text-xl">处理过程</h2>
             </div>
-            <p className="text-sm text-muted-foreground">
-              阶段顺序固定；每个阶段的尝试、时间和已保存产物都来自运行快照。
-            </p>
           </CardHeader>
           <CardContent className="pt-5">
             <ol
-              aria-label="固定工作流阶段"
+              aria-label="任务处理阶段"
               className="relative space-y-4 before:absolute before:top-5 before:bottom-5 before:left-[0.72rem] before:w-px before:bg-border"
             >
               {run.stages.map((stage, index) => {
@@ -552,36 +558,32 @@ export function AutomationRunDetail() {
                       </div>
                       <div className="mt-3 grid gap-2 text-xs text-muted-foreground sm:grid-cols-2">
                         <span>
-                          开始：{formatAutomationDate(stage.started_at)}
+                          开始时间：{formatAutomationDate(stage.started_at)}
                         </span>
                         <span>
-                          结束：{formatAutomationDate(stage.finished_at)}
+                          结束时间：{formatAutomationDate(stage.finished_at)}
                         </span>
                         {counts && (
-                          <span className="sm:col-span-2">覆盖：{counts}</span>
+                          <span className="sm:col-span-2">
+                            处理结果：{counts}
+                          </span>
                         )}
                         <span className="sm:col-span-2">
                           {stageUsage(stage)}
                         </span>
-                        {stage.child_id !== null && (
-                          <span className="sm:col-span-2">
-                            已保存产物：{stage.child_kind ?? stage.name} #
-                            {stage.child_id}
-                          </span>
-                        )}
                       </div>
                       {stage.error && (
                         <p
                           role="alert"
                           className="mt-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm leading-6 text-destructive"
                         >
-                          {stage.error.message}
+                          {failureMessage(stage.error)}
                         </p>
                       )}
                       {previousAttempts.length > 0 && (
                         <details className="mt-3 rounded-lg border bg-muted/20 p-3 text-sm">
                           <summary className="cursor-pointer font-medium">
-                            查看此前 {previousAttempts.length} 次尝试
+                            查看之前 {previousAttempts.length} 次记录
                           </summary>
                           <ul className="mt-3 space-y-3">
                             {previousAttempts.map((attempt) => (
@@ -600,19 +602,15 @@ export function AutomationRunDetail() {
                                 <p className="mt-1">{stageUsage(attempt)}</p>
                                 {stageCounts(attempt) && (
                                   <p className="mt-1">
-                                    覆盖：{stageCounts(attempt)}
+                                    处理结果：{stageCounts(attempt)}
                                   </p>
                                 )}
                                 {attempt.child_id !== null && (
-                                  <p className="mt-1">
-                                    已保存产物：
-                                    {attempt.child_kind ?? attempt.name} #
-                                    {attempt.child_id}
-                                  </p>
+                                  <p className="mt-1">结果已保存</p>
                                 )}
                                 {attempt.error && (
                                   <p className="mt-1 text-destructive">
-                                    {attempt.error.message}
+                                    {failureMessage(attempt.error)}
                                   </p>
                                 )}
                               </li>
@@ -631,7 +629,7 @@ export function AutomationRunDetail() {
                             to={`/results?report=${run.topic_report_id}`}
                           >
                             <FileSearch aria-hidden />
-                            打开本轮报告
+                            查看本轮报告
                           </Link>
                         )}
                     </div>

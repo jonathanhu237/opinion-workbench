@@ -1,0 +1,6 @@
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Preserve accessibility, semantic status/error announcements, and route-level copy ownership while simplifying UI text."}
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Apply the complete frontend test/build/browser gate after route copy changes."}
+{"file":".trellis/spec/backend/workbench-guidelines.md","reason":"Keep workbench attention, stale, unknown, and readable-report meanings distinct while rewriting their labels."}
+{"file":".trellis/spec/backend/automation-workflow-guidelines.md","reason":"Preserve automatic-task stage, retry, frozen-intent, cost, and history semantics behind simpler wording."}
+{"file":".trellis/spec/backend/initial-analysis-guidelines.md","reason":"Preserve evidence completeness, uncertainty, and analysis-state distinctions in results copy."}
+{"file":".trellis/spec/backend/topic-report-guidelines.md","reason":"Preserve report coverage, judgment, composition, empty-report, citation, and retry semantics in plain language."}

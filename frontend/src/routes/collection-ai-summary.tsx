@@ -195,7 +195,7 @@ function AnalysisRecord({
             : itemLabels[item.status]}
         </Badge>
         {item.reused_from_item_id !== null && (
-          <span className="text-xs text-muted-foreground">复用已有分析</span>
+          <span className="text-xs text-muted-foreground">使用已有分析</span>
         )}
         <span className="text-xs text-muted-foreground">
           {item.source.published_at_text || '平台未显示发布时间'}
@@ -431,7 +431,7 @@ export function CollectionAISummary({
           id="ai-summary-title"
           className="font-display text-xl font-semibold"
         >
-          AI 汇总（旧版分析）
+          AI 汇总（旧版）
         </h2>
         {historyOnly ? (
           <Link
@@ -456,14 +456,14 @@ export function CollectionAISummary({
         )}
       </div>
       <p className="text-sm leading-6 text-muted-foreground">
-        旧版分析按本次采集范围判断，历史报告继续保留。
+        旧版分析只针对本次采集，历史报告继续保留。
         <Link to="/results" className="ml-1 underline underline-offset-4">
           前往结果与分析查看独立初步分析
         </Link>
       </p>
       {historyOnly && (
         <p className="text-sm text-muted-foreground">
-          这里只查看旧版报告及引用；新分析请前往共享结果库。已有旧版任务仍可取消，不会再次生成旧版分析。
+          这里只显示旧版汇总和引用。新的分析请前往结果与分析；正在进行的旧版任务仍可取消。
         </p>
       )}
       {!historyOnly && admissionMessage && (
@@ -620,7 +620,7 @@ export function CollectionAISummary({
                 {selected.counts.interrupted > 0 &&
                   ` · 已中断 ${selected.counts.interrupted}`}
                 {selected.counts.reused > 0 &&
-                  ` · 复用分析 ${selected.counts.reused}`}
+                  ` · 使用已有分析 ${selected.counts.reused}`}
               </p>
               {selected.source_run_status !== 'completed_with_results' && (
                 <p className="text-sm text-muted-foreground">
@@ -658,7 +658,7 @@ export function CollectionAISummary({
                 />
               ) : !sourcesValid ? (
                 <p className="text-sm text-destructive" role="alert">
-                  汇总与原文记录不一致，暂不显示引用。
+                  汇总和原文记录不一致，暂时无法显示引用。
                   <Button
                     variant="link"
                     size="sm"

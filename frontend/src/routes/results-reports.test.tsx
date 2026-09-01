@@ -174,7 +174,7 @@ describe('automatic second-stage report views', () => {
         : { reports: [reportFixture()], next_before_id: null },
     )
     const first = renderReports()
-    expect(await screen.findByText(/本任务没有关联报告/)).toBeVisible()
+    expect(await screen.findByText(/本任务还没有报告/)).toBeVisible()
     assertNoMutation()
     empty = false
     expect(
@@ -184,9 +184,9 @@ describe('automatic second-stage report views', () => {
         { timeout: 2500 },
       ),
     ).toBeVisible()
-    expect(screen.getByText(/已保存 8\/10 条初步文本/)).toBeVisible()
+    expect(screen.getByText(/已完成 8\/10 条初步分析/)).toBeVisible()
     expect(
-      screen.getByText('冻结范围 10 条 · 可分析初步证据 8 条 · 未覆盖 2 条'),
+      screen.getByText('本次内容 10 条 · 可判断 8 条 · 无法判断 2 条'),
     ).toBeVisible()
     expect(
       await screen.findAllByRole('article', { name: '报告章节 501' }),
@@ -227,11 +227,11 @@ describe('automatic second-stage report views', () => {
   })
   it.each([
     ['judging', '正在判断相关性'],
-    ['composing', '正在合成报告'],
+    ['composing', '正在生成报告'],
     ['failed', '生成失败'],
     ['cancelled', '报告已取消'],
     ['interrupted', '报告已中断'],
-    ['configuration_blocked', '模型配置受阻'],
+    ['configuration_blocked', '模型设置不可用'],
   ] as const)(
     'presents %s as report state, not a third stage or successful-empty',
     async (status, label) => {
@@ -279,18 +279,14 @@ describe('automatic second-stage report views', () => {
       expect(
         await screen.findByText(
           empty_reason === 'no_ready_sources'
-            ? /冻结范围内没有可分析的初步证据/
-            : /已完成的文字判断没有确认相关材料/,
+            ? /本次没有可用的初步分析，因此没有调用模型/
+            : /相关性判断没有找到足够相关的内容，因此没有生成报告/,
         ),
       ).toBeVisible()
       expect(
-        await screen.findByText(
-          /冻结时初步分析仍在进行；未将此来源当作相关或不相关/,
-        ),
+        await screen.findByText(/当时仍在分析；因此没有判断为相关或不相关/),
       ).toBeVisible()
-      expect(
-        screen.getByText(/不可用项不会等待后来分析或自动补做/),
-      ).toBeVisible()
+      expect(screen.getAllByText(/没有可用的初步分析/)).not.toHaveLength(0)
       expect(
         screen.queryByRole('button', { name: '仅重试文字报告' }),
       ).toBeNull()
@@ -310,16 +306,16 @@ describe('automatic second-stage report views', () => {
     const user = userEvent.setup()
     renderReports()
     await screen.findByRole('region', { name: '文字报告 31' })
-    await user.click(screen.getByText('第二阶段用量与复用'))
+    await user.click(screen.getByText('本次报告用量'))
     expect(
-      screen.getAllByText('已调用 8 次 · 已计量 0 次 · Token 用量未知'),
+      screen.getAllByText('调用 8 次 · 计入用量 0 次 · Token 用量未知'),
     ).toHaveLength(2)
     expect(
-      screen.getByText(/复用合成 1 个。历史调用与 Token 不计入本版本/),
+      screen.getByText(/1 个报告章节沿用了已有结果；历史用量不计入本次/),
     ).toBeVisible()
-    await user.click(screen.getByText('本报告实际使用的提示词与模型'))
+    await user.click(screen.getByText('本报告使用的提示词与模型'))
     expect(screen.getByText(report.prompt.instructions)).toBeVisible()
-    expect(screen.getByText(/共享报告提示词 · 版本 2/)).toBeVisible()
+    expect(screen.getByText(/默认报告提示词 · 版本 2/)).toBeVisible()
   })
   it('keeps cross-page citations resolved from bounded frozen section sources and XHS origin proof', async () => {
     const user = userEvent.setup()
@@ -538,7 +534,7 @@ describe('automatic second-stage report views', () => {
       await screen.findByRole('button', { name: '仅重试文字报告' }),
     )
     await user.click(screen.getByRole('button', { name: '确认文字重试' }))
-    expect(await screen.findByText(/上次操作结果尚不确定/)).toBeVisible()
+    expect(await screen.findByText(/上次操作结果不确定/)).toBeVisible()
     const original = vi.mocked(retryTopicReport).mock.calls[0]
     expect(original).toEqual([
       31,
@@ -625,10 +621,10 @@ describe('automatic second-stage report views', () => {
     )
     renderReports()
     await user.click(
-      screen.getByRole('button', { name: '可选：按首次入库时间报告' }),
+      screen.getByRole('button', { name: '可选：按首次发现时间报告' }),
     )
-    await user.type(screen.getByLabelText('报告首次入库开始日期'), '2026-08-29')
-    await user.type(screen.getByLabelText('报告首次入库结束日期'), '2026-08-29')
+    await user.type(screen.getByLabelText('报告首次发现开始日期'), '2026-08-29')
+    await user.type(screen.getByLabelText('报告首次发现结束日期'), '2026-08-29')
     expect(createTopicReport).not.toHaveBeenCalled()
     await user.click(screen.getByRole('button', { name: '提交文字报告' }))
     await waitFor(() =>

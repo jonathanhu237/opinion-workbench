@@ -152,7 +152,7 @@ describe('manual batch recovery', () => {
     ['login_required', '请打开平台，在当前谷歌浏览器中登录后继续采集。'],
     ['manual_challenge_required', '平台要求安全验证。'],
     ['platform_blocked_or_rate_limited', '平台暂时限制了访问。'],
-    ['structure_changed', '登录不一定能解决'],
+    ['structure_changed', '平台页面发生变化'],
     ['timed_out', '采集等待超时。'],
     ['browser_unavailable', '无法连接谷歌浏览器。'],
     ['internal_error', '本次采集未能完成。'],
@@ -167,7 +167,7 @@ describe('manual batch recovery', () => {
       expect(screen.getByText(/已确认完成 1 \/ 2 个搜索词/u)).toHaveTextContent(
         '继续时将从“竹坑社区”开始',
       )
-      for (const name of ['打开平台', '继续采集', '跳过此平台', '取消批次'])
+      for (const name of ['打开平台', '继续采集', '跳过此平台', '取消采集'])
         expect(screen.getByRole('button', { name })).toBeEnabled()
     },
   )
@@ -235,18 +235,18 @@ describe('manual batch recovery', () => {
     expect(screen.getByRole('button', { name: '正在打开…' })).toBeDisabled()
     expect(screen.getByRole('button', { name: '继续采集' })).toBeDisabled()
     expect(screen.getByRole('button', { name: '跳过此平台' })).toBeDisabled()
-    await user.click(screen.getByRole('button', { name: '取消批次' }))
+    await user.click(screen.getByRole('button', { name: '取消采集' }))
     await waitFor(() =>
       expect(api.cancelSearchBatch).toHaveBeenCalledExactlyOnceWith(8, {
         expected_revision: 12,
       }),
     )
     expect(
-      await screen.findByText('已取消批次，已有结果仍然保留。'),
+      await screen.findByText('已取消采集，已有结果仍然保留。'),
     ).toBeVisible()
     await act(async () => finishOpen({ outcome: 'opened_existing' }))
     expect(screen.queryByText(/已在谷歌浏览器中打开平台页面/u)).toBeNull()
-    expect(screen.getByText('已取消批次，已有结果仍然保留。')).toBeVisible()
+    expect(screen.getByText('已取消采集，已有结果仍然保留。')).toBeVisible()
   })
 
   it('refetches stale controls without automatically replaying the failed mutation', async () => {
@@ -325,7 +325,7 @@ describe('manual batch recovery', () => {
       batch.items[0].recovery_available = false
       renderBatch(batch)
       await user.click(
-        await screen.findByRole('button', { name: '处理此平台' }),
+        await screen.findByRole('button', { name: '继续处理平台' }),
       )
       await waitFor(() =>
         expect(api.recoverSearchBatchPlatform).toHaveBeenCalledExactlyOnceWith(
@@ -335,7 +335,7 @@ describe('manual batch recovery', () => {
         ),
       )
       expect(
-        screen.getByText('已准备好处理此平台，请检查页面后继续采集。'),
+        screen.getByText('已准备好继续处理此平台，请检查页面后继续采集。'),
       ).toBeVisible()
     },
   )
@@ -357,7 +357,7 @@ describe('manual batch recovery', () => {
       'href',
       '/collection-runs/31',
     )
-    expect(screen.queryByRole('button', { name: '处理此平台' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '继续处理平台' })).toBeNull()
     expect(screen.getByText(/已结束 1 \/ 1 个平台/u)).toBeVisible()
   })
 
@@ -467,7 +467,7 @@ describe('manual batch recovery', () => {
     expect(
       await screen.findByRole('button', { name: '打开原文' }),
     ).toBeDisabled()
-    expect(screen.getByText(/批次正在使用浏览器/u)).toBeVisible()
+    expect(screen.getByText(/采集正在使用浏览器/u)).toBeVisible()
     expect(openSearchRunResult).not.toHaveBeenCalled()
   })
 })

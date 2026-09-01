@@ -458,7 +458,7 @@ describe('Longtian public opinion application', () => {
     ).toBeInTheDocument()
     expect(
       screen.getByText(
-        '在这里查看各平台账号的登录状态。需要登录、扫码或安全验证时，请在打开的谷歌浏览器中完成。',
+        '需要登录、扫码或安全验证时，请在打开的谷歌浏览器中完成。',
       ),
     ).toBeInTheDocument()
     expect(screen.getByText('登录状态', { exact: true })).toBeInTheDocument()
@@ -521,9 +521,7 @@ describe('Longtian public opinion application', () => {
 
     expect(
       await within(getConnectionPanel()).findByRole('alert'),
-    ).toHaveTextContent(
-      '本机服务不可用。请确认 FastAPI 已在 127.0.0.1:8000 启动。',
-    )
+    ).toHaveTextContent('应用服务暂时不可用，请重新启动应用。')
     expect(screen.queryByText('服务检测中')).toBeNull()
     expect(screen.queryByText('服务正常')).toBeNull()
     expect(screen.queryByText('服务异常')).toBeNull()
@@ -581,7 +579,7 @@ describe('Longtian public opinion application', () => {
       'complete_login',
       '需要操作',
       '处理中…',
-      '请在当前打开的谷歌浏览器中登录微博，完成后系统会继续检测。',
+      '请在当前打开的谷歌浏览器中登录微博。',
     ],
     ['connected', 'none', '已登录', '重新检查', null],
     [
@@ -596,7 +594,7 @@ describe('Longtian public opinion application', () => {
       'retry',
       '检查失败',
       '重新检查',
-      '本次检查未通过。请在当前打开的谷歌浏览器中登录微博，然后重新检查。',
+      '检查失败。请确认已登录微博，然后重新检查。',
     ],
   ] as const)(
     'renders the %s row status with contextual recovery guidance',
@@ -693,9 +691,7 @@ describe('Longtian public opinion application', () => {
       expectedPlatforms,
     )
     expect(
-      screen.getByText(
-        '本次检查未通过。请在当前打开的谷歌浏览器中登录微博，然后重新检查。',
-      ),
+      screen.getByText('检查失败。请确认已登录微博，然后重新检查。'),
     ).toBeInTheDocument()
     expect(
       screen.getByText('请在当前打开的谷歌浏览器中登录抖音，然后重新检查。'),

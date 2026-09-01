@@ -110,7 +110,7 @@ const formSchema = z
       context.addIssue({
         code: 'custom',
         path: ['timezone'],
-        message: '请输入有效的 IANA 时区，例如 Asia/Shanghai。',
+        message: '请输入有效时区，例如 Asia/Shanghai。',
       })
     }
     if (
@@ -396,8 +396,8 @@ export function AutomationTaskEditor({
       onSaved(
         saved,
         task === null
-          ? '自动任务已创建，当前为停用状态。核对后可单独启用。'
-          : '自动任务已保存；进行中的运行仍沿用原来的固定快照。',
+          ? '任务已创建，当前为停用状态。确认设置后可启用。'
+          : '自动任务已保存；正在运行的任务仍使用原来的设置。',
       )
     } catch (error) {
       if (
@@ -429,7 +429,7 @@ export function AutomationTaskEditor({
             {task === null ? '新建自动任务' : '编辑自动任务'}
           </DialogTitle>
           <DialogDescription>
-            自动任务把采集、初步分析和相关性判断与报告固定串成一轮。新建后默认停用，确认规则和计划后再启用。
+            新任务默认停用，确认规则和计划后再启用。
           </DialogDescription>
         </DialogHeader>
 
@@ -457,12 +457,9 @@ export function AutomationTaskEditor({
                     maxLength={80}
                     placeholder="例如：龙田街道公共事务值守"
                     aria-invalid={fieldState.invalid}
-                    aria-describedby="automation-task-name-help automation-task-name-error"
+                    aria-describedby="automation-task-name-error"
                     disabled={saveMutation.isPending}
                   />
-                  <FieldDescription id="automation-task-name-help">
-                    用一个值守人员能快速识别的名称描述本轮任务。
-                  </FieldDescription>
                   <FieldError
                     id="automation-task-name-error"
                     errors={[fieldState.error]}
@@ -510,7 +507,7 @@ export function AutomationTaskEditor({
                       </SelectContent>
                     </Select>
                     <FieldDescription>
-                      规则负责扩大候选召回；舆情分析目标在下方单独设置。
+                      搜索规则决定采集哪些内容；分析目标单独设置。
                     </FieldDescription>
                     <FieldError
                       id="automation-task-rule-error"
@@ -527,7 +524,7 @@ export function AutomationTaskEditor({
               render={({ field, fieldState }) => (
                 <Field data-invalid={fieldState.invalid}>
                   <FieldLabel htmlFor="automation-task-limit">
-                    每词最多采集
+                    每个搜索词最多采集
                   </FieldLabel>
                   <Input
                     {...field}
@@ -619,7 +616,7 @@ export function AutomationTaskEditor({
                   disabled={saveMutation.isPending}
                 />
                 <FieldDescription id="automation-task-goal-help">
-                  初步分析先理解条目内容，再按这段目标判断相关性；目标不会改变采集规则，也不能编辑系统阶段。
+                  只用于判断内容是否相关，不会改变采集规则。
                 </FieldDescription>
                 <FieldError
                   id="automation-task-goal-error"
@@ -723,7 +720,7 @@ export function AutomationTaskEditor({
                   render={({ field, fieldState }) => (
                     <Field data-invalid={fieldState.invalid}>
                       <FieldLabel htmlFor="automation-timezone">
-                        IANA 时区
+                        时区
                       </FieldLabel>
                       <Input
                         {...field}
@@ -748,7 +745,7 @@ export function AutomationTaskEditor({
                 aria-hidden
               />
               <span>
-                下一次执行预览：{previewLabel(preview, timezone)}
+                预计下次执行：{previewLabel(preview, timezone)}
                 {scheduleKind === 'daily' && isValidTimeZone(timezone)
                   ? `（${timezone}）`
                   : ''}
@@ -759,13 +756,13 @@ export function AutomationTaskEditor({
           <div className="rounded-xl border border-primary/20 bg-primary/5 p-4">
             <div className="flex items-center gap-2 font-medium">
               <GitBranch className="size-4 text-primary" aria-hidden />
-              固定工作流
+              处理流程
             </div>
             <ol className="mt-3 grid gap-2 text-sm text-muted-foreground sm:grid-cols-3">
               <li className="rounded-lg bg-background/70 p-3">
                 <span className="font-utility text-xs text-primary">01</span>
                 <br />
-                采集候选条目
+                采集内容
               </li>
               <li className="rounded-lg bg-background/70 p-3">
                 <span className="font-utility text-xs text-primary">02</span>
@@ -778,9 +775,6 @@ export function AutomationTaskEditor({
                 相关性判断与报告
               </li>
             </ol>
-            <p className="mt-3 text-xs leading-5 text-muted-foreground">
-              阶段顺序固定，运行中不可跳过、插入或改写。
-            </p>
           </div>
 
           {form.formState.errors.root?.server?.message && (

@@ -1,0 +1,6 @@
+{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Verify every frozen frontend gate and required loopback browser QA."}
+{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Review accessibility and route/component ownership after deleting helper text."}
+{"file":".trellis/spec/backend/workbench-guidelines.md","reason":"Check that copy cleanup does not collapse attention, stale, unknown, or empty-report states."}
+{"file":".trellis/spec/backend/automation-workflow-guidelines.md","reason":"Check that task/run/retry wording still tells the truth about stage behavior and paid/external effects."}
+{"file":".trellis/spec/backend/initial-analysis-guidelines.md","reason":"Check that incomplete evidence remains distinct from analysis failure and uncertainty."}
+{"file":".trellis/spec/backend/topic-report-guidelines.md","reason":"Check that empty reports, relevance judgments, composition progress, and source limitations remain accurate."}

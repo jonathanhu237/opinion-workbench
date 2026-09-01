@@ -158,7 +158,7 @@ describe('monitoring rules route', () => {
 
     expect(screen.getByText(defaultRule.name)).toBeInTheDocument()
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      '当前仍显示上次读取的内容',
+      '页面暂时保留之前显示的内容',
     )
   })
 

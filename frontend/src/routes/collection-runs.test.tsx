@@ -404,7 +404,7 @@ describe('multi-platform collection routes', () => {
     })
     renderRoute()
 
-    expect(await screen.findByText('采集已暂停，等待人工处理')).toBeVisible()
+    expect(await screen.findByText('采集已暂停，等待你处理')).toBeVisible()
     expect(screen.getByRole('button', { name: '开始采集' })).toBeDisabled()
     for (const checkbox of screen.getAllByRole('checkbox')) {
       expect(checkbox).toHaveAttribute('aria-disabled', 'true')
@@ -429,7 +429,7 @@ describe('multi-platform collection routes', () => {
   it('keeps an existing standalone run deep link readable', async () => {
     renderRoute('/collection-runs/70')
 
-    expect(await screen.findByText('今日头条 · 规则快照')).toBeVisible()
+    expect(await screen.findByText('今日头条 · 监控规则')).toBeVisible()
     expect(screen.getByText(rule.name)).toBeVisible()
     expect(screen.getByRole('heading', { name: '采集结果' })).toBeVisible()
     expect(mockedFetchRun).toHaveBeenCalledWith(70, expect.any(AbortSignal))
@@ -438,7 +438,7 @@ describe('multi-platform collection routes', () => {
   it('routes new analysis intent to shared results and never generates legacy summaries on entry or refresh', async () => {
     const view = renderRoute('/collection-runs/70')
     expect(
-      await screen.findByRole('heading', { name: 'AI 汇总（旧版分析）' }),
+      await screen.findByRole('heading', { name: 'AI 汇总（旧版）' }),
     ).toBeVisible()
     expect(
       screen.getByRole('link', { name: '前往结果与分析' }),
@@ -451,7 +451,7 @@ describe('multi-platform collection routes', () => {
     expect(startAISummary).not.toHaveBeenCalled()
     view.unmount()
     renderRoute('/collection-runs/70')
-    expect(await screen.findByText(/这里只查看旧版报告及引用/)).toBeVisible()
+    expect(await screen.findByText(/这里只显示旧版汇总和引用/)).toBeVisible()
     expect(startAISummary).not.toHaveBeenCalled()
   })
 
@@ -552,7 +552,9 @@ describe('multi-platform collection routes', () => {
         expected_revision: 5,
       }),
     )
-    expect(await screen.findByText(/已继续处理/u)).toBeVisible()
+    expect(
+      await screen.findByText(/已继续；完成过的搜索词不会重复采集/u),
+    ).toBeVisible()
   })
 
   it('clears an earlier continue error when cancellation later succeeds', async () => {
@@ -605,10 +607,10 @@ describe('multi-platform collection routes', () => {
     expect(
       await screen.findByText('谷歌浏览器正在执行其他操作，请稍后重试。'),
     ).toBeVisible()
-    await user.click(screen.getByRole('button', { name: '取消批次' }))
+    await user.click(screen.getByRole('button', { name: '取消采集' }))
 
     expect(
-      await screen.findByText('已取消批次，已有结果仍然保留。'),
+      await screen.findByText('已取消采集，已有结果仍然保留。'),
     ).toBeVisible()
     expect(
       screen.queryByText('谷歌浏览器正在执行其他操作，请稍后重试。'),
@@ -622,14 +624,14 @@ describe('multi-platform collection routes', () => {
     )
     renderRoute('/collection-batches/9')
 
-    await user.click(await screen.findByRole('button', { name: '取消批次' }))
+    await user.click(await screen.findByRole('button', { name: '取消采集' }))
     await waitFor(() =>
       expect(mockedCancelBatch).toHaveBeenCalledWith(9, {
         expected_revision: 5,
       }),
     )
     expect(
-      await screen.findByText('已取消批次，已有结果仍然保留。'),
+      await screen.findByText('已取消采集，已有结果仍然保留。'),
     ).toBeVisible()
   })
 })

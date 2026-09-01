@@ -90,8 +90,8 @@ function attentionTitle(item: WorkbenchAttention) {
             : '自动任务计划需要查看'
     case 'automation_run':
       return item.status === 'configuration_blocked'
-        ? '自动任务运行被 AI 配置阻断'
-        : '自动任务运行未正常结束'
+        ? '自动任务无法运行'
+        : '自动任务未正常结束'
     case 'collection_batch':
       return item.status === 'paused_for_manual_action'
         ? '采集批次需要在原页面继续'
@@ -109,43 +109,43 @@ function reasonCopy(item: WorkbenchAttention) {
   const copies: Partial<
     Record<NonNullable<WorkbenchAttention['reason']>, string>
   > = {
-    browser_operation_active: '浏览器正在执行其他操作，本次计划未启动。',
-    browser_unavailable: '本机浏览器暂不可用。',
-    monitoring_rule_not_found: '关联的监控规则已不存在。',
-    monitoring_rule_disabled: '关联的监控规则当前已停用。',
-    invalid_monitoring_rule: '关联监控规则的内容不符合当前要求。',
-    too_many_search_terms: '监控规则展开后的检索词过多。',
-    schedule_changed: '计划版本已变化，本次执行未继续。',
+    browser_operation_active: '浏览器正在使用中，本次任务未启动。',
+    browser_unavailable: '浏览器暂时不可用，请检查浏览器是否打开。',
+    monitoring_rule_not_found: '监控规则已删除。',
+    monitoring_rule_disabled: '监控规则已停用。',
+    invalid_monitoring_rule: '监控规则有问题，请检查。',
+    too_many_search_terms: '搜索词太多，请减少关键词。',
+    schedule_changed: '任务计划已变更，本次没有执行。',
     storage_unavailable: '本机数据暂时无法读取。',
-    dispatch_interrupted: '计划派发过程被中断。',
-    offline: '应用离线期间错过了计划时间。',
-    clock_jump: '系统时间变化导致计划时间被跨过。',
-    attempt_failed: '当前平台采集尝试未成功。',
-    process_interrupted: '应用进程中断后保留在暂停状态。',
-    internal_error: '本次任务因内部错误结束。',
-    configuration_blocked: '当前 AI 配置无法继续处理。',
-    interrupted: '任务在完成前被中断。',
-    unsuccessful_members: '部分内容未成功完成，成功内容仍已保存。',
+    dispatch_interrupted: '任务启动被中断。',
+    offline: '应用离线时错过了计划时间。',
+    clock_jump: '系统时间变化，本次计划未执行。',
+    attempt_failed: '平台采集失败。',
+    process_interrupted: '应用中断后暂停了这次任务，请查看并重试。',
+    internal_error: '任务因系统错误结束，请重试。',
+    configuration_blocked: 'AI 设置不可用，请检查配置。',
+    interrupted: '任务在完成前中断了。',
+    unsuccessful_members: '部分内容处理失败，成功内容已保存。',
   }
   if (item.reason && copies[item.reason]) return copies[item.reason]
   if (item.status === 'previous_run_active') {
-    return '上一轮仍在运行，本次没有排队。'
+    return '上一轮还在运行，本次未启动。'
   }
   if (item.status === 'configuration_unavailable') {
-    return '当前 AI 配置不可用，任务暂未运行。'
+    return 'AI 设置不可用，任务未启动。'
   }
-  if (item.status === 'failed') return '本次任务没有生成新的可读报告。'
-  return '请进入对应页面查看已保存的状态与原因。'
+  if (item.status === 'failed') return '本次任务未生成新报告。'
+  return '请打开详情查看原因。'
 }
 
 function platformAttentionCopy(status: PlatformConnectionStatus) {
   switch (status) {
     case 'action_required':
-      return '需要在当前浏览器中完成登录或验证。'
+      return '请在当前浏览器中登录或完成验证。'
     case 'disconnected':
-      return '当前未登录，后续采集前需要重新连接。'
+      return '当前未登录，请重新连接。'
     case 'failed':
-      return '最近一次登录状态检查未通过。'
+      return '登录状态检查失败，请重新检查。'
     default:
       return ''
   }
@@ -184,7 +184,7 @@ function AttentionList({
             <CardContent className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-center">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
-                  <p className="font-medium">平台连接需要查看</p>
+                  <p className="font-medium">平台连接有问题</p>
                   <Badge variant="outline">{platform.display_name}</Badge>
                 </div>
                 <p className="mt-1 text-sm leading-6 text-muted-foreground">
@@ -193,7 +193,7 @@ function AttentionList({
                 <p className="mt-1 font-utility text-[10px] tracking-[0.06em] text-muted-foreground">
                   {platform.last_checked_at
                     ? `最后检查 ${formatTimestamp(platform.last_checked_at)}`
-                    : '尚无检查时间'}
+                    : '还没有检查记录'}
                 </p>
               </div>
               <Link
@@ -270,9 +270,6 @@ function ReportPanel({
       <CardHeader className="border-b">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <p className="font-utility text-[10px] tracking-[0.12em] text-muted-foreground uppercase">
-              Latest readable report
-            </p>
             <CardTitle className="mt-1 font-display text-xl">
               最新舆情报告
             </CardTitle>
@@ -295,9 +292,6 @@ function ReportPanel({
             className="flex flex-1 flex-col justify-center py-8"
           >
             <p className="font-medium text-destructive">最新报告暂时无法读取</p>
-            <p className="mt-2 text-sm leading-6 text-muted-foreground">
-              当前没有可安全保留的工作台快照。刷新只会重新读取状态，不会生成报告。
-            </p>
             <Button
               type="button"
               variant="outline"
@@ -311,7 +305,7 @@ function ReportPanel({
           <div className="flex flex-1 flex-col justify-center py-8">
             <p className="font-display text-xl">还没有可阅读的舆情报告</p>
             <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
-              采集内容完成初步分析后，系统会把最新一份可读报告汇总到这里。原始采集结果仍在“结果与分析”中查看。
+              完成一次采集和分析后，报告会显示在这里。原始结果请到“结果与分析”查看。
             </p>
             <Link
               to="/results"
@@ -327,15 +321,15 @@ function ReportPanel({
         ) : report.status === 'empty' ? (
           <div className="flex flex-1 flex-col py-3">
             <Badge variant="secondary" className="mb-4">
-              已完成 · 暂无可汇总内容
+              已完成 · 没有可用内容
             </Badge>
             <p className="font-display text-xl leading-8">
               {report.empty_reason === 'no_ready_sources'
-                ? '本次范围内没有已准备好的来源文本。'
-                : '本次已完成判断，没有来源进入报告正文。'}
+                ? '这次没有可用的来源文本。'
+                : '这次没有足够相关的来源，未生成报告正文。'}
             </p>
             <p className="mt-3 text-sm leading-6 text-muted-foreground">
-              这是一次如实完成的报告结果，不代表任务失败，也不会补造摘要。
+              任务已完成，但没有足够相关的内容，系统不会编造摘要。
             </p>
             <div className="mt-auto flex flex-wrap items-center justify-between gap-3 border-t pt-5">
               <p className="text-xs text-muted-foreground">
@@ -363,7 +357,7 @@ function ReportPanel({
               <p className="text-xs leading-5 text-muted-foreground">
                 完成于 {formatTimestamp(report.finished_at)} · 覆盖{' '}
                 {report.coverage.total} 条来源，其中 {report.coverage.relevant}{' '}
-                条进入报告判断
+                条与主题相关
               </p>
               <Link
                 to={`/results?report=${report.id}`}
@@ -383,7 +377,7 @@ function ReportPanel({
 type StageProps = {
   label: string
   status: string
-  detail: string
+  detail?: string
   active: boolean
   href?: string
   icon: ComponentType<{ className?: string; 'aria-hidden'?: boolean }>
@@ -420,9 +414,11 @@ function ActivityStage({
           <span className="font-medium">{label}</span>
           <span className="text-xs text-muted-foreground">{status}</span>
         </span>
-        <span className="mt-1 block text-xs leading-5 text-muted-foreground">
-          {detail}
-        </span>
+        {detail && (
+          <span className="mt-1 block text-xs leading-5 text-muted-foreground">
+            {detail}
+          </span>
+        )}
         {progress && progress.total > 0 && (
           <span className="mt-2 block h-1.5 overflow-hidden rounded-full bg-secondary">
             <span
@@ -481,8 +477,8 @@ function automationStage(
     label: '自动任务',
     status: activity ? statuses[activity.status] : '空闲',
     detail: activity
-      ? `${activity.task_name}${activity.active_stage ? ` · 当前阶段：${activeStageLabels[activity.active_stage]}` : ''}`
-      : '当前没有进行中的自动任务',
+      ? `${activity.task_name}${activity.active_stage ? ` · 当前：${activeStageLabels[activity.active_stage]}` : ''}`
+      : undefined,
     active: activity !== null,
     href: activity ? `/automation-runs/${activity.run_id}` : undefined,
     icon: Activity,
@@ -503,7 +499,7 @@ function collectionStage(
       : '空闲',
     detail: activity
       ? `${activity.rule_name}${activity.current_platform ? ` · ${platformLabels[activity.current_platform]}` : ''} · ${activity.completed_item_count}/${activity.item_count} 个平台`
-      : '当前没有进行中的采集批次',
+      : undefined,
     active: activity !== null && activity.status !== 'paused_for_manual_action',
     href: activity ? `/collection-batches/${activity.id}` : undefined,
     icon: ScanSearch,
@@ -526,7 +522,7 @@ function analysisStage(activity: WorkbenchAnalysisActivity | null): StageProps {
       : '空闲',
     detail: activity
       ? `已完成 ${activity.completed_count}/${activity.total_count} 条${activity.unsuccessful_count ? ` · ${activity.unsuccessful_count} 条未成功` : ''}`
-      : '当前没有进行中的初步分析',
+      : undefined,
     active: activity !== null,
     href: activity ? `/results?job=${activity.id}` : undefined,
     icon: FileSearch,
@@ -546,9 +542,9 @@ function reportStage(activity: WorkbenchReportActivity | null): StageProps {
     status: activity ? statuses[activity.status] : '空闲',
     detail: activity
       ? activity.status === 'composing'
-        ? '来源判断已完成，正在组织可读报告'
+        ? '相关性已判断，正在生成报告'
         : `已判断 ${activity.completed_count}/${activity.total_count} 条`
-      : '当前没有进行中的报告任务',
+      : undefined,
     active: activity !== null,
     href: activity ? `/results?report=${activity.id}` : undefined,
     icon: FileText,
@@ -614,9 +610,9 @@ function ActivityRail({
             <Skeleton className="h-12 w-full" />
           </div>
         ) : snapshot ? (
-          <div aria-label="自动任务与固定工作流运行状态">
+          <div aria-label="自动任务处理状态">
             <ActivityStage {...automationStage(snapshot.activity.automation)} />
-            <div aria-label="采集、初步分析和报告运行状态">
+            <div aria-label="任务各阶段状态">
               <ActivityStage
                 {...collectionStage(snapshot.activity.collection)}
               />
@@ -669,7 +665,7 @@ function ActivityRail({
               </div>
             ) : snapshot ? (
               <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                暂无可执行的自动任务计划。
+                暂无可执行的自动任务。
               </p>
             ) : (
               <p className="mt-2 text-sm text-muted-foreground">暂不可用</p>
@@ -752,14 +748,14 @@ export function Workbench() {
     issueCount > 0
       ? {
           title: `当前有 ${issueCount} 项需要查看`,
-          detail: '问题会在同一归属出现更新的健康状态后自动从这里消失。',
+          detail: '',
           icon: AlertTriangle,
           tone: 'warning',
         }
       : fullyKnown
         ? {
             title: '当前运行正常',
-            detail: '已读取自动任务、计划、最新报告与平台连接状态。',
+            detail: '',
             icon: CheckCircle2,
             tone: 'normal',
           }
@@ -767,7 +763,7 @@ export function Workbench() {
             title: loading ? '正在汇总值守状态' : '当前状态尚未完全确认',
             detail: stale
               ? '最近一次更新失败，下面保留的是上次成功读取的内容。'
-              : '仍有状态正在读取、尚未检查或暂不可用。',
+              : '部分状态还未确认。',
             icon: CircleDashed,
             tone: 'unknown',
           }
@@ -806,21 +802,20 @@ export function Workbench() {
             <DutyIcon className="size-5" aria-hidden />
           </span>
           <div role="status" className="min-w-0">
-            <p className="font-utility text-[10px] tracking-[0.12em] text-muted-foreground uppercase">
-              Duty signal
-            </p>
             <h2
               id="duty-state-heading"
               className="mt-1 font-display text-xl font-semibold sm:text-2xl"
             >
               {duty.title}
             </h2>
-            <p className="mt-1 text-sm leading-6 text-muted-foreground">
-              {duty.detail}
-            </p>
+            {duty.detail && (
+              <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                {duty.detail}
+              </p>
+            )}
             {snapshot && (
               <p className="mt-1 font-utility text-[10px] tracking-[0.06em] text-muted-foreground">
-                状态时间 {formatTimestamp(snapshot.observed_at)}
+                更新时间 {formatTimestamp(snapshot.observed_at)}
               </p>
             )}
           </div>
@@ -848,7 +843,7 @@ export function Workbench() {
           role="alert"
           className="rounded-lg border border-warning/30 bg-warning/8 px-4 py-3 text-sm text-warning-foreground"
         >
-          状态更新失败；当前继续显示上次成功读取的内容，请留意上方状态时间。
+          状态更新失败，当前显示上次成功读取的内容。
         </p>
       )}
 

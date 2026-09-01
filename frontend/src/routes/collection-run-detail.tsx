@@ -188,7 +188,7 @@ export function CollectionRunDetail() {
             <div>
               <p className="flex items-center gap-1.5 text-xs tracking-wide text-muted-foreground">
                 <img src={platform.logoSrc} alt="" className="size-4" />
-                {platform.label} · 规则快照
+                {platform.label} · 监控规则
               </p>
               <CardTitle className="mt-1 font-display text-2xl">
                 {run.rule_name}

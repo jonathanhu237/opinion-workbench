@@ -218,8 +218,8 @@ function BatchRail({
                     )}
                     <p className="mt-2 text-sm text-muted-foreground">
                       {item.recovery_available
-                        ? `搜索词完成进度：${item.completed_term_count} / ${batch.term_count}`
-                        : '续采位置暂时无法确认'}
+                        ? `搜索词进度：${item.completed_term_count} / ${batch.term_count}`
+                        : '无法确认从哪里继续'}
                     </p>
                     {run &&
                       item.status !== 'running' &&
@@ -264,7 +264,7 @@ function BatchRail({
                         >
                           {recoveringPosition === item.position
                             ? '正在准备…'
-                            : '处理此平台'}
+                            : '继续处理平台'}
                         </Button>
                       )}
                     {run && (
@@ -372,10 +372,10 @@ export function CollectionBatchDetail() {
       )
       if (action.generation !== generation.current) return
       const messages = {
-        continue: '已继续处理，已确认完成的搜索词不会重复采集。',
+        continue: '已继续；完成过的搜索词不会重复采集。',
         skip: '已跳过此平台，已有结果仍然保留。',
-        recover: '已准备好处理此平台，请检查页面后继续采集。',
-        cancel: '已取消批次，已有结果仍然保留。',
+        recover: '已准备好继续处理此平台，请检查页面后继续采集。',
+        cancel: '已取消采集，已有结果仍然保留。',
       }
       setFeedback({ message: messages[action.kind], error: false })
     },
@@ -449,7 +449,7 @@ export function CollectionBatchDetail() {
     return (
       <Card>
         <CardContent className="p-8 text-center" role="alert">
-          <p className="font-medium">采集批次编号不正确</p>
+          <p className="font-medium">采集任务编号不正确</p>
           <Link
             className={buttonVariants({ variant: 'outline' })}
             to="/collection-runs"
@@ -463,7 +463,7 @@ export function CollectionBatchDetail() {
 
   if (batchQuery.isPending) {
     return (
-      <div className="space-y-4" aria-label="正在加载批次进度">
+      <div className="space-y-4" aria-label="正在加载采集进度">
         <Skeleton className="h-24 w-full" />
         <Skeleton className="h-32 w-full" />
         <Skeleton className="h-32 w-full" />
@@ -475,7 +475,7 @@ export function CollectionBatchDetail() {
     return (
       <Card>
         <CardContent className="p-8 text-center" role="alert">
-          <p className="font-medium">批次进度暂时无法读取</p>
+          <p className="font-medium">采集进度暂时无法读取</p>
           <Button
             variant="outline"
             className="mt-4"
@@ -541,7 +541,7 @@ export function CollectionBatchDetail() {
             onClick={() => act('cancel')}
           >
             <Square className="size-3" aria-hidden />
-            {cancelling ? '正在取消…' : '取消批次'}
+            {cancelling ? '正在取消…' : '取消采集'}
           </Button>
         )}
       </div>
@@ -580,7 +580,7 @@ export function CollectionBatchDetail() {
                   id="recovery-unavailable"
                   className="text-sm text-destructive"
                 >
-                  无法确认可靠的续采位置，请跳过此平台或取消批次。
+                  无法确认从哪里继续，请跳过此平台或取消采集。
                 </p>
               )}
               <div className="flex flex-wrap gap-2">
@@ -623,7 +623,7 @@ export function CollectionBatchDetail() {
                   disabled={controlMutation.isPending}
                   onClick={() => act('cancel')}
                 >
-                  {cancelling ? '正在取消…' : '取消批次'}
+                  {cancelling ? '正在取消…' : '取消采集'}
                 </Button>
               </div>
             </CardContent>

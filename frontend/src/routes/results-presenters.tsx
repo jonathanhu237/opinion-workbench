@@ -15,31 +15,31 @@ import {
 } from '@/routes/search-run-presenters'
 
 export const resultStateLabels: Record<ResultState, string> = {
-  never_started: '尚未初步分析',
+  never_started: '待分析',
   pending_new: '新内容待分析',
   queued: '等待开始',
-  acquiring: '获取正文与媒体',
+  acquiring: '正在获取内容',
   analysing: '正在初步分析',
-  completed: '已保存初步分析',
+  completed: '已完成',
   input_incomplete: '内容不完整',
   unsupported: '输入暂不支持',
   failed: '分析失败',
   cancelled: '已取消',
   interrupted: '已中断',
-  legacy_completed: '仅有旧版分析',
-  legacy_attempted: '旧版尝试未完成',
+  legacy_completed: '旧版分析',
+  legacy_attempted: '旧版未完成',
 }
 export const analysisJobLabels: Record<AnalysisJob['status'], string> = {
   queued: '等待开始',
   running: '正在初步分析',
-  completed: '已处理完毕',
+  completed: '已完成',
   cancelled: '已取消',
   interrupted: '已中断',
-  configuration_blocked: '模型配置已变化',
+  configuration_blocked: '模型设置不一致',
 }
 export function analysisUsageMessage(usage: AnalysisUsage) {
   if (usage.attempted_requests === 0) return '本任务未调用模型'
-  return `已调用 ${usage.attempted_requests} 次 · 已计量 ${usage.accounted_requests} 次 · ${usage.total_tokens === null ? 'Token 用量未知' : `${usage.total_tokens.toLocaleString('zh-CN')} Token${usage.complete ? '' : '（统计不完整）'}`}`
+  return `调用 ${usage.attempted_requests} 次 · 计入用量 ${usage.accounted_requests} 次 · ${usage.total_tokens === null ? 'Token 用量未知' : `${usage.total_tokens.toLocaleString('zh-CN')} Token${usage.complete ? '' : '（统计不完整）'}`}`
 }
 export function formatEvidenceDate(value: string) {
   return new Intl.DateTimeFormat('zh-CN', {

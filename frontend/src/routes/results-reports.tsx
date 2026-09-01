@@ -112,8 +112,8 @@ export function ResultsReports({
     select(value.id)
     setFeedback(
       value.status === 'cancelled'
-        ? '文字报告已取消，初步文本和已有章节仍保留。'
-        : '文字报告已接收；只处理冻结的已保存文字，不重新采集或初步分析。',
+        ? '报告已取消，初步文本和已有章节仍保留。'
+        : '报告请求已提交，只使用本次已有的文字，不会重新采集或分析。',
     )
   }
   return (
@@ -128,7 +128,7 @@ export function ResultsReports({
           报告
         </h2>
         <p className="text-sm leading-6 text-muted-foreground">
-          自动任务会在固定报告阶段使用已保存文本和任务目标；手动初步分析不会自动生成报告。这里也保留历史报告与明确发起的时间范围报告。
+          自动任务完成采集后会生成报告；手动初步分析不会自动生成报告。这里也保留历史报告，并支持按时间范围生成报告。
         </p>
       </CardHeader>
       <CardContent className="space-y-5 pt-5">
@@ -140,11 +140,9 @@ export function ResultsReports({
         {job && (
           <section
             className="space-y-2 rounded-lg bg-secondary/45 p-3"
-            aria-label={`任务 ${job.id} 的关联报告`}
+            aria-label={`任务 ${job.id} 的报告`}
           >
-            <p className="text-sm font-medium">
-              初步分析任务 #{job.id} 的关联报告
-            </p>
+            <p className="text-sm font-medium">初步分析任务 #{job.id} 的报告</p>
             {isActiveAnalysisJob(job.status) ? (
               <p role="status" className="text-sm">
                 初步分析仍在进行；本次手动任务不会自动提交报告。
@@ -162,22 +160,22 @@ export function ResultsReports({
                   variant="outline"
                   onClick={() => void automatic.refetch()}
                 >
-                  重试读取关联报告
+                  重试读取报告
                 </Button>
               </div>
             ) : automatic.isPending ? (
               <p role="status" className="text-sm">
-                正在读取历史关联报告；当前只读取数据，不会提交任务。
+                正在读取本任务的报告…
               </p>
             ) : automatic.data?.reports.length === 0 ? (
               <p className="text-sm">
-                本任务没有关联报告；手动初步分析不会自动生成报告。
+                本任务还没有报告；手动初步分析不会自动生成报告。
               </p>
             ) : (
               <div className="space-y-2">
                 <p className="text-sm">
-                  已保存 {job.counts.completed}/{job.counts.total}{' '}
-                  条初步文本；未成功的内容保留原因，不等待补做。
+                  已完成 {job.counts.completed}/{job.counts.total}{' '}
+                  条初步分析；失败内容保留原因，不会自动重试。
                 </p>
                 <Button
                   variant="link"
@@ -200,7 +198,7 @@ export function ResultsReports({
           onSaved={saved}
         />
         <p className="text-xs text-muted-foreground">
-          上述时间范围与提示词覆盖是独立的明确操作，不会补做采集或初步分析。
+          按时间范围或改提示词生成报告，都需要单独提交；不会重新采集或初步分析。
         </p>
         {invalidLink && (
           <div role="alert" className="space-y-2">
@@ -238,7 +236,7 @@ export function ResultsReports({
             <>
               {history.data.reports.length === 0 && (
                 <p className="mt-3 text-sm text-muted-foreground">
-                  这一页还没有文字报告。查看此页不会调用模型。
+                  还没有文字报告。
                 </p>
               )}
               <ul className="mt-2 divide-y">
@@ -255,7 +253,7 @@ export function ResultsReports({
                         ? '任务自动报告'
                         : item.trigger === 'retry'
                           ? `源自报告 #${item.parent_report_id}`
-                          : '首次入库时间范围'}{' '}
+                          : '首次发现时间范围'}{' '}
                       · {formatEvidenceDate(item.created_at)}
                     </Button>
                   </li>
@@ -334,12 +332,12 @@ export function ResultsReports({
             </div>
             <p className="text-sm text-muted-foreground">
               {report.selection.kind === 'initial_job'
-                ? `范围固定于初步分析任务 #${report.selection.job_id}`
+                ? `来自初步分析任务 #${report.selection.job_id}`
                 : report.selection.kind === 'workflow_run'
-                  ? `范围固定于自动运行 #${report.selection.run_id}，使用该运行冻结的任务目标`
-                  : `首次入库时间：${formatEvidenceDate(report.selection.first_seen_from)}（含）至 ${formatEvidenceDate(report.selection.first_seen_to)}（不含），北京时间`}
+                  ? `来自自动任务 #${report.selection.run_id}，使用当时的任务目标`
+                  : `首次发现时间：${formatEvidenceDate(report.selection.first_seen_from)}（含）至 ${formatEvidenceDate(report.selection.first_seen_to)}（不含），北京时间`}
               {report.parent_report_id !== null
-                ? ` · 基于报告 #${report.parent_report_id} 的独立新版本`
+                ? ` · 基于报告 #${report.parent_report_id} 的新版本`
                 : ''}
             </p>
             {report.initial_job_id !== null &&
@@ -372,7 +370,7 @@ export function ResultsReports({
         )}
         {!job && selectedId === null && history.isSuccess && (
           <p className="text-sm text-muted-foreground">
-            自动任务的报告会显示在这里。也可明确选择时间范围，使用已保存文字生成独立报告；不会自动补做初步分析。
+            自动任务的报告会显示在这里。也可以按时间范围，用已有分析结果生成报告；不会自动重做初步分析。
           </p>
         )}
       </CardContent>

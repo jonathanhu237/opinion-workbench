@@ -28,50 +28,50 @@ import {
 export const reportStatusLabels: Record<ReportRun['status'], string> = {
   queued: '等待生成',
   judging: '正在判断相关性',
-  composing: '正在合成报告',
+  composing: '正在生成报告',
   completed: '已生成',
-  empty: '暂无可报告材料',
+  empty: '没有相关材料',
   failed: '生成失败',
   cancelled: '报告已取消',
   interrupted: '报告已中断',
-  configuration_blocked: '模型配置受阻',
+  configuration_blocked: '模型设置不可用',
 }
 const sourceLabels: Record<ReportSource['state'], string> = {
-  unavailable: '初步证据不可用',
+  unavailable: '没有可用的初步分析',
   pending: '待判断',
   judging: '正在判断',
   relevant: '相关',
   irrelevant: '不相关',
   uncertain: '相关性不确定',
-  failed: '文字判断失败',
-  cancelled: '判断已取消',
-  interrupted: '判断已中断',
+  failed: '相关性判断失败',
+  cancelled: '相关性判断已取消',
+  interrupted: '相关性判断已中断',
 }
 const unavailableLabels: Record<
   NonNullable<ReportSource['unavailable_reason']>,
   string
 > = {
-  not_analysed: '冻结时尚未初步分析',
-  legacy_only: '冻结时只有旧版分析',
-  in_progress: '冻结时初步分析仍在进行',
+  not_analysed: '当时还没有初步分析',
+  legacy_only: '当时只有旧版分析',
+  in_progress: '当时仍在分析',
   input_incomplete: '初步分析输入不完整',
   unsupported: '初步分析输入不支持',
   failed: '初步分析失败',
   cancelled: '初步分析已取消',
   interrupted: '初步分析已中断',
-  stale_evidence: '冻结时没有兼容的有效初步证据',
+  stale_evidence: '没有可用的匹配分析结果',
 }
 const evidenceLevelLabels = {
-  search_preview: '搜索摘要预览',
-  detail_text: '详情文字（媒体部分）',
-  validated_media: '已校验媒体（文字部分）',
-  full_source: '完整来源',
+  search_preview: '搜索摘要',
+  detail_text: '详情文字',
+  validated_media: '已确认媒体',
+  full_source: '完整内容',
 } as const
 const sectionLabels: Record<ReportSection['status'], string> = {
-  queued: '等待合成',
-  running: '正在合成',
-  completed: '已保存',
-  failed: '合成失败',
+  queued: '等待生成',
+  running: '正在生成',
+  completed: '已生成',
+  failed: '生成失败',
   cancelled: '已取消',
   interrupted: '已中断',
 }
@@ -94,104 +94,102 @@ export function ReportCoverage({ report }: { report: ReportRun }) {
       <div role="status" aria-live="polite" className="space-y-2">
         <p className="font-medium">报告：{reportStatusLabels[report.status]}</p>
         <p className="text-sm">
-          冻结范围 {coverage.total} 条 · 可分析初步证据 {coverage.ready} 条 ·
-          未覆盖 {coverage.unavailable} 条
+          本次内容 {coverage.total} 条 · 可判断 {coverage.ready} 条 · 无法判断{' '}
+          {coverage.unavailable} 条
         </p>
         <p className="text-sm text-muted-foreground">
-          文字判断：已处理 {judged}/{coverage.ready} 条；相关{' '}
+          相关性判断：已处理 {judged}/{coverage.ready} 条；相关{' '}
           {coverage.relevant} · 不相关 {coverage.irrelevant} · 不确定{' '}
           {coverage.uncertain} · 技术失败 {coverage.failed} · 取消{' '}
           {coverage.cancelled} · 中断 {coverage.interrupted}
         </p>
         {coverage.ready > 0 && (
           <progress
-            aria-label="报告文字判断已处理条数"
+            aria-label="报告相关性判断已处理条数"
             value={judged}
             max={coverage.ready}
             className="h-2 w-full accent-primary"
           />
         )}
         <p className="text-sm text-muted-foreground">
-          报告合成：已保存 {nodes.composition.completed}/
-          {nodes.composition.total}{' '}
-          个已规划章节节点。后续总览节点按进度规划，不代表遗漏材料。
+          报告内容：已生成 {nodes.composition.completed}/
+          {nodes.composition.total} 个章节。
         </p>
       </div>
       {report.empty_reason && (
         <p className="rounded-lg bg-muted p-3 text-sm leading-6">
           {report.empty_reason === 'no_ready_sources'
-            ? '冻结范围内没有可分析的初步证据，本报告未调用模型。这不代表没有相关情况；原有内容与失败原因仍保留。'
-            : '已完成的文字判断没有确认相关材料，未调用报告合成；不相关和不确定内容仍保留。这不代表没有相关情况。'}
+            ? '本次没有可用的初步分析，因此没有调用模型。原始内容和失败原因仍保留。'
+            : '相关性判断没有找到足够相关的内容，因此没有生成报告。不相关和不确定的内容仍保留。'}
         </p>
       )}
       {report.queue_reason && (
         <p className="text-sm text-muted-foreground">
-          等待其他 AI 操作结束；不会抢占浏览器或重做初步分析。
+          正在等待其他 AI 操作结束。
         </p>
       )}
       {report.status === 'configuration_blocked' && (
         <p className="text-sm text-warning-foreground">
-          本次报告所需的模型配置暂不可用，未改用其他服务。请处理具体原因并核对配置后明确重试文字报告。
+          当前模型设置不可用，系统没有切换其他服务。请检查设置后重试。
         </p>
       )}
       {report.recovery_reason && (
         <p className="text-sm text-warning-foreground">
-          后端重启中断了报告；不会自动重放可能计费的请求，请明确重试。
+          报告因服务重启中断。系统不会自动重复可能收费的请求，请手动重试。
         </p>
       )}
       {report.error && (
         <p role="alert" className="text-sm text-destructive">
-          {report.error.message} 已保存的初步分析和有效章节仍保留。
+          {report.error.message} 已完成的分析和章节仍保留。
         </p>
       )}
       <details className="rounded-lg border p-3">
         <summary className="min-h-8 cursor-pointer text-sm font-medium">
-          第二阶段用量与复用
+          本次报告用量
         </summary>
         <dl className="mt-2 space-y-2 text-sm">
           <div>
-            <dt>文字相关性判断</dt>
+            <dt>相关性判断</dt>
             <dd className="text-muted-foreground">
               {analysisUsageMessage(usage.judgment)}
             </dd>
           </div>
           <div>
-            <dt>报告合成（章节与总览）</dt>
+            <dt>报告生成</dt>
             <dd className="text-muted-foreground">
               {analysisUsageMessage(usage.composition)}
             </dd>
           </div>
           <div>
-            <dt>本报告版本合计</dt>
+            <dt>本报告合计</dt>
             <dd className="text-muted-foreground">
               {analysisUsageMessage(usage.total)}
             </dd>
           </div>
         </dl>
         <p className="mt-3 text-sm text-muted-foreground">
-          复用判断 {nodes.judgments.reused} 个 · 复用合成{' '}
-          {nodes.composition.reused} 个。历史调用与 Token
-          不计入本版本；初步分析用量在第一阶段单独显示。未知用量不按零计算。
+          {nodes.judgments.reused} 条相关性判断、{nodes.composition.reused}{' '}
+          个报告章节沿用了已有结果；历史用量不计入本次。初步分析用量单独显示，未知用量不会按
+          0 计算。
         </p>
       </details>
       <details className="rounded-lg border p-3">
         <summary className="min-h-8 cursor-pointer text-sm font-medium">
-          本报告实际使用的提示词与模型
+          本报告使用的提示词与模型
         </summary>
         <p className="mt-2 text-sm">
           {report.prompt.origin === 'override'
-            ? '本次专用提示词（未更改共享默认）'
-            : `共享报告提示词 · 版本 ${report.prompt.version_id}`}
+            ? '本次专用提示词（未更改默认）'
+            : `默认报告提示词 · 版本 ${report.prompt.version_id}`}
         </p>
         <p className="mt-2 text-sm leading-6 wrap-anywhere whitespace-pre-wrap">
           {report.prompt.instructions}
         </p>
         <p className="mt-3 text-xs wrap-anywhere text-muted-foreground">
-          {report.model} · 配置版本 {report.configuration_revision} ·{' '}
-          {report.base_url}
+          {report.model} · {report.base_url}
         </p>
         <p className="mt-2 text-sm text-muted-foreground">
-          初步文本各自的实际提示词可在下方对应的已保存分析版本中查看。后来的提示词或来源编辑不会改写此报告。
+          每条初步分析使用的提示词可在下方查看。之后修改的提示词或来源不会改变这份报告。
         </p>
       </details>
     </div>
@@ -226,9 +224,9 @@ function SectionContent({
         {draft && <Badge variant="outline">部分草稿</Badge>}
       </div>
       <p className="text-xs text-muted-foreground">
-        覆盖 {section.source_count} 条相关来源
+        引用 {section.source_count} 条相关来源
         {section.reused_from_node_id !== null
-          ? ' · 复用已保存章节，不重复计入历史用量'
+          ? ' · 沿用已有章节，不重复计入用量'
           : ''}
       </p>
       {document && (
@@ -305,7 +303,7 @@ function SectionContent({
       )}
       {!document && (
         <p className="text-sm text-muted-foreground">
-          本章节尚无有效合成文字。已冻结的来源不会因此删除。
+          本章节暂时没有可显示的文字；相关来源仍保留。
         </p>
       )}
     </article>
@@ -400,9 +398,6 @@ export function ReportDetails({
         <h4 id="report-leaves-heading" className="font-medium">
           全部详细章节
         </h4>
-        <p className="text-sm text-muted-foreground">
-          按页保留所有相关来源的详细文字。总览不会代替或截去后续章节。
-        </p>
         {leaves.isPending ? (
           <p role="status">正在读取详细章节…</p>
         ) : leaves.isError ? (
@@ -411,7 +406,7 @@ export function ReportDetails({
           <>
             {leaves.data.sections.length === 0 && (
               <p className="text-sm text-muted-foreground">
-                这一页尚无已规划的详细章节。
+                暂时没有详细章节。
               </p>
             )}
             {leaves.data.sections.map((section) => (
@@ -435,10 +430,10 @@ export function ReportDetails({
       </section>
       <details className="rounded-lg border p-3" open>
         <summary className="min-h-8 cursor-pointer font-medium">
-          冻结来源与逐条相关性
+          报告来源与相关性
         </summary>
         <p className="mt-2 text-sm leading-6 text-muted-foreground">
-          这是首次入库范围与当时证据，不是事件发生日期。不可用项不会等待后来分析或自动补做；报告重试仍使用原有冻结文本。
+          这是首次发现时间范围和当时的证据，不是事件发生日期。没有可用分析的内容不会自动重做；重试会继续使用本次报告的内容。
         </p>
         {sources.isPending ? (
           <p role="status">正在读取报告来源…</p>
@@ -462,12 +457,12 @@ export function ReportDetails({
                     <Badge variant="outline">{sourceLabels[item.state]}</Badge>
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    首次入库 {formatEvidenceDate(item.first_seen_at)} ·
+                    首次发现 {formatEvidenceDate(item.first_seen_at)} ·
                     原文发布时间 {item.source.published_at_text || '未知'}
                   </p>
                   {item.evidence_coverage && (
                     <p className="text-xs text-muted-foreground">
-                      证据：{evidenceLevelLabels[item.evidence_coverage.level]}{' '}
+                      内容：{evidenceLevelLabels[item.evidence_coverage.level]}{' '}
                       · 文字
                       {item.evidence_coverage.text_complete ? '完整' : '部分'} ·
                       图片 {item.evidence_coverage.image.ready}/
@@ -478,7 +473,7 @@ export function ReportDetails({
                         item.evidence_coverage.video.unknown +
                         item.evidence_coverage.audio.unknown >
                       0
-                        ? ' · 媒体清单仍有未知项'
+                        ? ' · 部分媒体尚未确认'
                         : ''}
                     </p>
                   )}
@@ -490,7 +485,7 @@ export function ReportDetails({
                   {item.unavailable_reason && (
                     <p className="text-sm text-muted-foreground">
                       {unavailableLabels[item.unavailable_reason]}
-                      ；未将此来源当作相关或不相关。
+                      ；因此没有判断为相关或不相关。
                     </p>
                   )}
                   {item.error && (
@@ -512,8 +507,8 @@ export function ReportDetails({
                       preventScrollReset
                     >
                       {item.initial_attempt_id === null
-                        ? '查看原有内容与历史'
-                        : '查看此版初步文本与提示词'}
+                        ? '查看内容和历史'
+                        : '查看本次初步分析'}
                     </Link>
                     <Link
                       className={buttonVariants({
@@ -522,7 +517,7 @@ export function ReportDetails({
                       })}
                       to={`/collection-runs/${item.source.source_run_id}`}
                     >
-                      查看采集来源 #{item.source.source_run_id}
+                      查看采集记录 #{item.source.source_run_id}
                     </Link>
                   </div>
                 </li>

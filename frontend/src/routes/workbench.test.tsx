@@ -116,13 +116,19 @@ describe('homepage workbench', () => {
       await screen.findByRole('heading', { name: '当前运行正常' }),
     ).toBeInTheDocument()
     expect(screen.getByText('还没有可阅读的舆情报告')).toBeInTheDocument()
-    expect(screen.getByText('暂无可执行的自动任务计划。')).toBeInTheDocument()
+    expect(screen.getByText('暂无可执行的自动任务。')).toBeInTheDocument()
     expect(screen.getByText('5/5 已连接')).toBeInTheDocument()
     expect(screen.queryByText('需要查看')).toBeNull()
     expect(screen.queryByText('今日发现', { exact: true })).toBeNull()
     expect(screen.queryByText('待跟进', { exact: true })).toBeNull()
     expect(screen.queryByText('已处理', { exact: true })).toBeNull()
     expect(screen.queryByText('风险评分', { exact: true })).toBeNull()
+    expect(screen.queryByText('Duty signal')).toBeNull()
+    expect(screen.queryByText(/归属|健康状态|投影/u)).toBeNull()
+    expect(
+      screen.queryByText('自动任务、计划、报告和平台连接均正常。'),
+    ).toBeNull()
+    expect(screen.queryByText(/当前没有运行中/u)).toBeNull()
   })
 
   it('prioritizes every attention owner while keeping the last report readable', async () => {
@@ -236,6 +242,11 @@ describe('homepage workbench', () => {
       await screen.findByRole('heading', { name: '当前有 6 项需要查看' }),
     ).toBeInTheDocument()
     expect(
+      screen.queryByText(
+        '问题会在同一归属出现更新的健康状态后自动从这里消失。',
+      ),
+    ).toBeNull()
+    expect(
       screen.getByText(
         '多条来源提及社区道路积水，具体地点和发生时间仍需核实。',
       ),
@@ -243,9 +254,7 @@ describe('homepage workbench', () => {
     expect(
       screen.getByText('报告生成未正常结束', { exact: false }),
     ).toBeInTheDocument()
-    expect(
-      screen.getByText('来源判断已完成，正在组织可读报告'),
-    ).toBeInTheDocument()
+    expect(screen.getByText('相关性已判断，正在生成报告')).toBeInTheDocument()
     expect(screen.getByText('社区自动值守')).toBeInTheDocument()
     expect(screen.getByText('下一班自动任务')).toBeInTheDocument()
     expect(screen.getAllByRole('progressbar')).toHaveLength(3)
@@ -288,9 +297,11 @@ describe('homepage workbench', () => {
     renderWorkbench()
 
     expect(
-      await screen.findByText('本次已完成判断，没有来源进入报告正文。'),
+      await screen.findByText('这次没有足够相关的来源，未生成报告正文。'),
     ).toBeInTheDocument()
-    expect(screen.getByText(/不代表任务失败/u)).toBeInTheDocument()
+    expect(
+      screen.getByText(/任务已完成，但没有足够相关的内容/u),
+    ).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: '需要查看' })).toBeNull()
   })
 

@@ -43,18 +43,15 @@ export function FrozenAnalysisPrompts({ job }: { job: AnalysisJob }) {
   return (
     <details className="rounded-lg border p-3">
       <summary className="min-h-8 cursor-pointer text-sm font-medium">
-        本任务实际使用的提示词与模型
+        本任务使用的提示词与模型
       </summary>
       <p className="mt-3 text-sm [overflow-wrap:anywhere]">
-        {job.model} · 配置版本 {job.configuration_revision}
-        <br />
-        {job.base_url}
+        {job.model} · {job.base_url}
       </p>
       {[job.initial_prompt, job.report_prompt].map((prompt) => (
         <section key={prompt.stage} className="mt-4">
           <h4 className="text-sm font-medium">
-            {prompt.stage === 'initial' ? '初步分析' : '报告'}提示词 · 版本{' '}
-            {prompt.id}
+            {prompt.stage === 'initial' ? '初步分析' : '报告'}提示词
           </h4>
           <p className="mt-2 text-sm leading-6 [overflow-wrap:anywhere] whitespace-pre-wrap">
             {prompt.instructions}
@@ -84,7 +81,7 @@ export function SavedAnalysisEvidence({
             {attempt.source.title}
           </h3>
           <p className="mt-1 text-xs text-muted-foreground">
-            分析版本 {attempt.id} · 首次入库{' '}
+            第 {attempt.id} 次分析 · 首次发现{' '}
             {formatEvidenceDate(attempt.first_seen_at)}
           </p>
         </div>
@@ -166,7 +163,7 @@ export function SavedAnalysisEvidence({
       )}
       <p className="text-xs text-muted-foreground">
         {attempt.reused_from_attempt_id !== null
-          ? `复用兼容分析版本 ${attempt.reused_from_attempt_id}；未重复计入原调用用量。`
+          ? `沿用第 ${attempt.reused_from_attempt_id} 次分析；本次未重复计入用量。`
           : attempt.attempted
             ? attempt.usage
               ? `本次 ${attempt.usage.total_tokens.toLocaleString('zh-CN')} Token`
@@ -176,52 +173,52 @@ export function SavedAnalysisEvidence({
       {attempt.input && (
         <details className="rounded-lg border p-3">
           <summary className="min-h-8 cursor-pointer text-sm font-medium">
-            已保存的正文与输入覆盖
+            正文和媒体信息
           </summary>
           <dl className="my-3 grid gap-2 text-sm sm:grid-cols-2">
             {attempt.input.coverage && (
               <div>
-                <dt className="text-muted-foreground">证据级别</dt>
+                <dt className="text-muted-foreground">内容来源</dt>
                 <dd>
                   {
                     {
-                      search_preview: '搜索摘要预览',
-                      detail_text: '详情文字（媒体部分）',
-                      validated_media: '已校验媒体（文字部分）',
-                      full_source: '完整来源',
+                      search_preview: '搜索摘要',
+                      detail_text: '详情文字',
+                      validated_media: '已确认媒体',
+                      full_source: '完整内容',
                     }[attempt.input.coverage.level]
                   }
                 </dd>
               </div>
             )}
             <div>
-              <dt className="text-muted-foreground">正文覆盖</dt>
+              <dt className="text-muted-foreground">正文完整度</dt>
               <dd>
                 {
-                  { complete: '完整', partial: '部分', unavailable: '不可用' }[
+                  { complete: '完整', partial: '部分', unavailable: '没有' }[
                     attempt.input.text.coverage
                   ]
                 }
               </dd>
             </div>
             <div>
-              <dt className="text-muted-foreground">媒体清单</dt>
+              <dt className="text-muted-foreground">媒体是否齐全</dt>
               <dd>
                 {attempt.input.media_inventory_complete
-                  ? '已确认完整'
-                  : '尚未确认完整'}{' '}
+                  ? '已确认齐全'
+                  : '还未确认齐全'}{' '}
                 · {attempt.input.assets.length} 项
               </dd>
             </div>
           </dl>
           {attempt.input.coverage && (
             <p className="text-sm text-muted-foreground">
-              文字来源：
+              文字来自：
               {attempt.input.coverage.text_origin === 'search_preview'
                 ? '搜索结果标题/摘要'
                 : '详情页'}
-              {' · '}图片已校验 {attempt.input.coverage.image.ready}/
-              {attempt.input.coverage.image.expected}，视频已校验{' '}
+              {' · '}图片已获取 {attempt.input.coverage.image.ready}/
+              {attempt.input.coverage.image.expected}，视频已获取{' '}
               {attempt.input.coverage.video.ready}/
               {attempt.input.coverage.video.expected}，音频已确认{' '}
               {attempt.input.coverage.audio.ready}/
@@ -230,7 +227,7 @@ export function SavedAnalysisEvidence({
                 attempt.input.coverage.video.unknown +
                 attempt.input.coverage.audio.unknown >
               0
-                ? '；仍有未能枚举的媒体'
+                ? '；还有媒体未确认'
                 : ''}
             </p>
           )}
@@ -242,8 +239,8 @@ export function SavedAnalysisEvidence({
           </p>
           {attempt.input.issues.length > 0 && (
             <p className="mt-3 text-sm text-warning-foreground">
-              输入存在 {attempt.input.issues.length}{' '}
-              项覆盖限制；不能视为完整理解。
+              这条内容有 {attempt.input.issues.length}{' '}
+              处信息不完整，不能当作完整内容理解。
             </p>
           )}
           {attempt.input.assets.length > 0 && (
@@ -254,13 +251,13 @@ export function SavedAnalysisEvidence({
                   {asset.kind === 'image' ? '图片' : '视频'} ·{' '}
                   {
                     {
-                      ready: '已校验',
+                      ready: '已获取',
                       unavailable: '不可用',
                       unsupported: '暂不支持',
                       failed: '获取失败',
                     }[asset.status]
                   }{' '}
-                  · 覆盖
+                  · 信息完整度
                   {
                     { complete: '完整', partial: '部分', unknown: '未知' }[
                       asset.coverage
@@ -273,7 +270,7 @@ export function SavedAnalysisEvidence({
             </ul>
           )}
           <p className="mt-3 text-xs text-muted-foreground">
-            仅保存文本及媒体校验信息，不保存原始图片和视频。重新分析可能需要再次获取媒体。
+            仅保存文字和媒体状态，不保存原始图片和视频。重新分析时可能再次获取媒体。
           </p>
         </details>
       )}
@@ -405,7 +402,7 @@ export function ResultEvidence({
             <dl className="grid gap-3 text-sm sm:grid-cols-2">
               <div>
                 <dt className="text-muted-foreground">
-                  首次入库时间 · 北京时间
+                  首次发现时间 · 北京时间
                 </dt>
                 <dd className="mt-1">
                   {formatEvidenceDate(result.first_seen_at)}
@@ -415,7 +412,7 @@ export function ResultEvidence({
                 <dt className="text-muted-foreground">原文显示的发布时间</dt>
                 <dd className="mt-1">
                   {result.source.published_at_text || '未知'}
-                  （不等于首次入库时间）
+                  （平台显示时间可能与首次发现时间不同）
                 </dd>
               </div>
             </dl>
@@ -436,16 +433,16 @@ export function ResultEvidence({
             </div>
             {result.legacy_count > 0 && (
               <p className="text-sm text-muted-foreground">
-                旧版结果按当时监控范围判断，不能当作新版通用初步分析。历史版本仍可查看。
+                旧版结果只适用于当时的监控范围，不能替代现在的分析。历史版本仍可查看。
               </p>
             )}
           </section>
         )}
-        <section aria-label="初步分析版本" className="space-y-3 border-t pt-4">
-          <h3 className="font-medium">已保存的分析版本</h3>
+        <section aria-label="初步分析记录" className="space-y-3 border-t pt-4">
+          <h3 className="font-medium">分析记录</h3>
           {history.isPending && (
             <p role="status" className="text-sm">
-              正在读取分析版本…
+              正在读取分析记录…
             </p>
           )}
           {history.isError && (
@@ -454,9 +451,7 @@ export function ResultEvidence({
             </p>
           )}
           {history.data?.total === 0 && (
-            <p className="text-sm text-muted-foreground">
-              尚无新版初步分析。查看此页不会开始分析。
-            </p>
+            <p className="text-sm text-muted-foreground">还没有初步分析。</p>
           )}
           <div className="flex flex-wrap gap-2">
             {history.data?.items.map((item) => (
@@ -467,13 +462,13 @@ export function ResultEvidence({
                 aria-pressed={validAttempt?.id === item.id}
                 onClick={() => change('attempt', item.id)}
               >
-                版本 {item.id} · {resultStateLabels[item.status]}
+                第 {item.id} 次 · {resultStateLabels[item.status]}
               </Button>
             ))}
           </div>
           {history.data && history.data.total > ANALYSIS_PAGE_SIZE && (
             <ResultsPagination
-              label="分析版本"
+              label="分析记录"
               offset={offset}
               limit={ANALYSIS_PAGE_SIZE}
               total={history.data.total}
@@ -492,7 +487,7 @@ export function ResultEvidence({
           )}
           {attempt && !validAttempt && (
             <p role="alert" className="text-sm text-destructive">
-              此分析版本不属于当前内容，未展示。
+              这条分析不属于当前内容，无法显示。
             </p>
           )}
           {validAttempt && (
@@ -508,7 +503,7 @@ export function ResultEvidence({
         </section>
         <details className="rounded-lg border p-3">
           <summary className="min-h-8 cursor-pointer font-medium">
-            采集来源 · {result?.origin_count ?? '…'} 次
+            发现来源 · {result?.origin_count ?? '…'} 次
           </summary>
           {origins.isError && (
             <p role="alert" className="mt-3 text-sm text-destructive">
@@ -547,7 +542,7 @@ export function ResultEvidence({
         </details>
         <details className="rounded-lg border p-3">
           <summary className="min-h-8 cursor-pointer font-medium">
-            旧版分析与报告 · {result?.legacy_count ?? '…'} 条
+            旧版分析和报告 · {result?.legacy_count ?? '…'} 条
           </summary>
           {legacy.isError && (
             <p role="alert" className="mt-3 text-sm text-destructive">
@@ -571,10 +566,10 @@ export function ResultEvidence({
                 <p className="text-muted-foreground">
                   旧版分析 {item.item_id} ·{' '}
                   {item.status === 'completed'
-                    ? '已完成范围判断'
-                    : '未完成的旧版尝试'}
+                    ? '已完成相关性判断'
+                    : '旧版未完成'}
                   {item.reused_from_item_id !== null
-                    ? ` · 复用旧版 ${item.reused_from_item_id}`
+                    ? ` · 沿用旧版 ${item.reused_from_item_id}`
                     : ''}
                 </p>
               </li>

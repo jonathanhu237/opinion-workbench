@@ -74,11 +74,11 @@ describe('AI settings form', () => {
     expect(mask).toBeVisible()
     expect(mask).toHaveAttribute('aria-hidden', 'true')
     expect(mask).toHaveClass('text-foreground', 'pointer-events-none')
-    expect(screen.getByLabelText('Base URL')).toHaveValue(saved.base_url)
+    expect(screen.getByLabelText('服务地址')).toHaveValue(saved.base_url)
     expect(screen.getByLabelText('模型名称')).toHaveValue(saved.model)
     expect(screen.getByRole('button', { name: '保存' })).toBeDisabled()
     expect(screen.getByRole('button', { name: '测试连接' })).toBeEnabled()
-    expect(screen.getByText(/已配置，留空保留/)).toBeVisible()
+    expect(screen.getByText(/已配置，留空即可保留/)).toBeVisible()
     expect(screen.queryByText('请先保存配置')).toBeNull()
     expect(testConnection).not.toHaveBeenCalled()
     expect(saveSettings).not.toHaveBeenCalled()
@@ -94,14 +94,14 @@ describe('AI settings form', () => {
     expect(screen.queryByText(savedKeyMask)).toBeNull()
     await user.click(await screen.findByRole('button', { name: '保存' }))
     expect(
-      await screen.findByText('请输入有效的 HTTPS Base URL。'),
+      await screen.findByText('请输入有效的 HTTPS 服务地址。'),
     ).toBeVisible()
     expect(screen.getByLabelText('API Key')).toHaveAttribute(
       'aria-invalid',
       'true',
     )
     expect(screen.getByLabelText('API Key')).toHaveAccessibleDescription(
-      /首次保存或更改 Base URL/,
+      /首次保存或更换服务地址/,
     )
     expect(screen.getByLabelText('模型名称')).toHaveAttribute(
       'aria-invalid',
@@ -149,7 +149,7 @@ describe('AI settings form', () => {
   it('requires a newly entered key for an endpoint change and prevents testing dirty values', async () => {
     const user = userEvent.setup()
     renderSettings()
-    const endpoint = await screen.findByLabelText('Base URL')
+    const endpoint = await screen.findByLabelText('服务地址')
     await user.clear(endpoint)
     await user.type(endpoint, 'https://other.example.com/v1')
     expect(screen.getByLabelText('API Key')).toHaveValue('')
@@ -158,9 +158,7 @@ describe('AI settings form', () => {
     expect(screen.getByText('请先保存配置')).toBeVisible()
     await user.click(screen.getByRole('button', { name: '保存' }))
     expect(
-      await screen.findByText(
-        '首次保存或更改 Base URL 时，请重新输入 API Key。',
-      ),
+      await screen.findByText('首次保存或更换服务地址时，请重新输入 API Key。'),
     ).toBeVisible()
     expect(saveSettings).not.toHaveBeenCalled()
     expect(testConnection).not.toHaveBeenCalled()
@@ -178,7 +176,7 @@ describe('AI settings form', () => {
     const user = userEvent.setup()
     const { queryClient, unmount } = renderSettings()
     await user.type(await screen.findByLabelText('API Key'), key)
-    await user.type(screen.getByLabelText('Base URL'), saved.base_url ?? '')
+    await user.type(screen.getByLabelText('服务地址'), saved.base_url ?? '')
     await user.type(screen.getByLabelText('模型名称'), saved.model ?? '')
     await user.click(screen.getByRole('button', { name: '保存' }))
     expect(
@@ -271,7 +269,7 @@ describe('AI settings form', () => {
     expect(
       await screen.findByRole('button', { name: '测试中…' }),
     ).toBeDisabled()
-    expect(screen.getByLabelText('Base URL')).toBeDisabled()
+    expect(screen.getByLabelText('服务地址')).toBeDisabled()
     expect(screen.getByText(savedKeyMask)).toHaveAttribute(
       'data-disabled',
       'true',
@@ -319,15 +317,13 @@ describe('AI settings form', () => {
     expect(await screen.findByRole('status')).toHaveTextContent(
       '连接成功，仅验证文本响应。',
     )
-    const endpoint = screen.getByLabelText('Base URL')
+    const endpoint = screen.getByLabelText('服务地址')
     await user.clear(endpoint)
     await user.type(endpoint, 'https://other.example.com/v1')
     expect(screen.queryByText('连接成功，仅验证文本响应。')).toBeNull()
     await user.click(screen.getByRole('button', { name: '保存' }))
     expect(
-      await screen.findByText(
-        '首次保存或更改 Base URL 时，请重新输入 API Key。',
-      ),
+      await screen.findByText('首次保存或更换服务地址时，请重新输入 API Key。'),
     ).toBeVisible()
     expect(screen.queryByText('连接成功，仅验证文本响应。')).toBeNull()
     expect(screen.getByRole('button', { name: '测试连接' })).toBeDisabled()
@@ -359,13 +355,13 @@ describe('AI settings form', () => {
     )
     expect(screen.getByRole('button', { name: '测试连接' })).toBeDisabled()
     await user.type(screen.getByLabelText('API Key'), key)
-    await user.type(screen.getByLabelText('Base URL'), saved.base_url ?? '')
+    await user.type(screen.getByLabelText('服务地址'), saved.base_url ?? '')
     await user.type(screen.getByLabelText('模型名称'), saved.model ?? '')
     fetchSettings.mockResolvedValue(saved)
     await user.click(screen.getByRole('button', { name: '保存' }))
     expect(await screen.findByRole('status')).toHaveTextContent('已保存。')
     expect(screen.getByLabelText('API Key')).toHaveValue('')
-    expect(screen.getByText(/已配置，留空保留/)).toBeVisible()
+    expect(screen.getByText(/已配置，留空即可保留/)).toBeVisible()
     expect(queryClient.getQueryData(AI_SETTINGS_QUERY_KEY)).toEqual(saved)
     expect(queryClient.getMutationCache().getAll()).toEqual([])
     expect(testConnection).not.toHaveBeenCalled()

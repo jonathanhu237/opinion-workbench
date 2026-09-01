@@ -565,7 +565,7 @@ describe('manual collection summaries', () => {
     )
     await user.click(await screen.findByText('内容分析 · 3 条'))
     expect(screen.getByText('无法确认具体地点。')).toBeVisible()
-    expect(screen.getByText('复用已有分析')).toBeVisible()
+    expect(screen.getByText('使用已有分析')).toBeVisible()
     expect(screen.getByText(/本条未调用模型/)).toBeVisible()
     expect(mockedStart).not.toHaveBeenCalled()
   })
@@ -767,7 +767,7 @@ describe('manual collection summaries', () => {
     )
     renderRun('/collection-runs/70?summary=4')
     expect(await screen.findByRole('alert')).toHaveTextContent(
-      '汇总与原文记录不一致',
+      '汇总和原文记录不一致',
     )
     expect(screen.queryByText('未验证的汇总不应展示')).toBeNull()
     expect(screen.queryByText('未验证的段落')).toBeNull()

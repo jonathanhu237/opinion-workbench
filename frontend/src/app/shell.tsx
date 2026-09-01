@@ -196,12 +196,11 @@ export function AppShell() {
           dispatch({ type: 'connected', data })
         }
       })
-      .catch((error: unknown) => {
+      .catch(() => {
         if (!controller.signal.aborted) {
           dispatch({
             type: 'unavailable',
-            message:
-              error instanceof Error ? error.message : '无法连接本机后端服务',
+            message: '无法连接服务，请确认后端已启动。',
           })
         }
       })

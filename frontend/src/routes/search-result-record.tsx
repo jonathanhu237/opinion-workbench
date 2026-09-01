@@ -29,7 +29,7 @@ export function SearchResultRecord({
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <Badge variant={isNew ? 'secondary' : 'outline'}>
-            {isNew ? '新增' : '历史内容再次命中'}
+            {isNew ? '新增' : '之前发现过'}
           </Badge>
           <h3 className="mt-2 text-base leading-7 font-semibold text-foreground">
             {result.title}
@@ -78,7 +78,7 @@ export function SearchResultRecord({
 
       <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-3">
         <div>
-          <dt className="text-xs text-muted-foreground">命中搜索词</dt>
+          <dt className="text-xs text-muted-foreground">匹配的搜索词</dt>
           <dd className="mt-1 flex flex-wrap gap-1.5">
             {result.matched_terms.map((term) => (
               <Badge key={term} variant="outline" className="font-normal">
@@ -92,9 +92,9 @@ export function SearchResultRecord({
           <dd className="mt-1">{result.published_at_text || '未显示'}</dd>
         </div>
         <div>
-          <dt className="text-xs text-muted-foreground">发现时间</dt>
+          <dt className="text-xs text-muted-foreground">发现记录</dt>
           <dd className="mt-1">
-            首次 {formatLocalDate(result.first_seen_at)} · 最近{' '}
+            首次 {formatLocalDate(result.first_seen_at)} · 最近一次{' '}
             {formatLocalDate(result.last_seen_at)}
           </dd>
         </div>

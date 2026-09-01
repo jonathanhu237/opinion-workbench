@@ -50,7 +50,7 @@ function formSchema(saved: Settings) {
       base_url: z
         .string()
         .trim()
-        .max(2048, 'Base URL 过长。')
+        .max(2048, '服务地址过长。')
         .refine((value) => {
           try {
             const url = new URL(value)
@@ -64,7 +64,7 @@ function formSchema(saved: Settings) {
           } catch {
             return false
           }
-        }, '请输入有效的 HTTPS Base URL。'),
+        }, '请输入有效的 HTTPS 服务地址。'),
       model: z
         .string()
         .trim()
@@ -81,7 +81,7 @@ function formSchema(saved: Settings) {
         context.addIssue({
           code: 'custom',
           path: ['api_key'],
-          message: '首次保存或更改 Base URL 时，请重新输入 API Key。',
+          message: '首次保存或更换服务地址时，请重新输入 API Key。',
         })
       }
     })
@@ -250,8 +250,8 @@ function SettingsForm({ saved }: { saved: Settings }) {
                 </div>
                 <FieldDescription id="ai-key-help">
                   {saved.has_api_key
-                    ? '已配置，留空保留；更改 Base URL 需重新输入。'
-                    : '密钥仅保存在本机后端，不会回显。'}
+                    ? '已配置，留空即可保留；更换服务地址时请重新输入。'
+                    : '密钥只保存在本机，不会显示。'}
                 </FieldDescription>
                 <FieldError id="ai-key-error" errors={[fieldState.error]} />
               </Field>
@@ -262,7 +262,7 @@ function SettingsForm({ saved }: { saved: Settings }) {
             control={form.control}
             render={({ field, fieldState }) => (
               <Field data-invalid={fieldState.invalid}>
-                <FieldLabel htmlFor="ai-base-url">Base URL</FieldLabel>
+                <FieldLabel htmlFor="ai-base-url">服务地址</FieldLabel>
                 <Input
                   {...field}
                   id="ai-base-url"

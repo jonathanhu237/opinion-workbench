@@ -54,8 +54,8 @@ export function ResultsConfirmation({
           <DialogTitle>{confirmation.label}</DialogTitle>
           <DialogDescription>
             {all
-              ? `当前全库有 ${confirmation.count} 条从未尝试初步分析的内容，包含历史内容，不受筛选或分页影响。提交时冻结实际成员，已在其他任务中的内容不会重复处理。`
-              : `明确${confirmation.request.selection.kind === 'retry' ? '重试' : confirmation.request.selection.kind === 'reanalysis' ? '重新分析' : '分析'}所选内容；已有结果和历史版本继续保留。`}
+              ? `当前有 ${confirmation.count} 条内容还没做初步分析，包括历史内容。提交后按这批内容处理，已在其他任务中的内容不会重复处理。`
+              : `将${confirmation.request.selection.kind === 'retry' ? '重试' : confirmation.request.selection.kind === 'reanalysis' ? '重新分析' : '分析'}所选内容；已有结果和历史版本会保留。`}
           </DialogDescription>
         </DialogHeader>
         <dl className="grid gap-3 rounded-lg border p-3 text-sm">
@@ -66,9 +66,7 @@ export function ResultsConfirmation({
             </dd>
           </div>
           <div>
-            <dt className="text-muted-foreground">
-              模型 · 配置版本 {confirmation.provider.revision}
-            </dt>
+            <dt className="text-muted-foreground">模型</dt>
             <dd className="mt-1 [overflow-wrap:anywhere]">
               {confirmation.provider.model}
             </dd>
@@ -76,8 +74,8 @@ export function ResultsConfirmation({
         </dl>
         <p className="text-sm leading-6 text-muted-foreground">
           正文、图片和视频将发送到上述模型服务，可能消耗 API
-          额度。每条成功的初步分析都会单独保存，不以报告成功为前提。
-          本次手动操作不会自动判断相关性或生成报告。失败项不会补做，后来入库的内容不加入本任务。
+          额度。每条分析结果都会单独保存，与报告是否生成无关。
+          手动分析不会自动判断相关性或生成报告。失败项不会自动重做，新采集内容不加入本次任务。
           {confirmation.request.force_refresh
             ? '本次将重新获取内容并分析，不复用旧版理解。'
             : '仅复用兼容的已保存理解，不会把未读媒体当成完整内容。'}
@@ -89,8 +87,7 @@ export function ResultsConfirmation({
           ].map((prompt) => (
             <details key={prompt.stage} className="rounded-lg border p-3">
               <summary className="min-h-8 cursor-pointer font-medium">
-                {prompt.stage === 'initial' ? '初步分析' : '报告'}提示词 · 版本{' '}
-                {prompt.id}
+                {prompt.stage === 'initial' ? '初步分析' : '报告'}提示词
               </summary>
               <p className="mt-2 text-sm leading-6 [overflow-wrap:anywhere] whitespace-pre-wrap">
                 {prompt.instructions}
@@ -105,7 +102,7 @@ export function ResultsConfirmation({
         )}
         {ambiguous && (
           <p role="status" className="text-sm text-warning-foreground">
-            上次提交结果尚不确定。继续确认会使用同一请求标识查询或接续确认，不会新建重复任务。
+            上次提交结果不确定。再次确认可以继续上次操作，不会重复创建任务。
           </p>
         )}
         {error && (

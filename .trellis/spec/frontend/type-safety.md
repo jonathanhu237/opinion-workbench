@@ -30,6 +30,23 @@ The frontend uses TypeScript project references with unused-symbol and fallthrou
   before mapping the failure to a field or product message. A known code on the wrong status is
   protocol drift, not an actionable field error, and must become the boundary's `invalid_response`
   equivalent.
+- Some existing boundaries validate the exact `(HTTP status, code, message)` triple. Treat the
+  message in those contract tables as wire data, not editable UI copy. Humanize it only after the
+  response has passed validation, using the validated error code in the route or presenter. Editing
+  only the frontend contract message makes an unchanged backend response look like
+  `invalid_response`.
+
+```ts
+// Wrong: changes the decoder's expected wire value without changing the backend.
+productErrorContracts.search_batch_not_paused.message =
+  '这次采集不需要继续。'
+
+// Correct: preserve the exact wire contract, then choose plain UI copy by validated code.
+const copy =
+  error.code === 'search_batch_not_paused'
+    ? '这次采集不需要继续。'
+    : error.message
+```
 
 ---
 

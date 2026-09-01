@@ -294,7 +294,7 @@ function RuleEditorDialog({ editor, onClose, onSaved }: RuleEditorDialogProps) {
             {editingRule === null ? '新建监控规则' : '编辑监控规则'}
           </DialogTitle>
           <DialogDescription id="rule-editor-description">
-            分别填写监控对象和舆情关键词，保存前查看生成的搜索词。
+            填写后可以预览要搜索的词。
           </DialogDescription>
         </DialogHeader>
 
@@ -345,7 +345,7 @@ function RuleEditorDialog({ editor, onClose, onSaved }: RuleEditorDialogProps) {
                     disabled={pending}
                   />
                   <FieldDescription id="rule-objects-description">
-                    每行一个，至少填写一项。名称或完整短语中的空格会保留。
+                    每行填写一个对象，至少填写一项。
                   </FieldDescription>
                   <FieldError
                     id="rule-objects-error"
@@ -378,7 +378,7 @@ function RuleEditorDialog({ editor, onClose, onSaved }: RuleEditorDialogProps) {
                     disabled={pending}
                   />
                   <FieldDescription id="rule-issues-description">
-                    每行一个，留空时只搜索监控对象；填写后与每个监控对象逐一组合。
+                    每行填写一个；留空时只搜索监控对象，填写后会逐一组合。
                   </FieldDescription>
                   <FieldError
                     id="rule-issues-error"
@@ -396,7 +396,7 @@ function RuleEditorDialog({ editor, onClose, onSaved }: RuleEditorDialogProps) {
                 生成的搜索词 · 共 {preview.count} 个
               </h3>
               <p className="text-xs leading-5 text-muted-foreground">
-                按下列顺序分别搜索。组合表达搜索意图，不保证平台严格同时匹配。
+                系统会按顺序搜索这些词。
               </p>
               {preview.count > MAX_TERMS_PER_RULE ? (
                 <p className="text-sm text-destructive">
@@ -664,7 +664,7 @@ export function MonitoringRules() {
             监控规则
           </h2>
           <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-            设置监控对象和可选舆情关键词，预览组合后分别搜索。
+            填写对象和关键词，查看要搜索的词。
           </p>
         </div>
         <Button
@@ -711,7 +711,7 @@ export function MonitoringRules() {
               role="alert"
               className="border-b border-warning/20 bg-warning/8 px-4 py-3 text-sm leading-6 text-foreground sm:px-6"
             >
-              {queryError} 当前仍显示上次读取的内容。
+              {queryError} 页面暂时保留之前显示的内容。
             </div>
           )}
 

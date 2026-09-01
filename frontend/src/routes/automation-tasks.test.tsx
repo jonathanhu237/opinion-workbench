@@ -121,7 +121,12 @@ describe('automation task route', () => {
     ).toBeVisible()
     expect(
       within(screen.getByRole('alertdialog')).getByText(
-        /采集 → 初步分析 → 相关性判断与报告/u,
+        /按顺序采集、分析并生成报告/u,
+      ),
+    ).toBeVisible()
+    expect(
+      within(screen.getByRole('alertdialog')).getByText(
+        /不会改变下一次计划时间/u,
       ),
     ).toBeVisible()
   })
@@ -137,10 +142,12 @@ describe('automation task route', () => {
     )
 
     expect(screen.getByRole('dialog', { name: '新建自动任务' })).toBeVisible()
-    expect(screen.getByText('固定工作流')).toBeVisible()
-    expect(screen.getByText('采集候选条目')).toBeVisible()
+    expect(screen.getByText('处理流程')).toBeVisible()
+    expect(screen.getByText('采集内容')).toBeVisible()
     expect(screen.getByText('初步理解内容')).toBeVisible()
     expect(screen.getByText('相关性判断与报告')).toBeVisible()
+    expect(screen.queryByText('每次任务都会按这个顺序处理。')).toBeNull()
+    expect(screen.queryByText(/固定工作流/u)).toBeNull()
     expect(
       screen.getByRole('button', { name: '创建停用的自动任务' }),
     ).toBeEnabled()
@@ -178,7 +185,8 @@ describe('automation run routes', () => {
     expect(
       await screen.findByRole('heading', { name: /运行记录/u }),
     ).toBeVisible()
-    expect(screen.getByText(/固定链路的每次接受运行/u)).toBeVisible()
+    expect(screen.getByText(/每次运行都会保留任务版本/u)).toBeVisible()
+    expect(screen.queryByText(/冻结|修订|运行快照|已保存产物/u)).toBeNull()
     expect(screen.getByText(/采集 · 已完成/u)).toBeVisible()
     expect(screen.getByText(/计划记录/u)).toBeVisible()
   })
@@ -190,8 +198,11 @@ describe('automation run routes', () => {
       [{ path: '/automation-runs/:runId', element: <AutomationRunDetail /> }],
       '/automation-runs/101',
     )
-    expect(await screen.findByText('本轮没有新增舆情材料')).toBeVisible()
-    expect(screen.getByRole('link', { name: /打开本轮报告/u })).toHaveAttribute(
+    expect(await screen.findAllByText('本轮没有新内容')).toHaveLength(2)
+    expect(screen.getByText('这次没有新的可分析内容')).toBeVisible()
+    expect(screen.getByText('处理过程')).toBeVisible()
+    expect(screen.getByText('本次任务设置')).toBeVisible()
+    expect(screen.getByRole('link', { name: /查看本轮报告/u })).toHaveAttribute(
       'href',
       '/results?report=401',
     )
@@ -226,8 +237,8 @@ describe('automation run routes', () => {
       [{ path: '/automation-runs/:runId', element: <AutomationRunDetail /> }],
       '/automation-runs/101',
     )
-    expect(await screen.findByText('模型请求：2 次 · Token：100')).toBeVisible()
-    await user.click(screen.getByText('查看此前 1 次尝试'))
+    expect(await screen.findByText('模型调用：2 次 · Token：100')).toBeVisible()
+    await user.click(screen.getByText('查看之前 1 次记录'))
     expect(screen.getByText('第一次报告失败。')).toBeVisible()
     expect(screen.getAllByRole('listitem')).toHaveLength(4)
   })

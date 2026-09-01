@@ -81,7 +81,7 @@ export function reportRequestFormSchema(interval: boolean) {
           ctx.addIssue({
             code: 'custom',
             path: ['from'],
-            message: '请选择有效的首次入库开始日期。',
+            message: '请选择有效的首次发现开始日期。',
           })
         if (!to || (from !== null && from >= (to ?? '')))
           ctx.addIssue({
@@ -112,11 +112,11 @@ function RequestDisclosure({
   return (
     <div className="space-y-3 text-sm">
       <p className="leading-6 text-muted-foreground">
-        只读取已保存的文字进行相关性判断与报告合成，可能消耗 API
-        额度；不重新采集、上传媒体或重做初步分析。大范围需要更多文字请求，已有结果与旧报告始终保留。
+        根据已保存的内容判断相关性并生成报告，可能消耗 API
+        额度；不会重新采集、上传媒体或分析媒体。范围越大，模型请求可能越多；已有结果和旧报告会保留。
       </p>
       <p className="wrap-anywhere">
-        模型：{provider.model} · 配置版本 {provider.revision}
+        模型：{provider.model}
         <br />
         {provider.base_url}
       </p>
@@ -135,17 +135,16 @@ function IntentDescription({ intent }: { intent: ReportIntent }) {
   if (intent.kind === 'cancel')
     return (
       <p className="text-sm leading-6">
-        仅取消报告 #{intent.id}{' '}
-        的第二阶段工作。初步分析任务、已保存文本和其他报告版本不受影响。确认的控制版本为{' '}
-        {intent.request.expected_revision}。
+        只取消报告 #{intent.id}{' '}
+        的生成，不影响初步分析、已保存内容和其他报告版本。
       </p>
     )
   return (
     <div className="space-y-3">
       <p className="text-sm">
         {intent.kind === 'retry'
-          ? `基于报告 #${intent.id} 的冻结范围和文字创建新版本；不纳入后来完成或更新的证据。`
-          : `按首次入库时间冻结范围：${intent.request.selection.first_seen_from}（含）至 ${intent.request.selection.first_seen_to}（不含）。`}
+          ? `使用报告 #${intent.id} 的内容生成新版本，不加入之后的新内容。`
+          : `首次发现时间范围：${intent.request.selection.first_seen_from}（含）至 ${intent.request.selection.first_seen_to}（不含）。`}
       </p>
       <RequestDisclosure
         provider={intent.provider}
@@ -215,10 +214,10 @@ function ReportRequestEditor({
       >
         <DialogHeader>
           <DialogTitle>
-            {interval ? '按首次入库时间生成文字报告' : '用其他提示词重新生成'}
+            {interval ? '按首次发现时间生成报告' : '用其他提示词重新生成'}
           </DialogTitle>
           <DialogDescription>
-            这是可选的文字报告操作，不是自动报告的必经步骤。共享默认提示词不会被修改。
+            这是可选的报告操作，不会修改默认提示词。
           </DialogDescription>
         </DialogHeader>
         <form
@@ -236,7 +235,7 @@ function ReportRequestEditor({
                   render={({ field, fieldState }) => (
                     <Field data-invalid={fieldState.invalid}>
                       <FieldLabel htmlFor="report-from">
-                        报告首次入库开始日期
+                        报告首次发现开始日期
                       </FieldLabel>
                       <Input
                         {...field}
@@ -260,7 +259,7 @@ function ReportRequestEditor({
                   render={({ field, fieldState }) => (
                     <Field data-invalid={fieldState.invalid}>
                       <FieldLabel htmlFor="report-to">
-                        报告首次入库结束日期
+                        报告首次发现结束日期
                       </FieldLabel>
                       <Input
                         {...field}
@@ -283,7 +282,7 @@ function ReportRequestEditor({
                 id="report-date-help"
                 className="text-sm leading-6 text-muted-foreground"
               >
-                北京时间，包含结束日期当天。跨采集任务选择首次入库的内容，不按原文发布时间或再次采集时间；尚无有效初步文本的内容只记录未覆盖，不自动补做。
+                按北京时间计算，结束日期当天也包含在内。跨采集任务按首次发现时间选择内容；没有可用初步分析的内容不会自动重做。
               </p>
               <Controller
                 name="override"
@@ -322,7 +321,7 @@ function ReportRequestEditor({
                     id="report-override-help"
                     className="text-sm text-muted-foreground"
                   >
-                    仅影响本次新报告；不会保存为共享默认，也不会重新分析媒体。
+                    只影响这份新报告，不会保存为默认提示词，也不会重新获取媒体。
                   </p>
                   <FieldError
                     id="report-override-error"
@@ -345,12 +344,12 @@ function ReportRequestEditor({
         </form>
         {intent && (
           <p className="text-sm text-muted-foreground">
-            本次提交意图已固定；字段暂时锁定，确认重放不会创建重复版本。
+            这次提交的内容已确定，字段暂时不能修改；再次确认不会重复创建报告。
           </p>
         )}
         {ambiguous && (
           <p role="status" className="text-sm text-warning-foreground">
-            提交结果尚不确定。请确认上次报告提交，沿用相同请求标识和完整意图。
+            上次提交结果不确定。再次确认可以继续上次操作，不会重复创建报告。
           </p>
         )}
         {error && (
@@ -580,7 +579,7 @@ export function ReportActions({
             }
           }}
         >
-          可选：按首次入库时间报告
+          可选：按首次发现时间报告
         </Button>
         {report && isActiveReport(report.status) && (
           <Button
@@ -686,13 +685,13 @@ export function ReportActions({
                     : '仅重试文字报告'}
                 </DialogTitle>
                 <DialogDescription>
-                  本操作只影响报告阶段，不会重做初步分析或改写旧版报告。
+                  只影响报告生成，不会重新分析内容，也不会改动旧报告。
                 </DialogDescription>
               </DialogHeader>
               <IntentDescription intent={intent} />
               {ambiguous && (
                 <p role="status" className="text-sm text-warning-foreground">
-                  上次操作结果尚不确定。再次确认沿用同一请求标识、目标和控制版本。
+                  上次操作结果不确定。再次确认可以继续上次操作，不会重复创建报告。
                 </p>
               )}
               {error && (
