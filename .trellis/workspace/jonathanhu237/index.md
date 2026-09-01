@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 24
+- **Total Sessions**: 25
 - **Last Active**: 2026-09-01
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~569 | Active |
+| `journal-1.md` | ~591 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 25 | 2026-09-01 | Simplify UI copy | `da98c9a` | `main` |
 | 24 | 2026-09-01 | 完成龙田三平台采集分析报告验收 | `da4de53`, `8b569ef` | `main` |
 | 23 | 2026-08-31 | Fix analysis admission wait | `8e518ea` | `main` |
 | 22 | 2026-08-30 | 统一舆情自动工作流 | `3d7fec7` | `feat/opinion-workflow-automation` |

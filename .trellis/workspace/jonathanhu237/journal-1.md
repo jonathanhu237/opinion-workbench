@@ -567,3 +567,25 @@ Normalized AnalysisAdmission to its nested AnalysisJob before workflow polling, 
 ### Status
 
 [OK] **Completed**
+
+
+## Session 25: Simplify UI copy
+<!-- trellis-session: v=2 fp=31b6cbbb65c08dae -->
+
+**Date**: 2026-09-01
+**Task**: Simplify UI copy
+**Branch**: `main`
+
+### Summary
+
+Rewrote user-facing frontend copy in plain Chinese, removed redundant helper text, preserved safety and evidence warnings, documented strict API error-message contracts, and passed full automated and responsive browser QA.
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `da98c9a` | refactor(frontend): simplify user-facing copy |
+
+### Status
+
+[OK] **Completed**
