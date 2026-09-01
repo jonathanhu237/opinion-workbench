@@ -18,6 +18,10 @@ from longtian_api.database import Database
 from longtian_api.repositories.analysis_settings import AnalysisSettingsRepository
 from longtian_api.repositories.content_analyses import ContentAnalysisRepository
 from longtian_api.repositories.results import ResultsRepository
+from longtian_api.repositories.search_runs import (
+    SearchContentInput,
+    SearchRunRepository,
+)
 from longtian_api.schemas.analysis_settings import AutomationUpdate, PromptUpdate
 from longtian_api.services.analysis_errors import AnalysisError
 
@@ -120,6 +124,45 @@ def test_one_action_atomically_selects_all_across_runs_without_page_cap(
         seed_run(database, 1, start=9000)
         assert service.repository.read(result.job.id).counts.total == count
         assert ResultsRepository(database).list(limit=1).eligible_count == 1
+    assert model.calls == worker.calls == []
+
+
+def test_bulk_admission_freezes_legacy_toutiao_empty_channel_url(tmp_path):
+    database, _, service, _, model, worker, _ = environment(tmp_path, count=0)
+    repository = SearchRunRepository(database)
+    run = repository.create_run(
+        monitoring_rule_id=1,
+        platform="toutiao",
+        rule_name="历史规则",
+        terms=("龙田街道",),
+        max_results_per_term=10,
+    )
+    repository.mark_running(run.id)
+    repository.set_progress(run.id, 0)
+    content_url = "http://www.toutiao.com/a123456789/?channel="
+    repository.observe_item(
+        run_id=run.id,
+        term_position=0,
+        item=SearchContentInput(
+            platform_content_id="123456789",
+            content_type="article",
+            title="历史标题",
+            snippet="历史摘要",
+            creator_hash="",
+            publisher_name="",
+            published_at_text="刚刚",
+            content_url=content_url,
+            observed_at="2026-08-28T00:00:00+00:00",
+        ),
+    )
+    repository.complete_term(run.id, 0, 1)
+    repository.finish(run.id, "completed_with_results")
+
+    result = service.repository.create(request(database))
+
+    assert result.admitted_count == 1
+    attempt = service.repository.items(result.job.id).items[0]
+    assert attempt.source.content_url == content_url
     assert model.calls == worker.calls == []
 
 

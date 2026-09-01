@@ -13,6 +13,10 @@ analysis_shared,content_analyses,results}.py`, corresponding schemas/services/AP
 modules, `services/content_understanding.py`, and the collection terminal hooks.
 Frontend owners are `lib/api/{analysis-shared,analysis-settings,content-analyses,
 results}.ts` and `routes/results*.tsx`.
+Historical source admission also crosses the shared
+`services/enrichment_models.valid_source_url` boundary and MediaCrawler's
+`tools.enrichment_worker_protocol.valid_source`; the two validators must retain
+the same compatibility set.
 
 The shared transport, media, privacy and usage requirements in
 [Manual AI Summaries](./ai-summary-guidelines.md) still apply. Its 100-source cap,
@@ -52,6 +56,11 @@ All HTTP paths have `/api/v1` prefix:
 - `EvidenceCoverage` records `text_origin`, text availability/completeness,
   normalized issues, and bounded `{expected,ready,failed,unknown}` counts for
   text, image, video and audio. API projections expose the same strict object.
+- For Toutiao, both `valid_source_url("toutiao", content_id, content_url)` and
+  MediaCrawler `valid_source("toutiao", content_id, content_url)` accept the
+  exact historical forms `http://www.toutiao.com/a<ID>`, the same path with a
+  trailing slash, and the observed trailing-slash form with exactly
+  `?channel=`. `ID` must be the matching numeric `content_id`.
 
 Migration v12 appends `analysis_prompt_versions`, `analysis_settings`,
 `content_analysis_jobs`, `content_analysis_attempts`, `content_analysis_claims`,
@@ -83,6 +92,13 @@ Migration v12 appends `analysis_prompt_versions`, `analysis_settings`,
   preserve exact accepted nonblank UTF-8 text, 1–8000 Unicode code points, no NUL.
   No-op saves preserve IDs; stale saves conflict. Changed defaults affect future
   admissions only. Rule edits do not mutate frozen source or prompt history.
+- Preserve accepted historical source URLs exactly in the frozen snapshot; do
+  not rewrite the user's database during admission. The empty `channel` exception
+  is compatibility for already stored Toutiao rows, not permission for new
+  collectors to emit query-bearing URLs. New collection still canonicalizes
+  tracking and empty query parameters away. Reject a nonempty, duplicate or
+  additional query, fragments, credentials, ports, host/scheme/path variants and
+  content-ID mismatches at both backend and worker boundaries.
 
 ### Lifecycle and evidence
 
@@ -170,6 +186,8 @@ Migration v12 appends `analysis_prompt_versions`, `analysis_settings`,
 | Wrong selection intent for saved state | 409 `content_analysis_selection_conflict` |
 | Missing result / attempt or job | 404 `result_not_found` / `content_analysis_not_found` |
 | Invalid first-entry interval | 422 `invalid_result_interval` |
+| Exact stored Toutiao `http://www.toutiao.com/a<ID>/?channel=` with matching ID | Admit and preserve it; backend and worker agree |
+| Any broader legacy-URL variant or mismatched ID | Reject source identity; never navigate or partially admit the bulk job |
 | SQLite failure / closed execution service | 503 `analysis_storage_unavailable` / `content_analysis_unavailable` |
 | Changed provider configuration | Existing AI error before model work; never redirect intent |
 | Detail incomplete but has text or validated media | Analyse only that evidence; persist actual coverage |
@@ -185,6 +203,8 @@ Host/Origin/JSON guards. Never echo database errors, credentials or provider bod
 
 - Good: 1001 unattempted records across runs are admitted once from any page;
   concurrent automatic/manual admission cannot process the same content twice.
+- Good: a bulk job containing the exact historical empty-`channel` Toutiao form
+  freezes atomically and the worker accepts the same immutable source identity.
 - Base: one saved source becomes neutral understanding and a completion event,
   independently readable before a downstream report succeeds.
 - Base: failed detail acquisition with a nonblank frozen snippet produces a
@@ -194,6 +214,8 @@ Host/Origin/JSON guards. Never echo database errors, credentials or provider bod
   clear failure history when a prompt changes, or start paid work from a GET.
 - Bad: set partial enrichment to `ready`, send failed asset locators, or describe a
   preview-only analysis as if the detail page and media had been inspected.
+- Bad: widen general HTTP/query acceptance to make one historical row pass, or
+  update stored source URLs during analysis admission.
 
 ## 6. Tests Required
 
@@ -214,6 +236,12 @@ Host/Origin/JSON guards. Never echo database errors, credentials or provider bod
   writes/calls, shutdown/reopen, exactly-once normal completion and suppressed events.
 - Strict frontend decoding; prompt CAS/draft recovery; ambiguous UUID replay;
   polling refresh, history/focus/cancel controls and synthetic HTTP browser checks.
+- Keep a shared adversarial matrix for backend and MediaCrawler URL validators:
+  matching empty `channel` succeeds and is preserved; nonempty/duplicate/extra
+  query, fragment, credentials, ports, host/scheme/path variants and mismatched
+  IDs fail. A temporary SQLite repository test must prove an
+  `all_never_started` job containing the historical form freezes without any
+  browser or model call.
 - Run backend/frontend gates locally by default under the root `AGENTS.md`
   local-first policy. Browser acceptance uses a temporary database and fake
   acquisition/provider. Use Centaurus and port forwarding only when the user
@@ -241,6 +269,18 @@ if not report_succeeded:
 # Correct: settle independent evidence, then expose a durable downstream event.
 repository.finish(job_id, "completed")
 events = repository.completion_events(after_id=last_event_id)
+```
+
+```python
+# Wrong: broad query acceptance hides identity drift across process boundaries.
+if url.startswith("http://www.toutiao.com/"):
+    return True
+
+# Correct: backend and worker accept only the observed matching-ID exception.
+legacy = re.fullmatch(
+    r"http://www\.toutiao\.com/a([0-9]+)(?:/?|/\?channel=)", url
+)
+return legacy is not None and legacy.group(1) == content_id
 ```
 
 ```python

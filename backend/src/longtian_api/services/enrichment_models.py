@@ -277,9 +277,12 @@ def valid_source_url(platform: SearchPlatform, content_id: str, value: str) -> b
     try:
         parsed = urlsplit(value)
         if parsed.scheme == "http":
-            # One observed stored legacy form only. Preserve it for correlation;
-            # the platform adapter upgrades to HTTPS before any navigation.
-            legacy = re.fullmatch(r"http://www\.toutiao\.com/a([0-9]+)/?", value)
+            # Preserve the observed stored legacy forms, including the empty
+            # channel query. The platform adapter upgrades them to HTTPS before
+            # any navigation.
+            legacy = re.fullmatch(
+                r"http://www\.toutiao\.com/a([0-9]+)(?:/?|/\?channel=)", value
+            )
             return legacy is not None and legacy.group(1) == content_id
         matched = re.fullmatch(
             r"/(?:article/|group/|video/|[ai]|w/a?)([0-9]+)/?", parsed.path

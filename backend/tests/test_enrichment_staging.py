@@ -8,6 +8,7 @@ from uuid import uuid4
 import pytest
 from enrichment_fixtures import PNG, content_payload, image_asset, write_file
 
+from longtian_api.schemas.analysis_evidence import AnalysisSource
 from longtian_api.services.enrichment_models import (
     MAX_MANIFEST_BYTES,
     EnrichmentBudget,
@@ -223,6 +224,29 @@ def test_backend_and_fork_share_golden_normalized_contract():
         else:
             with pytest.raises(EnrichmentValidationError, match="^$"):
                 decoded(payload)
+
+
+def test_toutiao_legacy_empty_channel_url_is_preserved_by_content_validation():
+    content_url = "http://www.toutiao.com/a123456789/?channel="
+    payload = content_payload("toutiao", "123456789", content_url)
+    assert decoded(payload).content_url == content_url
+
+
+def test_toutiao_legacy_empty_channel_url_is_accepted_by_analysis_source():
+    content_url = "http://www.toutiao.com/a123456789/?channel="
+    source = AnalysisSource(
+        source_run_id=1,
+        result_id=2,
+        platform="toutiao",
+        platform_content_id="123456789",
+        content_type="article",
+        title="历史标题",
+        snippet="历史摘要",
+        content_url=content_url,
+        published_at_text="刚刚",
+        matched_terms=["龙田街道"],
+    )
+    assert source.content_url == content_url
 
 
 @pytest.mark.parametrize("replace_operation", [False, True])
