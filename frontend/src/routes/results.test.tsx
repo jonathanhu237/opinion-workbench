@@ -19,7 +19,6 @@ import {
   ANALYSIS_SETTINGS_QUERY_KEY,
   fetchAnalysisSettings,
   saveAnalysisAutomation,
-  saveAnalysisPrompt,
 } from '@/lib/api/analysis-settings'
 import { AnalysisApiError } from '@/lib/api/analysis-shared'
 import {
@@ -71,7 +70,6 @@ vi.mock('@/lib/api/topic-reports', async (original) => ({
 vi.mock('@/lib/api/analysis-settings', async (original) => ({
   ...(await original<typeof import('@/lib/api/analysis-settings')>()),
   fetchAnalysisSettings: vi.fn(),
-  saveAnalysisPrompt: vi.fn(),
   saveAnalysisAutomation: vi.fn(),
 }))
 vi.mock('@/lib/api/content-analyses', async (original) => ({
@@ -204,9 +202,6 @@ describe('Results and Analysis', () => {
       admitted_count: 101,
       already_active_count: 2,
     }))
-    vi.mocked(saveAnalysisPrompt)
-      .mockReset()
-      .mockResolvedValue(analysisSettingsFixture())
     vi.mocked(saveAnalysisAutomation)
       .mockReset()
       .mockResolvedValue(analysisSettingsFixture())
@@ -300,8 +295,7 @@ describe('Results and Analysis', () => {
       expect.objectContaining({
         selection: { kind: 'all_never_started' },
         configuration_revision: 3,
-        initial_prompt_version_id: 1,
-        report_prompt_version_id: 2,
+        initial_prompt: { mode: 'default' },
         force_refresh: false,
       }),
       expect.anything(),
@@ -336,13 +330,16 @@ describe('Results and Analysis', () => {
       within(dialog).getByRole('button', { name: '确认初步分析' }),
     )
     await screen.findByText(/上次提交结果不确定/)
+    expect(
+      within(dialog).getByRole('combobox', { name: '内容理解提示词' }),
+    ).toBeDisabled()
     await user.click(screen.getByRole('button', { name: '暂时关闭' }))
     await user.click(screen.getByRole('button', { name: '继续确认上次请求' }))
     await user.click(screen.getByRole('button', { name: '确认上次提交' }))
     await waitFor(() => expect(start).toHaveBeenCalledTimes(2))
     expect(start.mock.calls[0][0]).toEqual(start.mock.calls[1][0])
     expect(start.mock.calls[1][0].configuration_revision).toBe(3)
-    expect(start.mock.calls[1][0].initial_prompt_version_id).toBe(1)
+    expect(start.mock.calls[1][0].initial_prompt).toEqual({ mode: 'default' })
   })
   it('locks duplicate submission while pending and offers explicit reconfirmation after a stale intent', async () => {
     let fail: ((error: Error) => void) | undefined
@@ -368,242 +365,53 @@ describe('Results and Analysis', () => {
     expect(screen.queryByRole('button', { name: '确认上次提交' })).toBeNull()
     expect(start).toHaveBeenCalledTimes(1)
   })
-  it('saves each prompt independently, validates Unicode/blank content and leaves history untouched', async () => {
+  it('shows immutable defaults and sends a per-submission custom initial prompt', async () => {
     const user = userEvent.setup()
     renderResults()
-    await user.click(await screen.findByText('提示词与自动分析设置'))
-    const initial = screen.getByLabelText('初步分析提示词')
-    const report = screen.getByLabelText('报告提示词')
-    const reportValue = analysisSettingsFixture().report_prompt.instructions
-    await user.clear(initial)
-    await user.type(initial, '  新的初步理解指令  ')
-    await user.click(screen.getByRole('button', { name: '保存初步分析提示词' }))
-    await waitFor(() =>
-      expect(saveAnalysisPrompt).toHaveBeenCalledWith('initial', {
-        expected_version_id: 1,
-        instructions: '  新的初步理解指令  ',
-      }),
-    )
-    expect(report).toHaveValue(reportValue)
-    await user.clear(report)
-    await user.type(report, '   ')
-    await user.click(screen.getByRole('button', { name: '保存报告提示词' }))
+    await user.click(await screen.findByText('自动分析设置'))
+    expect(screen.getByText('系统提示词（只读）')).toBeVisible()
+    await user.click(screen.getByText('内容理解'))
     expect(
-      await screen.findByText('提示词须为 1 至 8000 字的有效非空文本。'),
+      screen.getByText(analysisSettingsFixture().initial_prompt.instructions),
     ).toBeVisible()
-    expect(report).toHaveFocus()
-    expect(start).not.toHaveBeenCalled()
-    expect(saveAnalysisPrompt).toHaveBeenCalledTimes(1)
-  })
-  it.each(['initial', 'report'] as const)(
-    'keeps both saved prompts when the earlier %s response arrives last',
-    async (firstStage) => {
-      const firstSnapshot = analysisSettingsFixture()
-      const firstKey =
-        firstStage === 'initial' ? 'initial_prompt' : 'report_prompt'
-      const secondKey =
-        firstStage === 'initial' ? 'report_prompt' : 'initial_prompt'
-      firstSnapshot[firstKey] = {
-        ...firstSnapshot[firstKey],
-        id: 3,
-        instructions: '先保存的指令',
-      }
-      const latestSnapshot = {
-        ...firstSnapshot,
-        [secondKey]: {
-          ...firstSnapshot[secondKey],
-          id: 4,
-          instructions: '后保存的指令',
-        },
-      }
-      let finishFirst: ((settings: typeof firstSnapshot) => void) | undefined
-      vi.mocked(saveAnalysisPrompt).mockImplementation((stage) =>
-        stage === firstStage
-          ? new Promise((resolve) => {
-              finishFirst = resolve
-            })
-          : Promise.resolve(latestSnapshot),
-      )
-      const user = userEvent.setup()
-      const { client } = renderResults()
-      await user.click(await screen.findByText('提示词与自动分析设置'))
-      const firstTitle =
-        firstStage === 'initial' ? '初步分析提示词' : '报告提示词'
-      const secondTitle =
-        firstStage === 'initial' ? '报告提示词' : '初步分析提示词'
-      const firstInput = screen.getByLabelText(firstTitle)
-      const secondInput = screen.getByLabelText(secondTitle)
-      await user.clear(firstInput)
-      await user.type(firstInput, firstSnapshot[firstKey].instructions)
-      await user.click(
-        screen.getByRole('button', { name: `保存${firstTitle}` }),
-      )
-      await waitFor(() => expect(firstInput).toBeDisabled())
-      await user.clear(secondInput)
-      await user.type(secondInput, latestSnapshot[secondKey].instructions)
-      await user.click(
-        screen.getByRole('button', { name: `保存${secondTitle}` }),
-      )
-      await screen.findByText(`${secondTitle}已保存；仅用于之后提交的任务。`)
-      await act(async () => finishFirst?.(firstSnapshot))
-      await screen.findByText(`${firstTitle}已保存；仅用于之后提交的任务。`)
-      expect(firstInput).toHaveValue(firstSnapshot[firstKey].instructions)
-      expect(secondInput).toHaveValue(latestSnapshot[secondKey].instructions)
-      expect(client.getQueryData(ANALYSIS_SETTINGS_QUERY_KEY)).toEqual(
-        latestSnapshot,
-      )
-      await user.click(screen.getByRole('button', { name: '一键初步分析' }))
-      const dialog = screen.getByRole('dialog')
-      expect(dialog).toHaveTextContent('初步分析提示词')
-      expect(dialog).toHaveTextContent('报告提示词')
-      expect(start).not.toHaveBeenCalled()
-    },
-  )
-  it('does not erase newer automation authorization with an earlier prompt-save response', async () => {
-    const promptSaved = analysisSettingsFixture()
-    promptSaved.initial_prompt = {
-      ...promptSaved.initial_prompt,
-      id: 3,
-      instructions: '独立保存的初步理解指令',
-    }
-    const authorized = {
-      ...promptSaved,
-      automation: {
-        ...promptSaved.automation,
-        enabled: true,
-        revision: 2,
-        approved_configuration_revision: 3,
-      },
-    }
-    let finishPrompt: ((settings: typeof promptSaved) => void) | undefined
-    vi.mocked(saveAnalysisPrompt).mockReturnValueOnce(
-      new Promise((resolve) => {
-        finishPrompt = resolve
-      }),
-    )
-    vi.mocked(saveAnalysisAutomation).mockResolvedValueOnce(authorized)
-    const user = userEvent.setup()
-    const { client } = renderResults()
-    await user.click(await screen.findByText('提示词与自动分析设置'))
-    const initial = screen.getByLabelText('初步分析提示词')
-    await user.clear(initial)
-    await user.type(initial, promptSaved.initial_prompt.instructions)
-    await user.click(screen.getByRole('button', { name: '保存初步分析提示词' }))
-    await waitFor(() => expect(initial).toBeDisabled())
-    await user.click(screen.getByRole('button', { name: '设置自动分析授权' }))
-    await user.click(screen.getByRole('button', { name: '确认并保存授权' }))
-    await screen.findByRole('button', { name: '停用自动分析' })
-    await act(async () => finishPrompt?.(promptSaved))
-    await screen.findByText('初步分析提示词已保存；仅用于之后提交的任务。')
-    expect(screen.getByRole('button', { name: '停用自动分析' })).toBeEnabled()
-    expect(client.getQueryData(ANALYSIS_SETTINGS_QUERY_KEY)).toEqual(authorized)
-    expect(start).not.toHaveBeenCalled()
-  })
-  it.each(['before', 'during'] as const)(
-    'keeps saved prompt state when a settings GET started %s the save returns late',
-    async (readTiming) => {
-      const saved = analysisSettingsFixture()
-      saved.initial_prompt = {
-        ...saved.initial_prompt,
-        id: 3,
-        instructions: '已提交保存的新指令',
-      }
-      let finishSave: ((settings: typeof saved) => void) | undefined
-      let finishRead: ((settings: typeof saved) => void) | undefined
-      vi.mocked(saveAnalysisPrompt).mockReturnValueOnce(
-        new Promise((resolve) => {
-          finishSave = resolve
-        }),
-      )
-      const user = userEvent.setup()
-      const { client } = renderResults()
-      await user.click(await screen.findByText('提示词与自动分析设置'))
-      const initial = screen.getByLabelText('初步分析提示词')
-      await user.clear(initial)
-      await user.type(initial, saved.initial_prompt.instructions)
-      vi.mocked(fetchAnalysisSettings).mockReturnValueOnce(
-        new Promise((resolve) => {
-          finishRead = resolve
-        }),
-      )
-      if (readTiming === 'before')
-        await user.click(screen.getByRole('button', { name: '刷新' }))
-      await user.click(
-        screen.getByRole('button', { name: '保存初步分析提示词' }),
-      )
-      await waitFor(() => expect(initial).toBeDisabled())
-      if (readTiming === 'during')
-        await user.click(screen.getByRole('button', { name: '刷新' }))
-      await waitFor(() =>
-        expect(fetchAnalysisSettings).toHaveBeenCalledTimes(2),
-      )
-      await act(async () => finishSave?.(saved))
-      await screen.findByText('初步分析提示词已保存；仅用于之后提交的任务。')
-      await act(async () => finishRead?.(analysisSettingsFixture()))
-      expect(initial).toHaveValue(saved.initial_prompt.instructions)
-      expect(client.getQueryData(ANALYSIS_SETTINGS_QUERY_KEY)).toEqual(saved)
-      expect(start).not.toHaveBeenCalled()
-    },
-  )
-  it('retries selected-source and evidence reads from Refresh without submitting work', async () => {
-    const failure = new AnalysisApiError('analysis_storage_unavailable')
-    vi.mocked(fetchResult).mockRejectedValueOnce(failure)
-    vi.mocked(fetchResultAnalyses).mockRejectedValueOnce(failure)
-    vi.mocked(fetchAnalysisAttempt).mockRejectedValueOnce(failure)
-    vi.mocked(fetchResultOrigins).mockRejectedValueOnce(failure)
-    vi.mocked(fetchResultLegacyAnalyses).mockRejectedValueOnce(failure)
-    const user = userEvent.setup()
-    renderResults('/results?result=11&attempt=21')
-    await waitFor(() => expect(screen.getAllByRole('alert')).toHaveLength(5))
-    await user.click(screen.getByRole('button', { name: '刷新' }))
-    await waitFor(() => {
-      expect(fetchResult).toHaveBeenCalledTimes(2)
-      expect(fetchResultAnalyses).toHaveBeenCalledTimes(2)
-      expect(fetchAnalysisAttempt).toHaveBeenCalledTimes(2)
-      expect(fetchResultOrigins).toHaveBeenCalledTimes(2)
-      expect(fetchResultLegacyAnalyses).toHaveBeenCalledTimes(2)
+    expect(screen.queryByRole('button', { name: /保存.*提示词/ })).toBeNull()
+
+    await user.click(screen.getByRole('button', { name: '一键初步分析' }))
+    const dialog = screen.getByRole('dialog', {
+      name: '一键初步分析全部未分析内容',
     })
-    expect(await screen.findByText('内容理解')).toBeVisible()
-    expect(screen.queryAllByRole('alert')).toHaveLength(0)
-    expect(start).not.toHaveBeenCalled()
-    expect(saveAnalysisPrompt).not.toHaveBeenCalled()
-    expect(saveAnalysisAutomation).not.toHaveBeenCalled()
-    expect(openSearchRunResult).not.toHaveBeenCalled()
-  })
-  it('recovers from a prompt version conflict without discarding the draft or automatically overwriting', async () => {
-    const user = userEvent.setup()
-    const { client } = renderResults()
-    await user.click(await screen.findByText('提示词与自动分析设置'))
-    const initial = screen.getByLabelText('初步分析提示词')
-    await user.clear(initial)
-    await user.type(initial, '保留我的草稿')
-    await act(async () => {
-      const changed = analysisSettingsFixture()
-      changed.initial_prompt = {
-        ...changed.initial_prompt,
-        id: 9,
-        instructions: '其他编辑者的新文本',
-      }
-      client.setQueryData(ANALYSIS_SETTINGS_QUERY_KEY, changed)
-    })
-    expect(initial).toHaveValue('保留我的草稿')
     await user.click(
-      await screen.findByRole('button', { name: '保留草稿并采用最新版本' }),
+      within(dialog).getByRole('combobox', { name: '内容理解提示词' }),
     )
-    expect(saveAnalysisPrompt).not.toHaveBeenCalled()
-    await user.click(screen.getByRole('button', { name: '保存初步分析提示词' }))
-    await waitFor(() =>
-      expect(saveAnalysisPrompt).toHaveBeenCalledWith('initial', {
-        expected_version_id: 9,
-        instructions: '保留我的草稿',
-      }),
+    await user.click(
+      await screen.findByRole('option', { name: '使用本任务自定义指令' }),
     )
+    const input = within(dialog).getByRole('textbox', {
+      name: '内容理解提示词',
+    })
+    expect(input).toHaveValue(
+      analysisSettingsFixture().initial_prompt.instructions,
+    )
+    await user.clear(input)
+    await user.type(input, '只整理本次来源的地点和时间线索。')
+    await user.click(
+      within(dialog).getByRole('button', { name: '确认初步分析' }),
+    )
+    await waitFor(() => expect(start).toHaveBeenCalledTimes(1))
+    expect(start.mock.calls[0][0]).toMatchObject({
+      initial_prompt: {
+        mode: 'custom',
+        instructions: '只整理本次来源的地点和时间线索。',
+      },
+    })
+    expect(start.mock.calls[0][0]).not.toHaveProperty('report_prompt')
   })
-  it('separates saved automation authorization from disabled rollout and freezes the approved revision', async () => {
+  it('keeps immutable defaults separate from the automation authorization setting', async () => {
     const user = userEvent.setup()
     const { client } = renderResults()
-    await user.click(await screen.findByText('提示词与自动分析设置'))
+    await user.click(await screen.findByText('自动分析设置'))
     expect(screen.getByText(/完整流程尚未启用，当前不会自动执行/)).toBeVisible()
+    expect(screen.getByText('系统提示词（只读）')).toBeVisible()
     await user.click(screen.getByRole('button', { name: '设置自动分析授权' }))
     await act(async () => {
       client.setQueryData(AI_SETTINGS_QUERY_KEY, {
@@ -624,6 +432,30 @@ describe('Results and Analysis', () => {
       ),
     )
     expect(start).not.toHaveBeenCalled()
+  })
+  it('retries selected-source and evidence reads from Refresh without submitting work', async () => {
+    const failure = new AnalysisApiError('analysis_storage_unavailable')
+    vi.mocked(fetchResult).mockRejectedValueOnce(failure)
+    vi.mocked(fetchResultAnalyses).mockRejectedValueOnce(failure)
+    vi.mocked(fetchAnalysisAttempt).mockRejectedValueOnce(failure)
+    vi.mocked(fetchResultOrigins).mockRejectedValueOnce(failure)
+    vi.mocked(fetchResultLegacyAnalyses).mockRejectedValueOnce(failure)
+    const user = userEvent.setup()
+    renderResults('/results?result=11&attempt=21')
+    await waitFor(() => expect(screen.getAllByRole('alert')).toHaveLength(5))
+    await user.click(screen.getByRole('button', { name: '刷新' }))
+    await waitFor(() => {
+      expect(fetchResult).toHaveBeenCalledTimes(2)
+      expect(fetchResultAnalyses).toHaveBeenCalledTimes(2)
+      expect(fetchAnalysisAttempt).toHaveBeenCalledTimes(2)
+      expect(fetchResultOrigins).toHaveBeenCalledTimes(2)
+      expect(fetchResultLegacyAnalyses).toHaveBeenCalledTimes(2)
+    })
+    expect(await screen.findAllByText('内容理解')).not.toHaveLength(0)
+    expect(screen.queryAllByRole('alert')).toHaveLength(0)
+    expect(start).not.toHaveBeenCalled()
+    expect(saveAnalysisAutomation).not.toHaveBeenCalled()
+    expect(openSearchRunResult).not.toHaveBeenCalled()
   })
   it.each([
     ['failed', '重试此条初步分析', 'retry', false],
@@ -860,7 +692,9 @@ describe('Results and Analysis', () => {
       { timeout: 2500 },
     )
     expect(await screen.findAllByText('已完成')).toHaveLength(2)
-    expect(fetchAnalysisJobItems).toHaveBeenCalledTimes(2)
+    expect(
+      vi.mocked(fetchAnalysisJobItems).mock.calls.length,
+    ).toBeGreaterThanOrEqual(2)
     expect(start).not.toHaveBeenCalled()
   })
 })

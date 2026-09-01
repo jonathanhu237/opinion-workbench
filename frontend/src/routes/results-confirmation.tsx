@@ -1,3 +1,4 @@
+import { PromptChoiceField } from '@/components/prompt-choice-field'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -8,7 +9,10 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import type { AISettings } from '@/lib/api/ai-settings'
-import type { AnalysisSettings } from '@/lib/api/analysis-settings'
+import type {
+  AnalysisSettings,
+  PromptChoice,
+} from '@/lib/api/analysis-settings'
 import type { AnalysisRequest } from '@/lib/api/content-analyses'
 
 export type AnalysisConfirmation = {
@@ -28,6 +32,7 @@ export function ResultsConfirmation({
   onClose,
   onConfirm,
   onReconfirm,
+  onPromptChange,
 }: {
   confirmation: AnalysisConfirmation
   pending: boolean
@@ -37,6 +42,7 @@ export function ResultsConfirmation({
   onClose: () => void
   onConfirm: () => void
   onReconfirm: () => void
+  onPromptChange: (choice: PromptChoice) => void
 }) {
   const all = confirmation.request.selection.kind === 'all_never_started'
   return (
@@ -80,21 +86,17 @@ export function ResultsConfirmation({
             ? '本次将重新获取内容并分析，不复用旧版理解。'
             : '仅复用兼容的已保存理解，不会把未读媒体当成完整内容。'}
         </p>
-        <div className="space-y-3">
-          {[
-            confirmation.settings.initial_prompt,
-            confirmation.settings.report_prompt,
-          ].map((prompt) => (
-            <details key={prompt.stage} className="rounded-lg border p-3">
-              <summary className="min-h-8 cursor-pointer font-medium">
-                {prompt.stage === 'initial' ? '初步分析' : '报告'}提示词
-              </summary>
-              <p className="mt-2 text-sm leading-6 [overflow-wrap:anywhere] whitespace-pre-wrap">
-                {prompt.instructions}
-              </p>
-            </details>
-          ))}
-        </div>
+        <PromptChoiceField
+          id="manual-initial-prompt"
+          label="内容理解提示词"
+          description="本次只提交初步内容理解；相关性判断和报告稍后单独进行。"
+          value={confirmation.request.initial_prompt ?? { mode: 'default' }}
+          onChange={onPromptChange}
+          defaultInstructions={
+            confirmation.settings.initial_prompt.instructions
+          }
+          disabled={pending || blocked || ambiguous}
+        />
         {!confirmation.settings.automation.available && (
           <p className="text-sm text-muted-foreground">
             自动任务目前不可用；不影响本次明确提交的手动初步分析。

@@ -897,19 +897,37 @@ class AutomationWorkflowService:
             else:
                 # A normal ContentAnalysisService supports the same strict
                 # explicit selection contract; prompt versions are read-only data.
-                from longtian_api.repositories.analysis_settings import (
-                    AnalysisSettingsRepository,
-                )
                 from longtian_api.schemas.content_analyses import AnalysisCreate
 
-                settings = AnalysisSettingsRepository(self.database).read()
-                if settings is None:
+                if (
+                    run.snapshot.initial_prompt_version_id is None
+                    or run.snapshot.report_prompt_version_id is None
+                ):
                     raise AutomationWorkflowError("ai_configuration_required")
+                initial_prompt = run.snapshot.initial_prompt
+                report_prompt = run.snapshot.report_prompt
                 payload = AnalysisCreate(
                     request_id=str(uuid4()),
                     configuration_revision=run.snapshot.ai_configuration_revision or 1,
-                    initial_prompt_version_id=settings.initial_prompt.id,
-                    report_prompt_version_id=settings.report_prompt.id,
+                    initial_prompt_version_id=run.snapshot.initial_prompt_version_id,
+                    report_prompt_version_id=run.snapshot.report_prompt_version_id,
+                    initial_prompt_mode=(
+                        initial_prompt.mode if initial_prompt is not None else None
+                    ),
+                    report_prompt_mode=(
+                        report_prompt.mode if report_prompt is not None else None
+                    ),
+                    initial_prompt=(
+                        {"mode": "custom", "instructions": initial_prompt.instructions}
+                        if initial_prompt is not None
+                        and initial_prompt.mode == "custom"
+                        else None
+                    ),
+                    report_prompt=(
+                        {"mode": "custom", "instructions": report_prompt.instructions}
+                        if report_prompt is not None and report_prompt.mode == "custom"
+                        else None
+                    ),
                     force_refresh=False,
                     selection={"kind": "explicit", "result_ids": list(ids)},
                 )
@@ -1137,21 +1155,55 @@ class AutomationWorkflowService:
         except MonitoringRuleError:
             raise AutomationWorkflowError("automation_rule_invalid") from None
         ai_revision = ai_base = ai_model = None
-        initial_prompt_version_id = report_prompt_version_id = None
+        initial_prompt = task.initial_prompt
+        report_prompt = task.report_prompt
+        initial_prompt_version_id = (
+            initial_prompt.version_id if initial_prompt is not None else None
+        )
+        report_prompt_version_id = (
+            report_prompt.version_id if report_prompt is not None else None
+        )
         if self._ai is not None:
             try:
                 settings = self._validate_ai_configuration(self._ai.read())
                 ai_revision = settings.revision or None
                 ai_base, ai_model = settings.base_url, settings.model
-                from longtian_api.repositories.analysis_settings import (
-                    AnalysisSettingsRepository,
-                )
-
-                prompt_settings = AnalysisSettingsRepository(self.database).read()
-                initial_prompt_version_id = prompt_settings.initial_prompt.id
-                report_prompt_version_id = prompt_settings.report_prompt.id
             except AIError:
                 raise AutomationWorkflowError("ai_configuration_required") from None
+        if initial_prompt is None or report_prompt is None:
+            # Synthetic legacy records may not carry v18 projections.  Resolve
+            # them once for the snapshot; production task rows are always
+            # populated by the v18 migration/repository.
+            from longtian_api.repositories.analysis_settings import (
+                AnalysisSettingsRepository,
+                prompt_snapshot,
+                resolve_prompt_choice,
+            )
+
+            prompt_settings = AnalysisSettingsRepository(self.database).read()
+            with self.database.connect() as connection:
+                initial_prompt = initial_prompt or prompt_snapshot(
+                    connection, "initial", prompt_settings.initial_prompt.id
+                )
+                report_prompt = report_prompt or (
+                    resolve_prompt_choice(
+                        connection,
+                        "report",
+                        {"mode": "custom", "instructions": task.analysis_goal},
+                    )
+                    if task.analysis_goal
+                    else prompt_snapshot(
+                        connection, "report", prompt_settings.report_prompt.id
+                    )
+                )
+            initial_prompt_version_id = initial_prompt.version_id
+            report_prompt_version_id = report_prompt.version_id
+        report_instructions = report_prompt.instructions
+        report_mirror = (
+            report_instructions
+            if len(report_instructions) <= 4000
+            else f"使用已保存提示词版本 {report_prompt.version_id}"
+        )
         return AutomationSnapshot(
             task_id=task.id,
             task_revision=task.revision,
@@ -1161,13 +1213,19 @@ class AutomationWorkflowService:
             terms=list(terms),
             platforms=list(task.platforms),
             max_results_per_term=task.max_results_per_term,
-            analysis_goal=task.analysis_goal,
-            analysis_goal_hash=hashlib.sha256(task.analysis_goal.encode()).hexdigest(),
+            analysis_goal=report_mirror,
+            # ``analysis_goal`` is the bounded legacy mirror retained in the
+            # snapshot for v17 readers.  Keep its hash truthful when a new
+            # 8,000-character custom prompt has to use the version-reference
+            # marker instead of storing the full text in that column.
+            analysis_goal_hash=hashlib.sha256(report_mirror.encode()).hexdigest(),
             ai_configuration_revision=ai_revision,
             ai_base_url=ai_base,
             ai_model=ai_model,
             initial_prompt_version_id=initial_prompt_version_id,
             report_prompt_version_id=report_prompt_version_id,
+            initial_prompt=initial_prompt,
+            report_prompt=report_prompt,
             initial_template_version=INITIAL_SCHEMA_VERSION,
             report_template_version=REPORT_SCHEMA_VERSION,
             admitted_at=now.isoformat(),
@@ -1250,6 +1308,8 @@ class AutomationWorkflowService:
             platforms=list(record.platforms),
             max_results_per_term=record.max_results_per_term,
             analysis_goal=record.analysis_goal,
+            initial_prompt=record.initial_prompt,
+            report_prompt=record.report_prompt,
             schedule=schedule,
             enabled=record.enabled,
             revision=record.revision,

@@ -38,7 +38,8 @@ All HTTP routes use the `/api/v1` prefix:
 | POST `/automation-runs/{id}/retry` | Revision-fenced retry from the first failed stage; HTTP 202. |
 
 A task owns a unique name, monitoring-rule reference, ordered platforms,
-per-term cap, nonblank `analysis_goal`, and either an interval schedule of
+per-term cap, one `initial_prompt` choice, one `report_prompt` choice, and either
+an interval schedule of
 1-43,200 minutes or a daily `HH:MM` schedule with an IANA timezone. Mutations
 use canonical UUIDv4 `request_id` values. New tasks are disabled; `run-now` is
 allowed without enabling the timer.
@@ -60,6 +61,11 @@ and normalizes the complete table/index/trigger contract before automatic
 report admission is allowed. SQLite v17 adds nullable `automation_tasks.deleted_at`
 and deletion-state triggers; it preserves existing task and run rows while
 fencing deleted tasks from ordinary task and scheduler reads.
+SQLite v18 adds task prompt mode/version columns, ensures canonical built-in
+prompt rows, and backfills every live or deleted task. The pre-v18 effective
+shared initial prompt becomes that task's stage-one default/custom snapshot;
+the historical `analysis_goal` becomes its custom stage-two snapshot. v18
+rebuilds tombstone triggers without weakening v17 deletion invariants.
 
 The initial-analysis child boundary is explicit:
 
@@ -89,9 +95,11 @@ table.
   configuration. Every accepted replacement increments the task revision and
   recalculates its next due time. Disabling affects future admission only.
 - Each admitted run freezes the task revision, rule name and terms, platforms,
-  result cap, goal and goal hash, AI configuration/provider identity, prompt
-  version IDs, template versions and admission time. Later edits affect future
-  runs only.
+  result cap, both resolved `PromptSnapshot` objects (`mode`, `version_id`, exact
+  instructions, content hash and schema version), AI configuration/provider
+  identity, template versions and admission time. Later edits affect future runs
+  only. The private `analysis_goal` columns/projections are compatibility mirrors,
+  not the public task contract or execution authority.
 - A task can own at most one active run. Scheduled overlap creates an explicit
   skipped occurrence; manual overlap returns a conflict. Different tasks may
   run independently subject to the existing browser and AI domain leases.
@@ -112,9 +120,10 @@ table.
   content whose membership is new to this task. Global deduplication does not
   make content old for another task; repeated observations within the same task
   do not re-enter later runs.
-- Initial analysis receives the current run's exact member IDs and performs the
-  reusable generic multimodal understanding. The task goal is frozen as
-  orchestration/report intent; it must not mutate the generic evidence model.
+- Initial analysis receives the current run's exact member IDs and frozen
+  stage-one prompt, then performs reusable generic multimodal understanding.
+  It must not read or apply the stage-two prompt or mutate the generic evidence
+  model with relevance/report instructions.
 - Exact run membership may mix globally never-started, retryable terminal,
   completed, legacy-only and currently active claims because task-scoped
   membership is independent of global result/analysis history. Admit those IDs
@@ -132,9 +141,9 @@ table.
   `admission.job` at the orchestration boundary, then poll `read(job.id)` while
   the job is nonterminal. Recovery already starts from a direct `AnalysisJob`
   read and must remain unchanged. Never ask the envelope for lifecycle status.
-- Topic reporting consumes the saved initial-analysis evidence and task goal,
-  performs relevance judgment, and synthesizes the report. It must not invoke
-  collection or media acquisition.
+- Topic reporting consumes the saved initial-analysis evidence and the run's
+  frozen stage-two prompt, performs relevance judgment, and synthesizes the
+  report. It must not invoke collection or media acquisition.
 - Zero new task members is a successful `no_new_sources` run. Initial analysis
   creates no child; report admission persists a readable `no_ready_sources`
   empty report while judgment/composition model calls remain zero.
@@ -207,7 +216,8 @@ coercing them.
 | Retry has no failed/interrupted stage | 409 `automation_run_not_retryable` |
 | Cancel targets terminal run | 409 `automation_run_not_active` |
 | Missing/disabled/invalid/oversized rule | Stable rule/automation configuration error; no child work |
-| Invalid goal, platforms, schedule or timezone | 422 strict request/configuration error; no write |
+| Missing/invalid/default-with-instructions/custom-without-instructions prompt choice | 422 strict request error; no write |
+| Invalid platforms, schedule or timezone | 422 strict request/configuration error; no write |
 | AI configuration unavailable | `configuration_blocked` or stable AI configuration error; no substitution |
 | Analysis admission contains a queued/running job | Persist the nested job ID and poll that job to settlement; do not project a missing envelope-level status as failure |
 | Analysis admission has no child job ID | Preserve the existing no-child result; never enter the child poll loop |
@@ -223,6 +233,8 @@ Never expose raw SQLite, browser, model or credential-bearing exception text.
 - Good: task A first sees ten sources, analyses eight and records two failures;
   its report exposes 10/8/2 coverage. Retry begins at the failed stage and
   preserves all previously completed child work.
+- Good: task A uses the fixed stage-one default and a custom stage-two report
+  prompt; the run freezes both, and a later task edit cannot change its children.
 - Good: initial-analysis admission returns `{job: queued}`; the workflow records
   `job.id`, polls `read(job.id)` to terminal state, and only then advances.
 - Good: task B later sees the same globally deduplicated content. It is still
@@ -264,6 +276,12 @@ Never expose raw SQLite, browser, model or credential-bearing exception text.
   stale-revision delete conflicts, idempotent 204 replay, name reuse, scheduler
   fencing, workbench filtering, retained direct run/report history, and the
   monitoring-rule referential cleanup update.
+- v17-to-v18 migration with live and deleted tasks, customized pre-v18 shared
+  initial prompt, custom `analysis_goal`, canonical defaults, hash-collision
+  rejection, rollback after real DDL/trigger rebuild, reopen and idempotence.
+- Strict task create/replace prompt unions, custom text equal to a default,
+  immutable two-stage run snapshots, stage isolation, retry preservation and
+  historical snapshot normalization without stored-JSON rewrites.
 - Analysis admission-envelope regression: admit a nested queued/running job,
   return a settled job from `read(job.id)`, and assert the workflow polls exactly
   that ID, projects terminal counts/usage and advances only after settlement.
@@ -304,6 +322,10 @@ for stage in ("collection", "initial_analysis", "topic_report"):
 Wrong: retry by creating a new run from today's task configuration.
 Correct: retain the original run snapshot and completed attempts, append one
 attempt at the first failed stage, and continue the fixed suffix only.
+
+Wrong: expose or execute the private `analysis_goal` mirror as the task's prompt.
+Correct: accept `initial_prompt` and `report_prompt` choices, resolve both once,
+and execute only the two prompt snapshots frozen into the admitted run.
 
 Wrong: poll lifecycle state on the admission envelope.
 

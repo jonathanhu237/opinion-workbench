@@ -57,12 +57,59 @@ describe('initial analysis HTTP contract', () => {
     )
     expect((await startContentAnalysis(analysisRequest)).job).toBeNull()
   })
+  it('requires the returned prompt source to match a custom submission', async () => {
+    const request = {
+      ...analysisRequest,
+      initial_prompt_version_id: undefined,
+      report_prompt_version_id: undefined,
+      initial_prompt: {
+        mode: 'custom' as const,
+        instructions: '本次只保留地点和时间线索。',
+      },
+    }
+    const job = analysisJobFixture({
+      initial_prompt: {
+        ...analysisJobFixture().initial_prompt,
+        mode: 'default',
+      },
+    })
+    fetchMock.mockResolvedValueOnce(
+      json({ job, admitted_count: 101, already_active_count: 0 }, 202),
+    )
+    await expect(startContentAnalysis(request)).rejects.toMatchObject({
+      code: 'invalid_response',
+    })
+    fetchMock.mockResolvedValueOnce(
+      json(
+        {
+          job: {
+            ...job,
+            initial_prompt: {
+              ...job.initial_prompt,
+              mode: 'custom',
+              instructions: request.initial_prompt.instructions,
+            },
+          },
+          admitted_count: 101,
+          already_active_count: 0,
+        },
+        202,
+      ),
+    )
+    await expect(startContentAnalysis(request)).resolves.toMatchObject({
+      admitted_count: 101,
+    })
+  })
   it('rejects a mismatched admission intent or total instead of accepting another task', async () => {
     for (const job of [
       analysisJobFixture({ configuration_revision: 4 }),
       analysisJobFixture({ force_refresh: true }),
       analysisJobFixture({
-        report_prompt: { ...analysisJobFixture().report_prompt, id: 6 },
+        counts: {
+          ...analysisJobFixture().counts,
+          total: 100,
+          queued: 100,
+        },
       }),
     ]) {
       fetchMock.mockResolvedValueOnce(

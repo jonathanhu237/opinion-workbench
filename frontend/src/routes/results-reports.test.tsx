@@ -17,10 +17,7 @@ import {
   analysisTimestamp,
 } from '@/lib/api/analysis-fixtures'
 import { fetchAISettings } from '@/lib/api/ai-settings'
-import {
-  fetchAnalysisSettings,
-  saveAnalysisPrompt,
-} from '@/lib/api/analysis-settings'
+import { fetchAnalysisSettings } from '@/lib/api/analysis-settings'
 import {
   cancelAnalysisJob,
   startContentAnalysis,
@@ -68,7 +65,6 @@ vi.mock('@/lib/api/content-analyses', async (original) => ({
 vi.mock('@/lib/api/analysis-settings', async (original) => ({
   ...(await original<typeof import('@/lib/api/analysis-settings')>()),
   fetchAnalysisSettings: vi.fn(),
-  saveAnalysisPrompt: vi.fn(),
 }))
 vi.mock('@/lib/api/ai-settings', async (original) => ({
   ...(await original<typeof import('@/lib/api/ai-settings')>()),
@@ -127,7 +123,6 @@ function assertNoMutation() {
     cancelTopicReport,
     startContentAnalysis,
     cancelAnalysisJob,
-    saveAnalysisPrompt,
     openSearchRunResult,
   ])
     expect(fn).not.toHaveBeenCalled()
@@ -315,7 +310,7 @@ describe('automatic second-stage report views', () => {
     ).toBeVisible()
     await user.click(screen.getByText('本报告使用的提示词与模型'))
     expect(screen.getByText(report.prompt.instructions)).toBeVisible()
-    expect(screen.getByText(/默认报告提示词 · 版本 2/)).toBeVisible()
+    expect(screen.getByText(/历史共享提示词 · 版本 2/)).toBeVisible()
   })
   it('keeps cross-page citations resolved from bounded frozen section sources and XHS origin proof', async () => {
     const user = userEvent.setup()
@@ -542,7 +537,6 @@ describe('automatic second-stage report views', () => {
         request_id: expect.any(String),
         expected_revision: 4,
         configuration_revision: 3,
-        instructions_override: null,
       },
     ])
     await user.click(screen.getByRole('button', { name: '暂时关闭' }))
@@ -561,7 +555,6 @@ describe('automatic second-stage report views', () => {
       expect(router.state.location.search).toContain('report=32'),
     )
     expect(startContentAnalysis).not.toHaveBeenCalled()
-    expect(saveAnalysisPrompt).not.toHaveBeenCalled()
   })
   it('keeps override text dirty, explicit and separate from shared defaults or stage one', async () => {
     const user = userEvent.setup()
@@ -575,16 +568,21 @@ describe('automatic second-stage report views', () => {
         request_id: request.request_id,
         prompt: {
           ...reportFixture().prompt,
-          version_id: null,
-          origin: 'override',
-          instructions: request.instructions_override ?? '',
+          mode: 'custom',
+          origin: 'custom',
+          instructions:
+            request.report_prompt?.mode === 'custom'
+              ? request.report_prompt.instructions
+              : reportFixture().prompt.instructions,
         },
       }),
     )
     await user.click(
       await screen.findByRole('button', { name: '用其他提示词重新生成' }),
     )
-    const input = screen.getByRole('textbox', { name: '本次专用报告提示词' })
+    const input = screen.getByRole('textbox', {
+      name: '相关性判断与报告提示词',
+    })
     await user.clear(input)
     await user.type(input, '  本次只整理道路信息，保留不确定性。')
     await user.click(screen.getByRole('button', { name: '取消' }))
@@ -598,13 +596,15 @@ describe('automatic second-stage report views', () => {
         request_id: expect.any(String),
         expected_revision: 2,
         configuration_revision: 3,
-        instructions_override: '  本次只整理道路信息，保留不确定性。',
+        report_prompt: {
+          mode: 'custom',
+          instructions: '  本次只整理道路信息，保留不确定性。',
+        },
       }),
     )
     await waitFor(() =>
       expect(router.state.location.search).toContain('report=32'),
     )
-    expect(saveAnalysisPrompt).not.toHaveBeenCalled()
     expect(startContentAnalysis).not.toHaveBeenCalled()
   })
   it('normalizes inclusive Shanghai dates to a UTC half-open first-entry interval', async () => {
@@ -631,8 +631,7 @@ describe('automatic second-stage report views', () => {
       expect(createTopicReport).toHaveBeenCalledWith({
         request_id: expect.any(String),
         configuration_revision: 3,
-        report_prompt_version_id: 2,
-        instructions_override: null,
+        report_prompt: { mode: 'default' },
         selection: {
           kind: 'first_seen_interval',
           first_seen_from: '2026-08-28T16:00:00.000Z',
@@ -641,7 +640,6 @@ describe('automatic second-stage report views', () => {
       }),
     )
     expect(startContentAnalysis).not.toHaveBeenCalled()
-    expect(saveAnalysisPrompt).not.toHaveBeenCalled()
   })
   it('retains an override draft through known configuration conflict and requires a newly confirmed intent', async () => {
     const user = userEvent.setup()
@@ -666,7 +664,9 @@ describe('automatic second-stage report views', () => {
     await user.click(
       await screen.findByRole('button', { name: '用其他提示词重新生成' }),
     )
-    const input = screen.getByRole('textbox', { name: '本次专用报告提示词' })
+    const input = screen.getByRole('textbox', {
+      name: '相关性判断与报告提示词',
+    })
     await user.clear(input)
     await user.type(input, '草稿必须保留')
     await user.click(
@@ -686,7 +686,10 @@ describe('automatic second-stage report views', () => {
     expect(calls[1][1].request_id).not.toBe(calls[0][1].request_id)
     expect(calls[1][1]).toMatchObject({
       configuration_revision: 4,
-      instructions_override: '草稿必须保留',
+      report_prompt: {
+        mode: 'custom',
+        instructions: '草稿必须保留',
+      },
     })
   })
   it('does not let an older detail cache defeat a newer list revision', async () => {
@@ -814,8 +817,7 @@ describe('optional saved-text form validation', () => {
     const base = {
       from: '2026-08-29',
       to: '2026-08-29',
-      override: false,
-      instructions: '',
+      prompt: { mode: 'default' as const },
     }
     expect(reportRequestFormSchema(true).safeParse(base).success).toBe(true)
     for (const change of [
@@ -832,14 +834,15 @@ describe('optional saved-text form validation', () => {
     const base = {
       from: '',
       to: '',
-      override: true,
-      instructions: '😀'.repeat(8000),
+      prompt: { mode: 'custom' as const, instructions: '😀'.repeat(8000) },
     }
     expect(reportRequestFormSchema(false).safeParse(base).success).toBe(true)
     for (const instructions of [' ', '\u0000', '\ud800', '😀'.repeat(8001)])
       expect(
-        reportRequestFormSchema(false).safeParse({ ...base, instructions })
-          .success,
+        reportRequestFormSchema(false).safeParse({
+          ...base,
+          prompt: { mode: 'custom', instructions },
+        }).success,
       ).toBe(false)
   })
 })

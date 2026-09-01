@@ -26,10 +26,9 @@ topic-specific first-stage object and manual combined trigger do not apply here.
 
 All HTTP paths have `/api/v1` prefix:
 
-- `GET /analysis-settings` returns separate immutable `initial_prompt` and
-  `report_prompt` versions and revision-bound `automation` authorization.
-- `PUT /analysis-settings/prompts/{initial|report}` accepts exactly
-  `{expected_version_id, instructions}` and returns settings.
+- `GET /analysis-settings` returns the fixed built-in `initial_prompt` and
+  `report_prompt` versions plus revision-bound `automation` authorization.
+  There is no public mutation route for either built-in prompt.
 - `PUT /analysis-settings/automation` accepts exactly
   `{expected_revision, enabled, configuration_revision}`.
 - `GET /results` accepts `limit` (1–100), `offset`, optional `platform`, `state`,
@@ -38,8 +37,9 @@ All HTTP paths have `/api/v1` prefix:
 - `GET /results/{id}` and paginated `/{id}/origins`, `/{id}/analyses`,
   `/{id}/legacy-analyses` expose saved provenance and separate histories.
 - `POST /content-analysis-jobs` accepts exactly `{request_id,
-  configuration_revision,initial_prompt_version_id,report_prompt_version_id,
-  force_refresh,selection}`; returns 202
+  configuration_revision,initial_prompt,force_refresh,selection}` where
+  `initial_prompt` is `{"mode":"default"}` or
+  `{"mode":"custom","instructions":"..."}`; returns 202
   `{job: AnalysisJob|null,admitted_count,already_active_count}`.
 - Selection is `{kind:"all_never_started"}` or
   `{kind:"explicit"|"retry"|"reanalysis",result_ids:[...]}`. Explicit lists contain
@@ -66,6 +66,10 @@ Migration v12 appends `analysis_prompt_versions`, `analysis_settings`,
 `content_analysis_jobs`, `content_analysis_attempts`, `content_analysis_claims`,
 `content_analysis_requests`, `analysis_completion_events` and
 `collection_analysis_handoffs`. Do not relabel a modern schema as an old fixture.
+Migration v18 ensures the canonical built-in rows exist, preserves immutable
+historical prompt rows, and gives automation tasks explicit per-stage prompt
+references. Prompt version IDs remain an internal replay/history compatibility
+surface, not the public manual-analysis request contract.
 
 ## 3. Contracts
 
@@ -88,10 +92,13 @@ Migration v12 appends `analysis_prompt_versions`, `analysis_settings`,
   understanding or reinterpret missing evidence as success.
 - Canonical lowercase UUIDv4 replay binds the exact admission payload, including
   zero-result no-ops. A lost response must not cause a new UUID automatically.
-- Freeze both prompt versions and the provider revision/endpoint/model. Prompts
-  preserve exact accepted nonblank UTF-8 text, 1–8000 Unicode code points, no NUL.
-  No-op saves preserve IDs; stale saves conflict. Changed defaults affect future
-  admissions only. Rule edits do not mutate frozen source or prompt history.
+- Resolve and freeze the selected initial-stage prompt plus the provider
+  revision/endpoint/model in the accepted job. `mode="default"` always resolves
+  to the backend-owned built-in text; `mode="custom"` preserves exact accepted
+  nonblank UTF-8 text, 1–8000 Unicode code points, without NUL. Custom text is
+  inserted or reused as an immutable version after stage/schema/hash/full-text
+  verification. It never edits the fixed default. The public initial-analysis
+  request does not accept a report-stage prompt.
 - Preserve accepted historical source URLs exactly in the frozen snapshot; do
   not rewrite the user's database during admission. The empty `channel` exception
   is compatibility for already stored Toutiao rows, not permission for new
@@ -146,7 +153,8 @@ Migration v12 appends `analysis_prompt_versions`, `analysis_settings`,
   interruption and configuration-blocked settlement preserve prior successes but
   suppress their job's automatic report event and release all active claims.
 - Startup reconciles unfinished work to interrupted without model calls. Explicit
-  retries create new versions; GET, prompt save and cache misses do not retry work.
+  retries create new versions; GET, prompt resolution and cache misses do not
+  retry work.
 - New-content automation requires explicit saved authorization tied to provider
   revision. Collection completion hands off only after browser release; batch
   children do not individually trigger jobs. Cancelled/paused collections do not
@@ -156,13 +164,14 @@ Migration v12 appends `analysis_prompt_versions`, `analysis_settings`,
 
 ### Frontend ownership
 
-- Query owns resources, URL owns filters/selection/pagination, RHF owns prompt
-  drafts. Confirmation owns the UUID, provider and both exact prompt snapshots.
+- Query owns resources, URL owns filters/selection/pagination, RHF owns the
+  stage-one prompt choice and custom draft. Confirmation owns the UUID, provider
+  and exact initial prompt snapshot.
   Disable automatic mutation retries; retain ambiguous intent for explicit replay.
-- Conflicting prompt saves preserve drafts. Adopting the latest version is an
-  explicit action followed by a separate save, never an automatic overwrite.
-- Independent settings writes may return out of order. Merge prompt versions and
-  policy revision monotonically, fence late settings GETs, and make page Refresh
+- The default preview is read-only. Switching to custom starts from a copy of the
+  fixed default, preserves the per-submission draft, and never changes settings.
+- Automation-policy writes may return out of order. Merge the policy revision
+  monotonically, fence late settings GETs, and make page Refresh
   retry selected-source/evidence/history reads as well as the list.
 - Independently decode strict status/count/source/usage contracts. Display
   incomplete input and technical failure separately from successful uncertainty.
@@ -180,8 +189,9 @@ Migration v12 appends `analysis_prompt_versions`, `analysis_settings`,
 | Condition | Public result / invariant |
 | --- | --- |
 | Invalid payload/UUID/extra field | Existing `invalid_request`; no work |
-| Invalid business prompt | 422 `invalid_analysis_prompt` |
-| Stale prompt / automation revision | 409 `analysis_prompt_changed` / `analysis_policy_changed` |
+| Invalid custom initial prompt | 422 `invalid_analysis_prompt`; no work |
+| Report-stage prompt or version-ID fields at the public initial endpoint | 422 `invalid_request`; no work |
+| Stale automation revision | 409 `analysis_policy_changed` |
 | Replayed UUID with changed intent | 409 `content_analysis_request_conflict` |
 | Wrong selection intent for saved state | 409 `content_analysis_selection_conflict` |
 | Missing result / attempt or job | 404 `result_not_found` / `content_analysis_not_found` |
@@ -207,6 +217,8 @@ Host/Origin/JSON guards. Never echo database errors, credentials or provider bod
   freezes atomically and the worker accepts the same immutable source identity.
 - Base: one saved source becomes neutral understanding and a completion event,
   independently readable before a downstream report succeeds.
+- Base: choosing custom copies the fixed initial prompt into the submission
+  draft; accepting it freezes `mode=custom` without mutating the built-in row.
 - Base: failed detail acquisition with a nonblank frozen snippet produces a
   preview-labelled understanding; later complete detail produces a distinct
   fingerprint and may be analysed again.
@@ -234,8 +246,12 @@ Host/Origin/JSON guards. Never echo database errors, credentials or provider bod
   evidence/report labels cover preview, partial and full-source inputs.
 - Busy leases, queue-exit/admission barriers, provider revision change, cancelled
   writes/calls, shutdown/reopen, exactly-once normal completion and suppressed events.
-- Strict frontend decoding; prompt CAS/draft recovery; ambiguous UUID replay;
+- Strict frontend decoding; default/custom draft recovery; ambiguous UUID replay;
   polling refresh, history/focus/cancel controls and synthetic HTTP browser checks.
+- Strict public prompt union: default has no instructions, custom requires valid
+  instructions, report/version-ID fields are rejected, identical custom text may
+  share the default hash safely, and cache reuse changes when actual prompt text
+  changes.
 - Keep a shared adversarial matrix for backend and MediaCrawler URL validators:
   matching empty `channel` succeeds and is preserved; nonempty/duplicate/extra
   query, fragment, credentials, ports, host/scheme/path variants and mismatched
@@ -258,6 +274,19 @@ startContentAnalysis({ selection: { kind: 'explicit', result_ids: visibleIds } }
 startContentAnalysis({
   ...confirmedRequest,
   selection: { kind: 'all_never_started' },
+})
+```
+
+```typescript
+// Wrong: submit mutable version IDs or a report prompt to stage one.
+startContentAnalysis({
+  initial_prompt_version_id: currentInitialId,
+  report_prompt_version_id: currentReportId,
+})
+
+// Correct: submit only the stage-one choice; the server resolves a snapshot.
+startContentAnalysis({
+  initial_prompt: { mode: 'custom', instructions: customInitialDraft },
 })
 ```
 

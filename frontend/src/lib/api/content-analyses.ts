@@ -8,7 +8,10 @@ import {
   summarySourceSchema,
   tokenUsageSchema,
 } from '@/lib/api/ai-summaries'
-import { promptVersionSchema } from '@/lib/api/analysis-settings'
+import {
+  promptVersionSchema,
+  type PromptChoice,
+} from '@/lib/api/analysis-settings'
 import {
   AnalysisApiError,
   analysisPageSchema,
@@ -373,8 +376,7 @@ export type AnalysisSelection =
 export type AnalysisRequest = {
   request_id: string
   configuration_revision: number
-  initial_prompt_version_id: number
-  report_prompt_version_id: number
+  initial_prompt: PromptChoice
   force_refresh: boolean
   selection: AnalysisSelection
 }
@@ -404,12 +406,23 @@ export async function startContentAnalysis(
     (data.job.request_id !== request.request_id ||
       data.job.trigger !== 'manual' ||
       data.job.configuration_revision !== request.configuration_revision ||
-      data.job.initial_prompt.id !== request.initial_prompt_version_id ||
-      data.job.report_prompt.id !== request.report_prompt_version_id ||
+      !promptChoiceMatchesVersion(
+        request.initial_prompt,
+        data.job.initial_prompt,
+      ) ||
       data.job.force_refresh !== request.force_refresh)
   )
     throw new AnalysisApiError('invalid_response')
   return data
+}
+
+function promptChoiceMatchesVersion(
+  choice: PromptChoice,
+  version: AnalysisJob['initial_prompt'],
+) {
+  return choice.mode === 'default'
+    ? version.mode === 'default'
+    : version.mode === 'custom' && version.instructions === choice.instructions
 }
 export async function fetchAnalysisJobs(
   signal: AbortSignal,

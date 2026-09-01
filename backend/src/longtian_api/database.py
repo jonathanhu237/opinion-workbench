@@ -4,7 +4,7 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
-CURRENT_DATABASE_VERSION = 17
+CURRENT_DATABASE_VERSION = 18
 DEFAULT_RULE_NAME = "龙田街道及四个社区"
 DEFAULT_RULE_TERMS = (
     "龙田街道",
@@ -103,6 +103,9 @@ class Database:
                 version = 16
             if version < 17:
                 _migrate_to_version_17(connection)
+                version = 17
+            if version < 18:
+                _migrate_to_version_18(connection)
         finally:
             connection.close()
 
@@ -213,6 +216,27 @@ def _migrate_to_version_17(connection: sqlite3.Connection) -> None:
             raise DatabaseVersionError("Unsupported database migration source version.")
         migrate(connection)
         connection.execute("PRAGMA user_version = 17")
+        connection.execute("COMMIT")
+    except BaseException:
+        if connection.in_transaction:
+            connection.execute("ROLLBACK")
+        raise
+
+
+def _migrate_to_version_18(connection: sqlite3.Connection) -> None:
+    """Freeze default/custom prompt choices on automation task rows."""
+    from longtian_api.migrations.automation_workflows_v18 import migrate
+
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        version = _read_user_version(connection)
+        if version >= 18:
+            connection.execute("COMMIT")
+            return
+        if version != 17:
+            raise DatabaseVersionError("Unsupported database migration source version.")
+        migrate(connection)
+        connection.execute("PRAGMA user_version = 18")
         connection.execute("COMMIT")
     except BaseException:
         if connection.in_transaction:

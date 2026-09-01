@@ -3,7 +3,11 @@
 from typing import get_args
 
 from longtian_api.repositories.ai_summaries import fingerprint
-from longtian_api.repositories.analysis_settings import read_prompt
+from longtian_api.repositories.analysis_settings import (
+    read_prompt,
+    resolve_prompt_choice,
+    resolve_prompt_version,
+)
 from longtian_api.repositories.analysis_shared import (
     AnalysisRepository,
     date,
@@ -40,6 +44,37 @@ WORKFLOW_RECOVERABLE_ATTEMPTS = (
     "cancelled",
     "interrupted",
 )
+
+
+def _resolve_prompt(connection, stage, choice, version_id, mode=None):
+    """Resolve a submitted choice or legacy frozen version in one transaction."""
+    if choice is not None:
+        selected = resolve_prompt_choice(connection, stage, choice)
+        if mode is not None and mode != selected.mode:
+            raise AnalysisError("analysis_prompt_changed")
+        if version_id is not None:
+            # A request proof may contain both fields when replaying an older
+            # intent.  They must describe the same immutable content; letting
+            # the choice silently win would admit a mismatched/stale version
+            # while recording a different source than the caller proved.
+            frozen = resolve_prompt_version(connection, stage, version_id)
+            if (
+                frozen.instructions != selected.instructions
+                or frozen.content_hash != selected.content_hash
+                or frozen.schema_version != selected.schema_version
+            ):
+                raise AnalysisError("analysis_prompt_changed")
+        return selected
+    if version_id is not None:
+        row = connection.execute(
+            "SELECT stage FROM analysis_prompt_versions WHERE id=?", (version_id,)
+        ).fetchone()
+        if row is None or row["stage"] != stage:
+            raise AnalysisError("analysis_prompt_changed")
+        return resolve_prompt_version(connection, stage, version_id, mode=mode)
+    if mode not in (None, "default"):
+        raise AnalysisError("analysis_prompt_changed")
+    return resolve_prompt_choice(connection, stage, None)
 
 
 def observation_hash(source: SummarySource) -> str:
@@ -112,8 +147,16 @@ class ContentAnalysisRepository(AnalysisRepository):
             configuration_revision=row["configuration_revision"],
             base_url=row["base_url"],
             model=row["model"],
-            initial_prompt=read_prompt(connection, row["initial_prompt_version_id"]),
-            report_prompt=read_prompt(connection, row["report_prompt_version_id"]),
+            initial_prompt=read_prompt(
+                connection,
+                row["initial_prompt_version_id"],
+                mode=row["initial_prompt_mode"],
+            ),
+            report_prompt=read_prompt(
+                connection,
+                row["report_prompt_version_id"],
+                mode=row["report_prompt_mode"],
+            ),
             force_refresh=bool(row["force_refresh"]),
             counts=AnalysisCounts(
                 total=sum(v for k, v in counts.items() if k != "reused"), **counts
@@ -292,17 +335,20 @@ class ContentAnalysisRepository(AnalysisRepository):
             replay = self._replay(connection, payload)
             if replay is not None:
                 return replay
-            settings = connection.execute(
-                "SELECT * FROM analysis_settings WHERE id=1"
-            ).fetchone()
-            if (
-                settings["initial_prompt_version_id"],
-                settings["report_prompt_version_id"],
-            ) != (
+            initial_prompt = _resolve_prompt(
+                connection,
+                "initial",
+                payload.initial_prompt,
                 payload.initial_prompt_version_id,
+                payload.initial_prompt_mode,
+            )
+            report_prompt = _resolve_prompt(
+                connection,
+                "report",
+                payload.report_prompt,
                 payload.report_prompt_version_id,
-            ):
-                raise AnalysisError("analysis_prompt_changed")
+                payload.report_prompt_mode,
+            )
             provider = self._provider(connection, payload.configuration_revision)
             connection.execute(
                 "CREATE TEMP TABLE selected_contents(id INTEGER PRIMARY KEY)"
@@ -374,8 +420,11 @@ class ContentAnalysisRepository(AnalysisRepository):
                     )
             result = self._admit(
                 connection,
-                settings,
                 provider,
+                initial_prompt.version_id,
+                report_prompt.version_id,
+                initial_prompt.mode,
+                report_prompt.mode,
                 request_id=payload.request_id,
                 force_refresh=payload.force_refresh,
                 active=active,
@@ -418,17 +467,20 @@ class ContentAnalysisRepository(AnalysisRepository):
             replay = self._workflow_replay(connection, payload, operation_key)
             if replay is not None:
                 return replay
-            settings = connection.execute(
-                "SELECT * FROM analysis_settings WHERE id=1"
-            ).fetchone()
-            if (
-                settings["initial_prompt_version_id"],
-                settings["report_prompt_version_id"],
-            ) != (
+            initial_prompt = _resolve_prompt(
+                connection,
+                "initial",
+                payload.initial_prompt,
                 payload.initial_prompt_version_id,
+                payload.initial_prompt_mode,
+            )
+            report_prompt = _resolve_prompt(
+                connection,
+                "report",
+                payload.report_prompt,
                 payload.report_prompt_version_id,
-            ):
-                raise AnalysisError("analysis_prompt_changed")
+                payload.report_prompt_mode,
+            )
             provider = self._provider(connection, payload.configuration_revision)
 
             selections: list[tuple[int, int, bool]] = []
@@ -473,8 +525,11 @@ class ContentAnalysisRepository(AnalysisRepository):
 
             result = self._admit(
                 connection,
-                settings,
                 provider,
+                initial_prompt.version_id,
+                report_prompt.version_id,
+                initial_prompt.mode,
+                report_prompt.mode,
                 request_id=payload.request_id,
                 origin=operation_key,
                 force_refresh=payload.force_refresh,
@@ -506,8 +561,11 @@ class ContentAnalysisRepository(AnalysisRepository):
     def _admit(
         self,
         connection,
-        settings,
         provider,
+        initial_prompt_version_id,
+        report_prompt_version_id,
+        initial_prompt_mode,
+        report_prompt_mode,
         *,
         request_id=None,
         origin=None,
@@ -530,8 +588,9 @@ class ContentAnalysisRepository(AnalysisRepository):
         now = timestamp()
         job_id = connection.execute(
             """INSERT INTO content_analysis_jobs(request_id,trigger,automatic_origin,
-          configuration_revision,base_url,model,initial_prompt_version_id,report_prompt_version_id,
-          force_refresh,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,'queued',?)""",
+          configuration_revision,base_url,model,initial_prompt_version_id,
+          initial_prompt_mode,report_prompt_version_id,report_prompt_mode,
+          force_refresh,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,'queued',?)""",
             (
                 request_id,
                 "automatic" if origin else "manual",
@@ -539,13 +598,15 @@ class ContentAnalysisRepository(AnalysisRepository):
                 provider["revision"],
                 provider["base_url"],
                 provider["model"],
-                settings["initial_prompt_version_id"],
-                settings["report_prompt_version_id"],
+                initial_prompt_version_id,
+                initial_prompt_mode,
+                report_prompt_version_id,
+                report_prompt_mode,
                 int(force_refresh),
                 now,
             ),
         ).lastrowid
-        prompt = read_prompt(connection, settings["initial_prompt_version_id"])
+        prompt = read_prompt(connection, initial_prompt_version_id)
         for content_id, position, unavailable in selections:
             source, row = source_snapshot(connection, content_id)
             observation = observation_hash(source)
@@ -696,6 +757,12 @@ class ContentAnalysisRepository(AnalysisRepository):
             except AIError:
                 # Durable candidates remain visible; never use a new destination.
                 return None
+            # The settings row retains historical foreign keys for old
+            # records, but it is no longer the source of the product defaults.
+            # Resolve both fixed templates here so a stale/legacy pointer can
+            # never change a newly admitted automatic job.
+            initial_prompt = resolve_prompt_choice(connection, "initial", None)
+            report_prompt = resolve_prompt_choice(connection, "report", None)
             connection.execute(
                 "CREATE TEMP TABLE selected_contents(id INTEGER PRIMARY KEY)"
             )
@@ -703,7 +770,15 @@ class ContentAnalysisRepository(AnalysisRepository):
               SELECT content_id FROM content_analysis_claims cl
               WHERE {NEVER_STARTED_SQL} AND eligibility_origin='new' AND
                 auto_ready=1""")
-            result = self._admit(connection, settings, provider, origin=origin)
+            result = self._admit(
+                connection,
+                provider,
+                initial_prompt.version_id,
+                report_prompt.version_id,
+                initial_prompt.mode,
+                report_prompt.mode,
+                origin=origin,
+            )
             if result.job:
                 connection.execute(
                     "UPDATE collection_analysis_handoffs SET job_id=? WHERE origin=?",

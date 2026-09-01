@@ -180,7 +180,7 @@ function RunActionDialog({
           </AlertDialogTitle>
           <AlertDialogDescription>
             {retry
-              ? `将从“${failed ? stageLabels[failed.name] : '失败阶段'}”重新开始，已完成的阶段不会重复。任务设置、平台和分析目标保持不变。`
+              ? `将从“${failed ? stageLabels[failed.name] : '失败阶段'}”重新开始，已完成的阶段不会重复。任务设置、平台和两阶段提示词保持不变。`
               : '取消会停止当前阶段并阻止后续阶段启动，已经保存的采集结果、初步分析和报告历史不会删除。'}
           </AlertDialogDescription>
         </AlertDialogHeader>
@@ -208,7 +208,7 @@ function SnapshotCard({ run }: { run: AutomationRun }) {
       <CardHeader className="border-b">
         <h2 className="font-display text-xl">本次任务设置</h2>
         <p className="text-sm leading-6 text-muted-foreground">
-          编辑自动任务不会改变本次运行。重试时仍使用原来的规则、平台、采集上限和分析目标。
+          编辑自动任务不会改变本次运行。重试时仍使用原来的规则、平台、采集上限和两阶段提示词。
         </p>
       </CardHeader>
       <CardContent className="grid gap-4 pt-5 text-sm sm:grid-cols-2">
@@ -236,11 +236,24 @@ function SnapshotCard({ run }: { run: AutomationRun }) {
             {run.snapshot.ai_model ?? '未记录模型配置'}
           </p>
         </div>
-        <div className="sm:col-span-2">
-          <p className="text-muted-foreground">舆情分析目标</p>
-          <p className="mt-1 rounded-lg border bg-muted/25 p-3 leading-6">
-            {run.snapshot.analysis_goal}
-          </p>
+        <div className="grid gap-3 sm:col-span-2 sm:grid-cols-2">
+          <div>
+            <p className="text-muted-foreground">内容理解提示词</p>
+            <p className="mt-1 rounded-lg border bg-muted/25 p-3 leading-6">
+              {run.snapshot.initial_prompt?.mode === 'default'
+                ? '系统默认模板'
+                : (run.snapshot.initial_prompt?.instructions ?? '历史版本')}
+            </p>
+          </div>
+          <div>
+            <p className="text-muted-foreground">相关性判断与报告提示词</p>
+            <p className="mt-1 rounded-lg border bg-muted/25 p-3 leading-6">
+              {run.snapshot.report_prompt?.mode === 'default'
+                ? '系统默认模板'
+                : (run.snapshot.report_prompt?.instructions ??
+                  run.snapshot.analysis_goal)}
+            </p>
+          </div>
         </div>
       </CardContent>
     </Card>

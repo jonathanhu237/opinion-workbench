@@ -53,7 +53,9 @@ def start_initial(client, app):
     client.portal.call(finish, app.state.content_analysis_service)
     admitted = client.post(
         "/api/v1/topic-reports",
-        json=interval_request(app.state.monitoring_rule_service.database).model_dump(),
+        json=interval_request(app.state.monitoring_rule_service.database).model_dump(
+            exclude_none=True
+        ),
     )
     assert admitted.status_code == 202, admitted.text
     client.portal.call(finish, app.state.topic_report_service)
@@ -223,7 +225,7 @@ def test_smoke_normal_handoff_cross_page_citations_and_report_only_override_retr
             "request_id": str(uuid4()),
             "expected_revision": original["revision"],
             "configuration_revision": original["configuration_revision"],
-            "instructions_override": override,
+            "report_prompt": {"mode": "custom", "instructions": override},
         }
         response = client.post(f"/api/v1/topic-reports/{report_id}/retry", json=intent)
         assert response.status_code == 202, response.text
@@ -236,7 +238,7 @@ def test_smoke_normal_handoff_cross_page_citations_and_report_only_override_retr
         ).json()["sections"][0]
         assert failed_leaf["status"] == "failed"
         assert failed_leaf["error"]["code"] == "invalid_citations"
-        assert failed["prompt"]["origin"] == "override"
+        assert failed["prompt"]["origin"] == "custom"
         assert failed["prompt"]["instructions"] == override
         assert failed["coverage"] == original["coverage"]
         failed_calls = counters(client)
@@ -257,7 +259,6 @@ def test_smoke_normal_handoff_cross_page_citations_and_report_only_override_retr
                 "request_id": str(uuid4()),
                 "expected_revision": failed["revision"],
                 "configuration_revision": failed["configuration_revision"],
-                "instructions_override": None,
             },
         )
         assert response.status_code == 202, response.text

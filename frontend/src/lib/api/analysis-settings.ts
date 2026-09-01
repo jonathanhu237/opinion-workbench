@@ -19,6 +19,8 @@ export const promptInstructionsSchema = boundedAnalysisText(8000, 1).refine(
 export const promptVersionSchema = z
   .strictObject({
     id: safeId,
+    version_id: safeId.optional(),
+    mode: z.enum(['default', 'custom', 'legacy']).optional(),
     stage: z.enum(['initial', 'report']),
     instructions: promptInstructionsSchema,
     content_hash: z.string().regex(/^[0-9a-f]{64}$/u),
@@ -32,6 +34,22 @@ export const promptVersionSchema = z
         ? 'initial-understanding-v1'
         : 'topic-report-v1'),
   )
+
+export const promptChoiceSchema = z.discriminatedUnion('mode', [
+  z.strictObject({ mode: z.literal('default') }),
+  z.strictObject({
+    mode: z.literal('custom'),
+    instructions: promptInstructionsSchema,
+  }),
+])
+
+export const promptSnapshotSchema = z.strictObject({
+  mode: z.enum(['default', 'custom', 'legacy']),
+  version_id: safeId,
+  instructions: promptInstructionsSchema,
+  content_hash: z.string().regex(/^[0-9a-f]{64}$/u),
+  schema_version: z.enum(['initial-understanding-v1', 'topic-report-v1']),
+})
 
 const settingsSchema = z.strictObject({
   initial_prompt: promptVersionSchema.refine(
@@ -55,7 +73,8 @@ const settingsSchema = z.strictObject({
 })
 export type AnalysisSettings = z.infer<typeof settingsSchema>
 export type PromptVersion = z.infer<typeof promptVersionSchema>
-export type PromptStage = PromptVersion['stage']
+export type PromptChoice = z.infer<typeof promptChoiceSchema>
+export type PromptSnapshot = z.infer<typeof promptSnapshotSchema>
 export type AutomationUpdate = {
   expected_revision: number
   enabled: boolean
@@ -68,18 +87,6 @@ export async function fetchAnalysisSettings(
   return decodeAnalysis(
     settingsSchema,
     await analysisRequest('/analysis-settings', { signal }),
-  )
-}
-export async function saveAnalysisPrompt(
-  stage: PromptStage,
-  value: { expected_version_id: number; instructions: string },
-): Promise<AnalysisSettings> {
-  return decodeAnalysis(
-    settingsSchema,
-    await analysisRequest(
-      `/analysis-settings/prompts/${stage}`,
-      jsonMutation('PUT', value),
-    ),
   )
 }
 export async function saveAnalysisAutomation(

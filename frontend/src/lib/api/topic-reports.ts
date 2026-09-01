@@ -8,7 +8,11 @@ import {
   summarySourceSchema,
   tokenUsageSchema,
 } from '@/lib/api/ai-summaries'
-import { promptInstructionsSchema } from '@/lib/api/analysis-settings'
+import {
+  promptChoiceSchema,
+  promptInstructionsSchema,
+  type PromptChoice,
+} from '@/lib/api/analysis-settings'
 import {
   ANALYSIS_ERROR_CONTRACTS,
   isValidAnalysisProse,
@@ -79,14 +83,24 @@ const selectionSchema = z.union([
 const promptSchema = z
   .strictObject({
     version_id: safeId.nullable(),
-    origin: z.enum(['shared', 'override']),
+    mode: z.enum(['default', 'custom', 'legacy']).nullable().optional(),
+    origin: z.enum(['default', 'custom', 'legacy', 'shared', 'override']),
     instructions: promptInstructionsSchema,
     content_hash: z.string().regex(/^[0-9a-f]{64}$/u),
     schema_version: z.literal('topic-report-v1'),
   })
-  .refine(
-    (value) => (value.origin === 'shared') === (value.version_id !== null),
-  )
+  .refine((value) => {
+    const hasVersion = value.version_id !== null
+    if (['default', 'custom', 'shared'].includes(value.origin) && !hasVersion)
+      return false
+    if (value.origin === 'override' && hasVersion) return false
+    if (value.mode === 'default')
+      return ['default', 'shared'].includes(value.origin)
+    if (value.mode === 'custom')
+      return ['custom', 'shared'].includes(value.origin)
+    if (value.mode === 'legacy') return value.origin === 'legacy'
+    return true
+  })
 const coverageSchema = z
   .strictObject({
     total: safeCount,
@@ -429,19 +443,40 @@ export const reportSectionSchema = z
       ctx.addIssue({ code: 'custom', message: 'invalid report section' })
   })
 
-const createSchema = z.strictObject({
-  request_id: uuid,
-  configuration_revision: safeId,
-  report_prompt_version_id: safeId,
-  instructions_override: promptInstructionsSchema.nullable(),
-  selection: intervalSelection,
-})
-const retrySchema = z.strictObject({
-  request_id: uuid,
-  expected_revision: safeId,
-  configuration_revision: safeId,
-  instructions_override: promptInstructionsSchema.nullable(),
-})
+function rejectExplicitUndefined<T extends z.ZodTypeAny>(
+  schema: T,
+  keys: readonly string[],
+) {
+  return schema.superRefine((value, ctx) => {
+    if (!value || typeof value !== 'object') return
+    const record = value as Record<string, unknown>
+    for (const key of keys)
+      if (Object.hasOwn(record, key) && record[key] === undefined)
+        ctx.addIssue({
+          code: 'custom',
+          path: [key],
+          message: 'omit optional fields instead of sending undefined',
+        })
+  })
+}
+const createSchema = rejectExplicitUndefined(
+  z.strictObject({
+    request_id: uuid,
+    configuration_revision: safeId,
+    report_prompt: promptChoiceSchema,
+    selection: intervalSelection,
+  }),
+  ['report_prompt'],
+)
+const retrySchema = rejectExplicitUndefined(
+  z.strictObject({
+    request_id: uuid,
+    expected_revision: safeId,
+    configuration_revision: safeId,
+    report_prompt: promptChoiceSchema.optional(),
+  }),
+  ['report_prompt'],
+)
 const cancelSchema = z.strictObject({
   request_id: uuid,
   expected_revision: safeId,
@@ -452,6 +487,7 @@ export type ReportSection = z.infer<typeof reportSectionSchema>
 export type CreateReportRequest = z.infer<typeof createSchema>
 export type RetryReportRequest = z.infer<typeof retrySchema>
 export type CancelReportRequest = z.infer<typeof cancelSchema>
+export type ReportPromptChoice = PromptChoice
 export type ReportList = { reports: ReportRun[]; next_before_id: number | null }
 export type ReportListOptions = {
   beforeId?: number
@@ -753,11 +789,7 @@ export async function createTopicReport(input: CreateReportRequest) {
       intervalTimestampKey(input.selection.first_seen_from) ||
     intervalTimestampKey(report.selection.first_seen_to) !==
       intervalTimestampKey(input.selection.first_seen_to) ||
-    (input.instructions_override === null
-      ? report.prompt.origin !== 'shared' ||
-        report.prompt.version_id !== input.report_prompt_version_id
-      : report.prompt.origin !== 'override' ||
-        report.prompt.instructions !== input.instructions_override)
+    !reportPromptMatches(report.prompt, input)
   )
     throw new TopicReportApiError('invalid_response')
   return report
@@ -776,12 +808,31 @@ export async function retryTopicReport(id: number, input: RetryReportRequest) {
     report.parent_report_id !== id ||
     report.request_id !== input.request_id ||
     report.configuration_revision !== input.configuration_revision ||
-    (input.instructions_override !== null &&
-      (report.prompt.origin !== 'override' ||
-        report.prompt.instructions !== input.instructions_override))
+    (input.report_prompt !== undefined &&
+      !reportPromptChoiceMatches(report.prompt, input.report_prompt))
   )
     throw new TopicReportApiError('invalid_response')
   return report
+}
+
+function reportPromptMatches(
+  prompt: z.infer<typeof promptSchema>,
+  input: CreateReportRequest,
+) {
+  return reportPromptChoiceMatches(prompt, input.report_prompt)
+}
+
+function reportPromptChoiceMatches(
+  prompt: z.infer<typeof promptSchema>,
+  choice: PromptChoice,
+) {
+  return choice.mode === 'default'
+    ? prompt.mode === 'default' ||
+        prompt.origin === 'default' ||
+        (prompt.origin === 'shared' &&
+          prompt.mode !== 'custom' &&
+          prompt.mode !== 'legacy')
+    : prompt.mode === 'custom' && prompt.instructions === choice.instructions
 }
 export async function cancelTopicReport(
   id: number,

@@ -14,7 +14,6 @@ from longtian_api.repositories.content_analyses import ContentAnalysisRepository
 from longtian_api.repositories.results import ResultsRepository
 from longtian_api.schemas.ai_settings import AISettingsUpdate
 from longtian_api.schemas.ai_summaries import SummaryCreate
-from longtian_api.schemas.analysis_settings import PromptUpdate
 from longtian_api.schemas.content_analyses import WorkflowAnalysisCreate
 from longtian_api.services.ai_client import MAX_USAGE_TOKENS, AIUsage
 from longtian_api.services.ai_errors import AIError
@@ -111,48 +110,60 @@ def test_zero_successes_still_publish_one_normally_settled_handoff(tmp_path, out
     asyncio.run(run())
 
 
-def test_prompts_freeze_both_stages_without_requeue_and_cache_reuses_no_usage(tmp_path):
+def test_prompt_choices_freeze_both_stages_and_isolate_cache_keys(tmp_path):
     async def run():
         database, _, service, ai, model, worker, _ = environment(tmp_path, count=1)
         model.gate = asyncio.Event()
-        admission = await service.create(request(database))
-        await model.entered.wait()
-        settings = AnalysisSettingsRepository(database)
-        old = settings.read()
-        changed = settings.save_prompt(
-            "report",
-            PromptUpdate(
-                expected_version_id=old.report_prompt.id,
-                instructions="只讨论其他同名地点，保留未知。",
-            ),
+        custom_initial = "先完整理解来源，再交由第二阶段判断相关性。"
+        custom_report = "只讨论深圳坪山龙田，证据不足时保留不确定。"
+        admission = await service.create(
+            request(
+                database,
+                initial_prompt={"mode": "custom", "instructions": custom_initial},
+                report_prompt={"mode": "custom", "instructions": custom_report},
+            )
         )
+        await model.entered.wait()
         model.gate.set()
         await finish(service)
-        assert (
-            service.repository.read(admission.job.id).report_prompt == old.report_prompt
-        )
+        frozen = service.repository.read(admission.job.id)
+        assert frozen.initial_prompt.instructions == custom_initial
+        assert frozen.initial_prompt.mode == "custom"
+        assert frozen.report_prompt.instructions == custom_report
+        assert frozen.report_prompt.mode == "custom"
         assert ResultsRepository(database).list().eligible_count == 0
-        again = await service.create(
-            request(database, kind="reanalysis", result_ids=[1])
+        same_custom = await service.create(
+            request(
+                database,
+                kind="reanalysis",
+                result_ids=[1],
+                initial_prompt={
+                    "mode": "custom",
+                    "instructions": custom_initial,
+                },
+                report_prompt={
+                    "mode": "custom",
+                    "instructions": custom_report,
+                },
+            )
         )
         await finish(service)
-        reused = service.repository.read(again.job.id)
-        assert reused.report_prompt == changed.report_prompt
-        assert reused.counts.reused == 1 and reused.usage.attempted_requests == 0
+        reused_custom = service.repository.read(same_custom.job.id)
+        assert reused_custom.counts.reused == 1
         assert len(model.calls) == len(worker.calls) == 1
-        settings.save_prompt(
-            "initial",
-            PromptUpdate(
-                expected_version_id=old.initial_prompt.id,
-                instructions="详细提取来源的地理与时间信息。",
-            ),
-        )
-        assert ResultsRepository(database).list().eligible_count == 0
-        reanalysis = await service.create(
-            request(database, kind="reanalysis", result_ids=[1])
+
+        different_prompt = await service.create(
+            request(
+                database,
+                kind="reanalysis",
+                result_ids=[1],
+                initial_prompt={"mode": "default"},
+                report_prompt={"mode": "default"},
+            )
         )
         await finish(service)
-        assert service.repository.read(reanalysis.job.id).counts.reused == 0
+        isolated = service.repository.read(different_prompt.job.id)
+        assert isolated.counts.reused == 0
         assert len(model.calls) == len(worker.calls) == 2
         await service.shutdown()
         await ai.shutdown()

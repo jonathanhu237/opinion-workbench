@@ -7,7 +7,6 @@ from pydantic import SecretStr
 from summary_fixtures import BASE, KEY, MODEL, MediaWorker, ModelClient, seed_run
 
 from longtian_api.database import Database
-from longtian_api.repositories.analysis_settings import AnalysisSettingsRepository
 from longtian_api.repositories.search_runs import SearchRunRepository
 from longtian_api.schemas.ai_settings import AISettingsUpdate
 from longtian_api.schemas.content_analyses import AnalysisCreate
@@ -37,7 +36,6 @@ class UnderstandingClient(ModelClient):
 
 
 def request(database, *, kind="all_never_started", result_ids=None, **overrides):
-    settings = AnalysisSettingsRepository(database).read()
     selection = {"kind": kind}
     if result_ids is not None:
         selection["result_ids"] = result_ids
@@ -45,8 +43,7 @@ def request(database, *, kind="all_never_started", result_ids=None, **overrides)
         {
             "request_id": str(uuid4()),
             "configuration_revision": 1,
-            "initial_prompt_version_id": settings.initial_prompt.id,
-            "report_prompt_version_id": settings.report_prompt.id,
+            "initial_prompt": {"mode": "default"},
             "force_refresh": False,
             "selection": selection,
             **overrides,

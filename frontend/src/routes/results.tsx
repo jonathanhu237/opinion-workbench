@@ -19,6 +19,7 @@ import { AI_SETTINGS_QUERY_KEY, fetchAISettings } from '@/lib/api/ai-settings'
 import {
   ANALYSIS_SETTINGS_QUERY_KEY,
   fetchAnalysisSettings,
+  type PromptChoice,
 } from '@/lib/api/analysis-settings'
 import {
   analysisErrorMessage,
@@ -150,8 +151,7 @@ export function Results() {
       request: {
         request_id: crypto.randomUUID(),
         configuration_revision: provider.data.revision,
-        initial_prompt_version_id: settings.data.initial_prompt.id,
-        report_prompt_version_id: settings.data.report_prompt.id,
+        initial_prompt: { mode: 'default' },
         force_refresh: selection.kind === 'reanalysis',
         selection,
       },
@@ -506,6 +506,16 @@ export function Results() {
             }
           }}
           onConfirm={() => start.mutate(confirmation.request)}
+          onPromptChange={(choice: PromptChoice) =>
+            setConfirmation((current) =>
+              current
+                ? {
+                    ...current,
+                    request: { ...current.request, initial_prompt: choice },
+                  }
+                : current,
+            )
+          }
           onReconfirm={() => {
             setConfirmation(null)
             setConfirmationOpen(false)

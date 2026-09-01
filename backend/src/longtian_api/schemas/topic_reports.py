@@ -14,7 +14,7 @@ from longtian_api.schemas.ai_summaries import (
     TokenUsage,
 )
 from longtian_api.schemas.analysis_evidence import AnalysisSource, EvidenceCoverage
-from longtian_api.schemas.analysis_settings import Count, PositiveId
+from longtian_api.schemas.analysis_settings import Count, PositiveId, PromptChoice
 from longtian_api.schemas.collection_schedules import UtcTimestamp
 from longtian_api.schemas.content_analyses import (
     AnalysisUsage,
@@ -116,15 +116,45 @@ class RequestIntent(StrictModel):
 
 class ReportCreate(RequestIntent):
     configuration_revision: PositiveId
-    report_prompt_version_id: PositiveId
-    instructions_override: str | None
+    report_prompt_version_id: PositiveId | None = None
+    report_prompt: PromptChoice | None = None
+    # Legacy report overrides remain accepted for replay/history compatibility.
+    instructions_override: str | None = None
     selection: IntervalSelection
 
 
 class ReportRetry(RequestIntent):
     expected_revision: PositiveId
     configuration_revision: PositiveId
-    instructions_override: str | None
+    report_prompt_version_id: PositiveId | None = None
+    report_prompt: PromptChoice | None = None
+    instructions_override: str | None = None
+
+
+class ReportCreateRequest(RequestIntent):
+    """Strict public payload for a new second-stage report."""
+
+    configuration_revision: PositiveId
+    report_prompt: PromptChoice
+    selection: IntervalSelection
+
+
+class ReportRetryRequest(RequestIntent):
+    """Strict public payload; omitted prompt means reuse the parent snapshot."""
+
+    expected_revision: PositiveId
+    configuration_revision: PositiveId
+    report_prompt: PromptChoice | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_explicit_null_prompt(cls, values):
+        # ``null`` is not a PromptChoice.  Only omission carries the explicit
+        # retry contract of reusing the parent's immutable prompt snapshot.
+        if isinstance(values, dict) and "report_prompt" in values:
+            if values["report_prompt"] is None:
+                raise ValueError("report_prompt must be omitted")
+        return values
 
 
 class ReportCancel(RequestIntent):
@@ -132,8 +162,9 @@ class ReportCancel(RequestIntent):
 
 
 class ReportPrompt(StrictModel):
-    version_id: PositiveId | None
-    origin: Literal["shared", "override"]
+    version_id: PositiveId | None = None
+    mode: Literal["default", "custom", "legacy"] | None = None
+    origin: Literal["default", "custom", "legacy", "shared", "override"]
     instructions: str = Field(min_length=1, max_length=8000)
     content_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
     schema_version: Literal["topic-report-v1"]
@@ -143,8 +174,18 @@ class ReportPrompt(StrictModel):
     def consistent_origin(self) -> Self:
         import hashlib
 
-        if (self.origin == "shared") != (self.version_id is not None):
+        if self.origin in {"default", "custom", "shared"} and self.version_id is None:
             raise ValueError("invalid prompt origin")
+        # A historical snapshot may still point at the immutable prompt row;
+        # only an ad-hoc override is necessarily version-less.
+        if self.origin == "override" and self.version_id is not None:
+            raise ValueError("invalid prompt origin")
+        if self.mode == "default" and self.origin not in {"default", "shared"}:
+            raise ValueError("invalid prompt mode")
+        if self.mode == "custom" and self.origin not in {"custom", "shared"}:
+            raise ValueError("invalid prompt mode")
+        if self.mode == "legacy" and self.origin != "legacy":
+            raise ValueError("invalid prompt mode")
         if hashlib.sha256(self.instructions.encode()).hexdigest() != self.content_hash:
             raise ValueError("invalid prompt hash")
         return self

@@ -70,27 +70,39 @@ class TopicReportService:
         async with self._admission:
             if self._closed or not self.available:
                 raise TopicReportError("topic_report_unavailable")
+            initial_prompt = getattr(snapshot, "initial_prompt", None)
+            report_prompt = getattr(snapshot, "report_prompt", None)
+            initial_version_id = snapshot.initial_prompt_version_id or (
+                initial_prompt.version_id if initial_prompt is not None else None
+            )
+            report_version_id = snapshot.report_prompt_version_id or (
+                report_prompt.version_id if report_prompt is not None else None
+            )
             required = (
                 snapshot.ai_configuration_revision,
                 snapshot.ai_base_url,
                 snapshot.ai_model,
-                snapshot.initial_prompt_version_id,
-                snapshot.report_prompt_version_id,
+                initial_version_id,
+                report_version_id,
             )
             if any(value is None for value in required):
                 raise AIError("ai_configuration_required")
-            self._validate_override(snapshot.analysis_goal)
             report = await database_call(
                 self.repository.create_workflow,
                 run_id=run_id,
                 analysis_job_id=analysis_job_id,
                 operation_key=operation_key,
-                analysis_goal=snapshot.analysis_goal,
+                analysis_goal=(
+                    None
+                    if report_prompt is not None
+                    else snapshot.analysis_goal
+                ),
                 configuration_revision=snapshot.ai_configuration_revision,
                 base_url=snapshot.ai_base_url,
                 model=snapshot.ai_model,
-                initial_prompt_version_id=snapshot.initial_prompt_version_id,
-                report_prompt_version_id=snapshot.report_prompt_version_id,
+                initial_prompt_version_id=initial_version_id,
+                report_prompt_version_id=report_version_id,
+                report_prompt=report_prompt,
             )
             if report.status == "queued":
                 await self._launch()

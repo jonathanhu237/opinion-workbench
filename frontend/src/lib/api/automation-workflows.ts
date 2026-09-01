@@ -1,5 +1,10 @@
 import { z } from 'zod'
 
+import {
+  promptChoiceSchema,
+  promptSnapshotSchema,
+  type PromptChoice,
+} from '@/lib/api/analysis-settings'
 import { safeCount, safeId } from '@/lib/api/analysis-shared'
 import { getApiBaseUrl } from '@/lib/api/client'
 import {
@@ -96,6 +101,15 @@ export const automationScheduleSchema = z.discriminatedUnion('kind', [
   dailyScheduleSchema,
 ])
 
+const initialPromptSnapshotSchema = promptSnapshotSchema.refine(
+  (value) => value.schema_version === 'initial-understanding-v1',
+  '自动任务初始分析提示词版本不匹配。',
+)
+const reportPromptSnapshotSchema = promptSnapshotSchema.refine(
+  (value) => value.schema_version === 'topic-report-v1',
+  '自动任务专题报告提示词版本不匹配。',
+)
+
 const snapshotSchema = z
   .strictObject({
     task_id: safeId,
@@ -108,6 +122,8 @@ const snapshotSchema = z
     max_results_per_term: safeId.max(50),
     analysis_goal: z.string().min(1).max(MAX_AUTOMATION_GOAL_LENGTH),
     analysis_goal_hash: z.string().regex(/^[a-f0-9]{64}$/u),
+    initial_prompt: initialPromptSnapshotSchema.optional(),
+    report_prompt: reportPromptSnapshotSchema.optional(),
     ai_configuration_revision: safeRevision.nullable(),
     ai_base_url: z.string().max(2048).nullable(),
     ai_model: z.string().max(200).nullable(),
@@ -120,6 +136,28 @@ const snapshotSchema = z
   .refine((value) => proseIsValid(value.task_name))
   .refine((value) => proseIsValid(value.rule_name))
   .refine((value) => proseIsValid(value.analysis_goal))
+  .superRefine((value, context) => {
+    if (
+      value.initial_prompt !== undefined &&
+      value.initial_prompt_version_id !== value.initial_prompt.version_id
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['initial_prompt_version_id'],
+        message: '初步分析提示词版本不一致。',
+      })
+    }
+    if (
+      value.report_prompt !== undefined &&
+      value.report_prompt_version_id !== value.report_prompt.version_id
+    ) {
+      context.addIssue({
+        code: 'custom',
+        path: ['report_prompt_version_id'],
+        message: '报告提示词版本不一致。',
+      })
+    }
+  })
 
 const stageSchema = z
   .strictObject({
@@ -275,6 +313,8 @@ const taskSchema = z
     platforms: platformListSchema,
     max_results_per_term: safeId.max(50),
     analysis_goal: z.string().min(1).max(MAX_AUTOMATION_GOAL_LENGTH),
+    initial_prompt: initialPromptSnapshotSchema.optional(),
+    report_prompt: reportPromptSnapshotSchema.optional(),
     schedule: automationScheduleSchema,
     enabled: z.boolean(),
     revision: safeRevision,
@@ -345,11 +385,12 @@ const runPageSchema = z.strictObject({
 })
 
 const createSchema = z.strictObject({
-  name: z.string().min(1).max(80),
+  name: z.string().min(1).max(80).refine(proseIsValid),
   monitoring_rule_id: safeId,
   platforms: platformListSchema,
   max_results_per_term: safeId.max(50),
-  analysis_goal: z.string().min(1).max(MAX_AUTOMATION_GOAL_LENGTH),
+  initial_prompt: promptChoiceSchema,
+  report_prompt: promptChoiceSchema,
   schedule: automationScheduleSchema,
 })
 const replaceSchema = createSchema.extend({
@@ -840,11 +881,20 @@ export function automationTaskUpdatePayload(
     monitoring_rule_id: task.monitoring_rule_id,
     platforms: task.platforms,
     max_results_per_term: task.max_results_per_term,
-    analysis_goal: task.analysis_goal,
+    initial_prompt: promptChoiceFromSnapshot(task.initial_prompt),
+    report_prompt: promptChoiceFromSnapshot(task.report_prompt),
     schedule: task.schedule,
     expected_revision: task.revision,
     enabled,
   }
+}
+
+function promptChoiceFromSnapshot(
+  prompt: AutomationTask['initial_prompt'] | AutomationTask['report_prompt'],
+): PromptChoice {
+  return prompt?.mode === 'custom' || prompt?.mode === 'legacy'
+    ? { mode: 'custom', instructions: prompt.instructions }
+    : { mode: 'default' }
 }
 
 export function newAutomationRequestId() {

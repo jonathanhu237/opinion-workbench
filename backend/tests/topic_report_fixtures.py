@@ -148,23 +148,23 @@ def retry_request(report, **overrides):
             "request_id": str(uuid4()),
             "expected_revision": report.revision,
             "configuration_revision": report.configuration_revision,
-            "instructions_override": None,
             **overrides,
         }
     )
 
 
 def interval_request(database, **overrides):
-    from longtian_api.repositories.analysis_settings import AnalysisSettingsRepository
-
+    legacy_override = overrides.pop("instructions_override", None)
+    if legacy_override is not None:
+        overrides["report_prompt"] = {
+            "mode": "custom",
+            "instructions": legacy_override,
+        }
     return ReportCreate.model_validate(
         {
             "request_id": str(uuid4()),
             "configuration_revision": 1,
-            "report_prompt_version_id": AnalysisSettingsRepository(database)
-            .read()
-            .report_prompt.id,
-            "instructions_override": None,
+            "report_prompt": {"mode": "default"},
             "selection": {
                 "kind": "first_seen_interval",
                 "first_seen_from": "2020-01-01T00:00:00Z",

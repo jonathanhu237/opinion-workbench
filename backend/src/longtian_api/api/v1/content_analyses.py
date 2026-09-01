@@ -12,6 +12,7 @@ from longtian_api.schemas.content_analyses import (
     AnalysisAttemptList,
     AnalysisCancel,
     AnalysisCreate,
+    AnalysisCreateRequest,
     AnalysisJob,
     AnalysisJobList,
 )
@@ -36,8 +37,12 @@ router = APIRouter(
     status_code=202,
     dependencies=[Depends(require_local_mutation)],
 )
-async def create_job(payload: AnalysisCreate, service: Service) -> AnalysisAdmission:
-    return await service.create(payload)
+async def create_job(
+    payload: AnalysisCreateRequest, service: Service
+) -> AnalysisAdmission:
+    # Keep the service/repository compatibility envelope private while the
+    # HTTP boundary accepts only the current stage-one choice contract.
+    return await service.create(AnalysisCreate(**payload.model_dump()))
 
 
 @router.get("/content-analysis-jobs")

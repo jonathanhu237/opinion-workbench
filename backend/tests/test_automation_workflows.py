@@ -53,6 +53,11 @@ def _task_payload(**changes):
         "platforms": ["toutiao"],
         "max_results_per_term": 10,
         "analysis_goal": "识别与龙田街道相关的舆情内容",
+        "initial_prompt": {"mode": "default"},
+        "report_prompt": {
+            "mode": "custom",
+            "instructions": "识别与龙田街道相关的舆情内容",
+        },
         "schedule": {"kind": "interval", "interval_minutes": 30},
     }
     value.update(changes)
@@ -110,7 +115,7 @@ def test_v15_is_additive_and_does_not_convert_old_schedules(tmp_path: Path):
         assert (
             connection.execute("PRAGMA user_version").fetchone()[0]
             == CURRENT_DATABASE_VERSION
-            == 17
+            == 18
         )
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         assert (
@@ -1163,7 +1168,9 @@ def test_http_contract_replaces_old_schedule_route_and_replays_run_now(tmp_path:
         assert client.get("/api/v1/collection-schedules").status_code == 404
         created = client.post(
             "/api/v1/automation-tasks",
-            json=_task_payload().model_dump(mode="json"),
+            json=_task_payload().model_dump(
+                mode="json", exclude={"analysis_goal"}
+            ),
         )
         assert created.status_code == 201, created.text
         task = created.json()
@@ -1172,7 +1179,12 @@ def test_http_contract_replaces_old_schedule_route_and_replays_run_now(tmp_path:
 
         invalid = client.post(
             "/api/v1/automation-tasks",
-            json={**_task_payload().model_dump(mode="json"), "unknown": True},
+            json={
+                **_task_payload().model_dump(
+                    mode="json", exclude={"analysis_goal"}
+                ),
+                "unknown": True,
+            },
         )
         assert invalid.status_code == 422
         assert invalid.headers["cache-control"] == "no-store"
@@ -1237,6 +1249,8 @@ def test_http_contract_replaces_old_schedule_route_and_replays_run_now(tmp_path:
         assert replay_delete.status_code == 204 and replay_delete.content == b""
         recreated = client.post(
             "/api/v1/automation-tasks",
-            json=_task_payload().model_dump(mode="json"),
+            json=_task_payload().model_dump(
+                mode="json", exclude={"analysis_goal"}
+            ),
         )
         assert recreated.status_code == 201 and recreated.json()["id"] != task["id"]

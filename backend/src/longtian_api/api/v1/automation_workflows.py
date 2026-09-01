@@ -17,9 +17,11 @@ from longtian_api.schemas.automation_workflows import (
     AutomationRunRetry,
     AutomationTask,
     AutomationTaskCreate,
+    AutomationTaskCreateRequest,
     AutomationTaskDelete,
     AutomationTaskList,
     AutomationTaskReplace,
+    AutomationTaskReplaceRequest,
 )
 from longtian_api.services.ai_errors import AIError
 from longtian_api.services.automation_workflow_errors import (
@@ -100,8 +102,10 @@ def list_tasks(
     status_code=201,
     dependencies=[Depends(require_local_mutation)],
 )
-def create_task(payload: AutomationTaskCreate, service: Service) -> AutomationTask:
-    return service.create_task(payload)
+def create_task(
+    payload: AutomationTaskCreateRequest, service: Service
+) -> AutomationTask:
+    return service.create_task(AutomationTaskCreate(**payload.model_dump()))
 
 
 @router.get("/automation-tasks/{task_id}")
@@ -114,9 +118,13 @@ def get_task(task_id: Identity, service: Service) -> AutomationTask:
     dependencies=[Depends(require_local_mutation)],
 )
 def replace_task(
-    task_id: Identity, payload: AutomationTaskReplace, service: Service
+    task_id: Identity,
+    payload: AutomationTaskReplaceRequest,
+    service: Service,
 ) -> AutomationTask:
-    return service.replace_task(task_id, payload)
+    return service.replace_task(
+        task_id, AutomationTaskReplace(**payload.model_dump())
+    )
 
 
 @router.delete(

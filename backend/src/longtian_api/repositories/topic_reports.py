@@ -9,11 +9,16 @@ from typing import get_args
 from pydantic import ValidationError
 
 from longtian_api.repositories.ai_summaries import fingerprint
-from longtian_api.repositories.analysis_settings import read_prompt
+from longtian_api.repositories.analysis_settings import (
+    read_prompt,
+    resolve_prompt_choice,
+    resolve_prompt_version,
+)
 from longtian_api.repositories.analysis_shared import source_snapshot, timestamp
 from longtian_api.repositories.content_analyses import ContentAnalysisRepository
 from longtian_api.schemas.ai_summaries import SummaryFailure, TokenUsage
 from longtian_api.schemas.analysis_evidence import AnalysisSource
+from longtian_api.schemas.analysis_settings import PromptChoice, PromptSnapshot
 from longtian_api.schemas.content_analyses import AnalysisUsage
 from longtian_api.schemas.topic_report_engine import (
     ChildOverview,
@@ -58,6 +63,41 @@ from longtian_api.services.topic_report_errors import (
     TopicReportError,
     configuration_failure,
 )
+
+
+def _read_report_prompt(value: str) -> ReportPrompt:
+    """Decode current prompts and project the pre-v18 instruction-only shape."""
+
+    payload = decode_model_json(value)
+    if not isinstance(payload, dict):
+        raise ValueError("invalid stored report prompt")
+    # Rows written by the current application (and by the v14/v15 report
+    # implementation) carry explicit source metadata.  Let the strict model
+    # validate those fields instead of silently downgrading malformed data.
+    if "origin" in payload or "mode" in payload:
+        return ReportPrompt.model_validate(payload)
+
+    # The earliest report rows stored only the user-facing instructions.  They
+    # are immutable history, so infer a legacy source at read time and retain
+    # an old version ID/hash when one was present; never update prompt_json.
+    allowed = {"version_id", "instructions", "content_hash", "schema_version"}
+    if set(payload) - allowed:
+        raise ValueError("invalid stored report prompt")
+    instructions = payload.get("instructions")
+    if not isinstance(instructions, str):
+        raise ValueError("invalid stored report prompt")
+    content_hash = hashlib.sha256(instructions.encode()).hexdigest()
+    stored_hash = payload.get("content_hash")
+    if stored_hash is not None and stored_hash != content_hash:
+        raise ValueError("invalid stored report prompt")
+    return ReportPrompt(
+        mode="legacy",
+        origin="legacy",
+        version_id=payload.get("version_id"),
+        instructions=instructions,
+        content_hash=content_hash,
+        schema_version=payload.get("schema_version", "topic-report-v1"),
+    )
 
 
 def saved_failure(value, *, report=False):
@@ -255,7 +295,7 @@ class TopicReportRepository:
             configuration_revision=row["configuration_revision"],
             base_url=row["base_url"],
             model=row["model"],
-            prompt=ReportPrompt.model_validate_json(row["prompt_json"]),
+            prompt=_read_report_prompt(row["prompt_json"]),
             coverage=Coverage(
                 total=sum(counts.values()),
                 ready=sum(counts.values()) - counts["unavailable"],
@@ -472,6 +512,62 @@ class TopicReportRepository:
             schema_version="topic-report-v1",
         )
 
+    def _prompt_choice(
+        self,
+        connection,
+        *,
+        choice: PromptChoice | None = None,
+        version_id: int | None = None,
+        override: str | None = None,
+    ) -> ReportPrompt:
+        """Resolve a report choice to a durable, auditable prompt projection."""
+        if override is not None:
+            if choice is not None or version_id is not None:
+                raise AnalysisError("invalid_analysis_prompt")
+            return ReportPrompt(
+                version_id=None,
+                origin="override",
+                instructions=override,
+                content_hash=hashlib.sha256(override.encode()).hexdigest(),
+                schema_version="topic-report-v1",
+            )
+        if version_id is not None:
+            row = connection.execute(
+                "SELECT stage FROM analysis_prompt_versions WHERE id=?",
+                (version_id,),
+            ).fetchone()
+            if row is None or row["stage"] != "report":
+                raise AnalysisError("analysis_prompt_changed")
+        if choice is not None:
+            selected = resolve_prompt_choice(connection, "report", choice)
+            if version_id is not None:
+                frozen = resolve_prompt_version(connection, "report", version_id)
+                if (
+                    frozen.instructions != selected.instructions
+                    or frozen.content_hash != selected.content_hash
+                    or frozen.schema_version != selected.schema_version
+                ):
+                    raise AnalysisError("analysis_prompt_changed")
+                snapshot = frozen.model_copy(update={"mode": selected.mode})
+            else:
+                snapshot = selected
+        elif version_id is not None:
+            snapshot = resolve_prompt_version(connection, "report", version_id)
+        else:
+            snapshot = resolve_prompt_choice(connection, "report", None)
+        return ReportPrompt(
+            version_id=snapshot.version_id,
+            mode=snapshot.mode,
+            origin=(
+                snapshot.mode
+                if snapshot.mode in {"default", "custom"}
+                else "shared"
+            ),
+            instructions=snapshot.instructions,
+            content_hash=snapshot.content_hash,
+            schema_version=snapshot.schema_version,
+        )
+
     def _new(
         self,
         connection,
@@ -548,7 +644,9 @@ class TopicReportRepository:
                     understanding=item.output,
                     input_fingerprint=item.input_fingerprint,
                     initial_prompt=read_prompt(
-                        connection, job["initial_prompt_version_id"]
+                        connection,
+                        job["initial_prompt_version_id"],
+                        mode=job["initial_prompt_mode"],
                     ),
                     initial_provider=ProviderIntent(
                         base_url=job["base_url"],
@@ -622,7 +720,12 @@ class TopicReportRepository:
             raise ValueError("invalid settlement event")
         prompt = ReportPrompt(
             version_id=job.report_prompt.id,
-            origin="shared",
+            mode=job.report_prompt.mode,
+            origin=(
+                job.report_prompt.mode
+                if job.report_prompt.mode in {"default", "custom"}
+                else "legacy"
+            ),
             instructions=job.report_prompt.instructions,
             content_hash=job.report_prompt.content_hash,
             schema_version=job.report_prompt.schema_version,
@@ -661,12 +764,13 @@ class TopicReportRepository:
         run_id: int,
         analysis_job_id: int | None,
         operation_key: str,
-        analysis_goal: str,
+        analysis_goal: str | None = None,
         configuration_revision: int,
         base_url: str,
         model: str,
-        initial_prompt_version_id: int,
-        report_prompt_version_id: int,
+        initial_prompt_version_id: int | None = None,
+        report_prompt_version_id: int | None = None,
+        report_prompt: PromptSnapshot | None = None,
     ):
         """Freeze one workflow-owned report without consuming legacy callbacks."""
         with self.connection(write=True) as connection:
@@ -689,13 +793,73 @@ class TopicReportRepository:
                 model=model,
                 configuration_revision=configuration_revision,
             )
-            prompt = ReportPrompt(
-                version_id=None,
-                origin="override",
-                instructions=analysis_goal,
-                content_hash=hashlib.sha256(analysis_goal.encode()).hexdigest(),
-                schema_version="topic-report-v1",
-            )
+            if initial_prompt_version_id is not None:
+                # The report may legitimately have zero sources (and thus no
+                # analysis job), but its frozen stage-one reference still has
+                # to be a real initial-stage prompt before the report is
+                # admitted.
+                resolve_prompt_version(
+                    connection, "initial", initial_prompt_version_id
+                )
+            if report_prompt is not None:
+                if report_prompt.version_id is None:
+                    raise AnalysisError("analysis_prompt_changed")
+                if (
+                    report_prompt_version_id is not None
+                    and report_prompt.version_id != report_prompt_version_id
+                ):
+                    raise AnalysisError("analysis_prompt_changed")
+                frozen = resolve_prompt_version(
+                    connection,
+                    "report",
+                    report_prompt.version_id,
+                    mode=report_prompt.mode,
+                )
+                # Pre-v18 run snapshots pointed at the shared report version
+                # while storing the task-specific report instructions in
+                # ``analysis_goal``.  The read-time legacy projection keeps
+                # both facts, so its text intentionally cannot match that
+                # historical shared row.  Current default/custom snapshots
+                # must still match every immutable field before admission.
+                if report_prompt.mode != "legacy" and (
+                    frozen.instructions != report_prompt.instructions
+                    or frozen.content_hash != report_prompt.content_hash
+                    or frozen.schema_version != report_prompt.schema_version
+                ):
+                    raise AnalysisError("analysis_prompt_changed")
+                prompt = ReportPrompt(
+                    version_id=report_prompt.version_id,
+                    mode=report_prompt.mode,
+                    origin=(
+                        report_prompt.mode
+                        if report_prompt.mode in {"default", "custom"}
+                        else "legacy"
+                    ),
+                    instructions=report_prompt.instructions,
+                    content_hash=report_prompt.content_hash,
+                    schema_version=report_prompt.schema_version,
+                )
+            elif analysis_goal is not None:
+                # Historical workflow snapshots only carried ``analysis_goal``
+                # in their JSON.  Keep that exact text and mark the projection
+                # legacy rather than treating it as a new override/version.
+                if report_prompt_version_id is not None:
+                    resolve_prompt_version(
+                        connection, "report", report_prompt_version_id
+                    )
+                prompt = ReportPrompt(
+                    version_id=report_prompt_version_id,
+                    mode="legacy",
+                    origin="legacy",
+                    instructions=analysis_goal,
+                    content_hash=hashlib.sha256(analysis_goal.encode()).hexdigest(),
+                    schema_version="topic-report-v1",
+                )
+            else:
+                prompt = self._prompt_choice(
+                    connection,
+                    version_id=report_prompt_version_id,
+                )
             attempts = ()
             if analysis_job_id is not None:
                 job = self._analyses._read(connection, analysis_job_id)
@@ -704,8 +868,14 @@ class TopicReportRepository:
                     or job.configuration_revision != configuration_revision
                     or job.base_url != base_url
                     or job.model != model
-                    or job.initial_prompt.id != initial_prompt_version_id
-                    or job.report_prompt.id != report_prompt_version_id
+                    or (
+                        initial_prompt_version_id is not None
+                        and job.initial_prompt.id != initial_prompt_version_id
+                    )
+                    or (
+                        report_prompt_version_id is not None
+                        and job.report_prompt.id != report_prompt_version_id
+                    )
                 ):
                     raise ValueError("invalid workflow analysis snapshot")
                 attempts = connection.execute(
@@ -741,21 +911,11 @@ class TopicReportRepository:
             replay = self._replay(connection, "create", None, payload)
             if replay is not None:
                 return replay
-            current = connection.execute(
-                "SELECT report_prompt_version_id FROM analysis_settings WHERE id=1"
-            ).fetchone()[0]
-            if current != payload.report_prompt_version_id:
-                raise AnalysisError("analysis_prompt_changed")
-            shared = read_prompt(connection, current)
-            prompt = self._prompt(
-                ReportPrompt(
-                    version_id=shared.id,
-                    origin="shared",
-                    instructions=shared.instructions,
-                    content_hash=shared.content_hash,
-                    schema_version=shared.schema_version,
-                ),
-                payload.instructions_override,
+            prompt = self._prompt_choice(
+                connection,
+                choice=payload.report_prompt,
+                version_id=payload.report_prompt_version_id,
+                override=payload.instructions_override,
             )
             report_id = self._new(
                 connection,
@@ -861,11 +1021,23 @@ class TopicReportRepository:
                 raise TopicReportError("topic_report_changed")
             if parent.status in ACTIVE_REPORTS:
                 raise TopicReportError("topic_report_not_terminal")
+            prompt = parent.prompt
+            if (
+                payload.report_prompt is not None
+                or payload.report_prompt_version_id is not None
+                or payload.instructions_override is not None
+            ):
+                prompt = self._prompt_choice(
+                    connection,
+                    choice=payload.report_prompt,
+                    version_id=payload.report_prompt_version_id,
+                    override=payload.instructions_override,
+                )
             report_id = self._new(
                 connection,
                 trigger="retry",
                 selection=parent.selection.model_dump(),
-                prompt=self._prompt(parent.prompt, payload.instructions_override),
+                prompt=prompt,
                 provider=self._provider(connection, payload.configuration_revision),
                 request_id=payload.request_id,
                 job_id=parent.initial_job_id,
@@ -982,7 +1154,7 @@ class TopicReportRepository:
         # O(all sources) public progress projection for every single node.
         with self.connection() as connection:
             row = self._require(connection, report_id)
-            prompt = ReportPrompt.model_validate_json(row["prompt_json"])
+            prompt = _read_report_prompt(row["prompt_json"])
             return EngineContext(
                 prompt=TextPrompt(
                     instructions=prompt.instructions,

@@ -304,7 +304,6 @@ describe('strict saved-text report boundary', () => {
           request_id: reportRequestId,
           expected_revision: 2,
           configuration_revision: 3,
-          instructions_override: null,
         }),
       ).rejects.toMatchObject({ code: 'invalid_response' })
     },
@@ -547,7 +546,7 @@ describe('strict saved-text report boundary', () => {
       expect.any(Object),
     )
   })
-  it('creates interval and override reports with the exact frozen intent, and no stage-one fields', async () => {
+  it('creates interval and custom reports with the exact frozen intent, and no stage-one fields', async () => {
     const report = reportFixture({
       trigger: 'interval',
       request_id: reportRequestId,
@@ -566,7 +565,10 @@ describe('strict saved-text report boundary', () => {
     )
     const override = {
       ...reportCreateRequest,
-      instructions_override: '  本次专用提示词\n',
+      report_prompt: {
+        mode: 'custom' as const,
+        instructions: '  本次专用提示词\n',
+      },
     }
     fetchMock.mockResolvedValueOnce(
       json(
@@ -574,16 +576,16 @@ describe('strict saved-text report boundary', () => {
           ...report,
           prompt: {
             ...report.prompt,
-            version_id: null,
-            origin: 'override',
-            instructions: override.instructions_override,
+            mode: 'custom',
+            origin: 'custom',
+            instructions: override.report_prompt.instructions,
           },
         },
         202,
       ),
     )
     expect((await createTopicReport(override)).prompt.instructions).toBe(
-      override.instructions_override,
+      override.report_prompt.instructions,
     )
   })
   it.each([
@@ -715,10 +717,25 @@ describe('strict saved-text report boundary', () => {
     const bad = [
       { ...reportCreateRequest, request_id: reportRequestId.toUpperCase() },
       { ...reportCreateRequest, request_id: 'invalid' },
-      { ...reportCreateRequest, instructions_override: ' ' },
-      { ...reportCreateRequest, instructions_override: 'x'.repeat(8001) },
-      { ...reportCreateRequest, instructions_override: '\u0000' },
-      { ...reportCreateRequest, instructions_override: '\ud800' },
+      {
+        ...reportCreateRequest,
+        report_prompt: { mode: 'custom' as const, instructions: ' ' },
+      },
+      {
+        ...reportCreateRequest,
+        report_prompt: {
+          mode: 'custom' as const,
+          instructions: 'x'.repeat(8001),
+        },
+      },
+      {
+        ...reportCreateRequest,
+        report_prompt: { mode: 'custom' as const, instructions: '\u0000' },
+      },
+      {
+        ...reportCreateRequest,
+        report_prompt: { mode: 'custom' as const, instructions: '\ud800' },
+      },
       { ...reportCreateRequest, configuration_revision: true },
       {
         ...reportCreateRequest,
@@ -734,7 +751,7 @@ describe('strict saved-text report boundary', () => {
           first_seen_to: '2026-08-30T08:00:00+08:00',
         },
       },
-      { ...reportCreateRequest, instructions_override: undefined },
+      { ...reportCreateRequest, report_prompt: undefined },
     ]
     for (const value of bad)
       await expect(
@@ -747,7 +764,6 @@ describe('strict saved-text report boundary', () => {
       request_id: reportRequestId,
       expected_revision: 2,
       configuration_revision: 3,
-      instructions_override: null,
     }
     const retried = reportFixture({
       id: 32,

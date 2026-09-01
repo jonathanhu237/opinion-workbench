@@ -145,7 +145,7 @@ def test_workflow_report_freezes_goal_replays_and_saves_zero_model_empty(tmp_pat
         report = reports.repository.read(report.id)
         assert report.status == "completed"
         assert report.selection.model_dump() == {"kind": "workflow_run", "run_id": 41}
-        assert report.prompt.instructions == goal and report.prompt.origin == "override"
+        assert report.prompt.instructions == goal and report.prompt.origin == "legacy"
         replay = await reports.workflow_admit(
             run_id=41,
             analysis_job_id=admission.job.id,

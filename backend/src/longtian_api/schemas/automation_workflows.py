@@ -9,6 +9,13 @@ from uuid import UUID
 from pydantic import Field, field_validator, model_validator
 
 from longtian_api.schemas.ai_summaries import StrictModel
+from longtian_api.schemas.analysis_settings import (
+    INITIAL_SCHEMA_VERSION,
+    REPORT_SCHEMA_VERSION,
+    PromptChoice,
+    PromptChoiceDefault,
+    PromptSnapshot,
+)
 from longtian_api.schemas.collection_schedules import UtcTimestamp
 from longtian_api.search_platforms import SearchPlatform
 
@@ -108,12 +115,43 @@ class AutomationTaskCreate(StrictModel):
     monitoring_rule_id: int = Field(ge=1, le=MAX_SAFE_INTEGER)
     platforms: list[SearchPlatform] = Field(min_length=1, max_length=MAX_PLATFORMS)
     max_results_per_term: int = Field(default=10, ge=1, le=50)
-    analysis_goal: str = Field(min_length=1, max_length=MAX_ANALYSIS_GOAL_LENGTH)
+    # ``analysis_goal`` is retained as a private compatibility mirror for
+    # clients written before v18.  New callers submit one choice per stage.
+    analysis_goal: str | None = Field(
+        default=None, min_length=1, max_length=MAX_ANALYSIS_GOAL_LENGTH
+    )
+    initial_prompt: PromptChoice = Field(
+        default_factory=lambda: PromptChoiceDefault(mode="default")
+    )
+    report_prompt: PromptChoice = Field(
+        default_factory=lambda: PromptChoiceDefault(mode="default")
+    )
     schedule: AutomationSchedule
 
     _name = field_validator("name")(_prose)
-    _goal = field_validator("analysis_goal")(_prose)
+    @field_validator("analysis_goal")
+    @classmethod
+    def optional_goal(cls, value):
+        return None if value is None else _prose(value)
     _platforms = field_validator("platforms")(_valid_platforms)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_prompt(cls, values):
+        # Legacy requests used ``analysis_goal`` for the report stage.  Keep
+        # accepting those requests while ensuring every new persistence path
+        # has an explicit PromptChoice.
+        if isinstance(values, dict):
+            values = dict(values)
+            if (
+                values.get("analysis_goal") is not None
+                and "report_prompt" not in values
+            ):
+                values["report_prompt"] = {
+                    "mode": "custom",
+                    "instructions": values["analysis_goal"],
+                }
+        return values
 
 
 class AutomationTaskReplace(AutomationTaskCreate):
@@ -122,6 +160,31 @@ class AutomationTaskReplace(AutomationTaskCreate):
     # This is a full-replacement payload: callers must explicitly retain a
     # rule or send null for a deleted reference.  Giving this field a default
     # would silently turn omitted input into a destructive unlink.
+    monitoring_rule_id: int | None = Field(ge=1, le=MAX_SAFE_INTEGER)
+    expected_revision: int = Field(ge=1, lt=MAX_SAFE_INTEGER)
+    enabled: bool
+
+
+class AutomationTaskCreateRequest(StrictModel):
+    """Strict public task payload; the compatibility model stays internal."""
+
+    name: str = Field(min_length=1, max_length=80)
+    monitoring_rule_id: int = Field(ge=1, le=MAX_SAFE_INTEGER)
+    platforms: list[SearchPlatform] = Field(
+        min_length=1, max_length=MAX_PLATFORMS
+    )
+    max_results_per_term: int = Field(default=10, ge=1, le=50)
+    initial_prompt: PromptChoice
+    report_prompt: PromptChoice
+    schedule: AutomationSchedule
+
+    _name = field_validator("name")(_prose)
+    _platforms = field_validator("platforms")(_valid_platforms)
+
+
+class AutomationTaskReplaceRequest(AutomationTaskCreateRequest):
+    """Strict public full-replacement payload for an existing task."""
+
     monitoring_rule_id: int | None = Field(ge=1, le=MAX_SAFE_INTEGER)
     expected_revision: int = Field(ge=1, lt=MAX_SAFE_INTEGER)
     enabled: bool
@@ -160,12 +223,34 @@ class AutomationSnapshot(StrictModel):
     report_prompt_version_id: int | None = Field(
         default=None, ge=1, le=MAX_SAFE_INTEGER
     )
+    initial_prompt: PromptSnapshot | None = None
+    report_prompt: PromptSnapshot | None = None
     initial_template_version: str = Field(min_length=1, max_length=120)
     report_template_version: str = Field(min_length=1, max_length=120)
     admitted_at: UtcTimestamp
 
     _task_name = field_validator("task_name", "rule_name", "analysis_goal")(_prose)
     _platforms = field_validator("platforms")(_valid_platforms)
+
+    @model_validator(mode="after")
+    def validate_prompt_projections(self) -> Self:
+        if self.initial_prompt is not None:
+            if self.initial_prompt.schema_version != INITIAL_SCHEMA_VERSION:
+                raise ValueError("invalid initial prompt snapshot")
+            if (
+                self.initial_prompt_version_id is None
+                or self.initial_prompt.version_id != self.initial_prompt_version_id
+            ):
+                raise ValueError("initial prompt snapshot ID mismatch")
+        if self.report_prompt is not None:
+            if self.report_prompt.schema_version != REPORT_SCHEMA_VERSION:
+                raise ValueError("invalid report prompt snapshot")
+            if (
+                self.report_prompt_version_id is None
+                or self.report_prompt.version_id != self.report_prompt_version_id
+            ):
+                raise ValueError("report prompt snapshot ID mismatch")
+        return self
 
 
 class AutomationStage(StrictModel):
@@ -278,6 +363,8 @@ class AutomationTask(StrictModel):
     platforms: list[SearchPlatform] = Field(min_length=1, max_length=MAX_PLATFORMS)
     max_results_per_term: int = Field(ge=1, le=50)
     analysis_goal: str = Field(min_length=1, max_length=MAX_ANALYSIS_GOAL_LENGTH)
+    initial_prompt: PromptSnapshot | None = None
+    report_prompt: PromptSnapshot | None = None
     schedule: AutomationSchedule
     enabled: bool
     revision: int = Field(ge=1, le=MAX_SAFE_INTEGER)
@@ -293,6 +380,14 @@ class AutomationTask(StrictModel):
 
     @model_validator(mode="after")
     def validate_state(self) -> Self:
+        if self.initial_prompt is not None and (
+            self.initial_prompt.schema_version != INITIAL_SCHEMA_VERSION
+        ):
+            raise ValueError("invalid initial prompt snapshot")
+        if self.report_prompt is not None and (
+            self.report_prompt.schema_version != REPORT_SCHEMA_VERSION
+        ):
+            raise ValueError("invalid report prompt snapshot")
         if (self.monitoring_rule_id is None) != (self.rule_state == "deleted"):
             raise ValueError("invalid task rule state")
         if self.enabled != (

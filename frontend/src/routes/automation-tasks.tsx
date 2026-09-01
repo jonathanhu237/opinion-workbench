@@ -153,6 +153,14 @@ function platformLabel(task: AutomationTask) {
     .join('、')
 }
 
+function promptSourceLabel(
+  prompt: AutomationTask['initial_prompt'] | AutomationTask['report_prompt'],
+) {
+  if (prompt?.mode === 'custom' || prompt?.mode === 'legacy')
+    return '本任务自定义'
+  return '系统默认模板'
+}
+
 function LatestRun({ task }: { task: AutomationTask }) {
   const run = task.latest_run
   if (run === null) {
@@ -264,9 +272,17 @@ function AutomationTaskCard({
             </p>
           </div>
           <PlatformChips task={task} />
-          <div className="rounded-lg border border-primary/15 bg-primary/5 p-3 text-sm leading-6 text-foreground/85">
-            <span className="font-medium text-foreground">分析目标：</span>{' '}
-            <span title={task.analysis_goal}>{task.analysis_goal}</span>
+          <div className="grid gap-2 rounded-lg border border-primary/15 bg-primary/5 p-3 text-sm leading-6 text-foreground/85 sm:grid-cols-2">
+            <p>
+              <span className="font-medium text-foreground">内容理解：</span>{' '}
+              {promptSourceLabel(task.initial_prompt)}
+            </p>
+            <p>
+              <span className="font-medium text-foreground">
+                相关性与报告：
+              </span>{' '}
+              {promptSourceLabel(task.report_prompt)}
+            </p>
           </div>
           <LatestRun task={task} />
         </div>
@@ -517,7 +533,8 @@ export function AutomationTasks() {
                   自动任务
                 </h1>
                 <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
-                  每个任务有自己的分析目标。启用后，系统会按“采集 → 初步分析 →
+                  每个任务有自己的两阶段提示词。启用后，系统会按“采集 → 初步分析
+                  →
                   相关性判断与报告”完成一轮；你可以查看进度、取消任务，或从失败阶段重试。
                 </p>
               </div>

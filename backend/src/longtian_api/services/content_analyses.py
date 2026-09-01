@@ -10,6 +10,7 @@ from longtian_api.repositories.content_analyses import ContentAnalysisRepository
 from longtian_api.repositories.search_runs import SearchResultSourceRecord
 from longtian_api.schemas.ai_summaries import FailureCode
 from longtian_api.schemas.analysis_evidence import SavedInput
+from longtian_api.schemas.analysis_settings import PromptSnapshot
 from longtian_api.schemas.content_analyses import (
     AnalysisCreate,
     WorkflowAnalysisCreate,
@@ -61,25 +62,37 @@ class ContentAnalysisService:
         """
         if not result_ids:
             return None
-        from longtian_api.repositories.analysis_settings import (
-            AnalysisSettingsRepository,
-        )
-
-        settings = AnalysisSettingsRepository(self.repository.database).read()
         configuration_revision = getattr(snapshot, "ai_configuration_revision", None)
         if configuration_revision is None:
             raise AIError("ai_configuration_required")
+        initial_prompt = getattr(snapshot, "initial_prompt", None)
+        report_prompt = getattr(snapshot, "report_prompt", None)
+        initial_version_id = getattr(snapshot, "initial_prompt_version_id", None) or (
+            initial_prompt.version_id if initial_prompt is not None else None
+        )
+        report_version_id = getattr(snapshot, "report_prompt_version_id", None) or (
+            report_prompt.version_id if report_prompt is not None else None
+        )
+        if initial_version_id is None or report_version_id is None:
+            raise AIError("ai_configuration_required")
+        # Version IDs preserve the exact immutable row.  For task-local custom
+        # text that happens to equal the built-in template, also carry the
+        # explicit choice so admission cannot infer the source as ``default``.
+        initial_choice = _workflow_prompt_choice(initial_prompt)
+        report_choice = _workflow_prompt_choice(report_prompt)
         payload = WorkflowAnalysisCreate(
             request_id=_operation_request_id(operation_key),
             configuration_revision=configuration_revision,
-            initial_prompt_version_id=(
-                getattr(snapshot, "initial_prompt_version_id", None)
-                or settings.initial_prompt.id
+            initial_prompt_version_id=initial_version_id,
+            report_prompt_version_id=report_version_id,
+            initial_prompt_mode=(
+                initial_prompt.mode if initial_prompt is not None else None
             ),
-            report_prompt_version_id=(
-                getattr(snapshot, "report_prompt_version_id", None)
-                or settings.report_prompt.id
+            report_prompt_mode=(
+                report_prompt.mode if report_prompt is not None else None
             ),
+            initial_prompt=initial_choice,
+            report_prompt=report_choice,
             force_refresh=False,
             result_ids=list(result_ids),
         )
@@ -402,6 +415,13 @@ class ContentAnalysisService:
                 "input_incomplete",
                 error=failure("acquisition", code),
             )
+
+
+def _workflow_prompt_choice(prompt: PromptSnapshot | None):
+    """Return only explicit custom intent for workflow replay fingerprints."""
+    if prompt is not None and prompt.mode == "custom":
+        return {"mode": "custom", "instructions": prompt.instructions}
+    return None
 
 
 def _operation_request_id(operation_key: str) -> str:

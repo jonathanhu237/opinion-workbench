@@ -5,7 +5,6 @@ import {
   fetchAnalysisSettings,
   promptInstructionsSchema,
   saveAnalysisAutomation,
-  saveAnalysisPrompt,
 } from '@/lib/api/analysis-settings'
 import { ANALYSIS_ERROR_CONTRACTS } from '@/lib/api/analysis-shared'
 
@@ -33,22 +32,8 @@ describe('analysis prompt and authorization boundary', () => {
     )
     expect(fetchMock.mock.calls[0][1]?.method).toBeUndefined()
   })
-  it('saves only one stage with its observed version and authorizes only the displayed provider revision', async () => {
+  it('authorizes only the displayed provider revision', async () => {
     fetchMock.mockImplementation(async () => json(analysisSettingsFixture()))
-    await saveAnalysisPrompt('report', {
-      expected_version_id: 2,
-      instructions: '新的报告主题',
-    })
-    expect(fetchMock).toHaveBeenLastCalledWith(
-      '/api/v1/analysis-settings/prompts/report',
-      expect.objectContaining({
-        method: 'PUT',
-        body: JSON.stringify({
-          expected_version_id: 2,
-          instructions: '新的报告主题',
-        }),
-      }),
-    )
     await saveAnalysisAutomation({
       expected_revision: 1,
       enabled: true,

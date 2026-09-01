@@ -24,7 +24,8 @@ def initial_report(client, app, database):
     assert admitted.status_code == 202, admitted.text
     client.portal.call(finish, app.state.content_analysis_service)
     report = client.post(
-        "/api/v1/topic-reports", json=interval_request(database).model_dump()
+        "/api/v1/topic-reports",
+        json=interval_request(database).model_dump(exclude_none=True),
     )
     assert report.status_code == 202, report.text
     client.portal.call(finish, app.state.topic_report_service)
@@ -67,8 +68,15 @@ def test_explicit_report_selection_frozen_pages_and_new_version_ids(tmp_path):
             "request_id": str(uuid4()),
             "expected_revision": original["revision"],
             "configuration_revision": 1,
-            "instructions_override": None,
+            "report_prompt": {"mode": "default"},
         }
+        assert_error(
+            client.post(
+                f"/api/v1/topic-reports/{report_id}/retry",
+                json={**payload, "report_prompt": None},
+            ),
+            "invalid_request",
+        )
         response = client.post(f"/api/v1/topic-reports/{report_id}/retry", json=payload)
         assert response.status_code == 202, response.text
         retry_id = response.json()["id"]
@@ -97,7 +105,13 @@ def test_explicit_report_selection_frozen_pages_and_new_version_ids(tmp_path):
         assert_error(
             client.post(
                 f"/api/v1/topic-reports/{report_id}/retry",
-                json={**payload, "instructions_override": "changed"},
+                json={
+                    **payload,
+                    "report_prompt": {
+                        "mode": "custom",
+                        "instructions": "changed",
+                    },
+                },
             ),
             "topic_report_request_conflict",
         )
@@ -134,7 +148,7 @@ def test_invalid_http_intents_have_no_work(tmp_path, override):
     app, db, model, media = api_environment(tmp_path, count=1)
     with TestClient(app, base_url="http://127.0.0.1") as client:
         saved(client)
-        payload = interval_request(db).model_dump()
+        payload = interval_request(db).model_dump(exclude_none=True)
         assert_error(
             client.post("/api/v1/topic-reports", json={**payload, **override}),
             "invalid_request",
@@ -162,14 +176,14 @@ def test_invalid_one_off_override_is_not_saved_or_admitted(tmp_path, text):
     app, db, model, _ = api_environment(tmp_path, count=1)
     with TestClient(app, base_url="http://127.0.0.1") as client:
         saved(client)
-        payload = interval_request(db).model_dump()
-        payload["instructions_override"] = text
+        payload = interval_request(db).model_dump(exclude_none=True)
+        payload["report_prompt"] = {"mode": "custom", "instructions": text}
         response = client.post(
             "/api/v1/topic-reports",
             content=json.dumps(payload),
             headers={"Content-Type": "application/json"},
         )
-        assert_error(response, "invalid_analysis_prompt")
+        assert_error(response, "invalid_request")
         assert not model.calls
 
 
@@ -180,7 +194,7 @@ def test_interval_empty_override_defaults_and_replay_precedes_config(tmp_path):
         settings = client.get("/api/v1/analysis-settings").json()
         payload = interval_request(
             db, instructions_override="  单次范围  "
-        ).model_dump()
+        ).model_dump(exclude_none=True)
         response = client.post("/api/v1/topic-reports", json=payload)
         assert response.status_code == 202, response.text
         report_id = response.json()["id"]
@@ -191,7 +205,9 @@ def test_interval_empty_override_defaults_and_replay_precedes_config(tmp_path):
         )
         assert (
             report["prompt"]["instructions"] == "  单次范围  "
-            and report["prompt"]["version_id"] is None
+            and report["prompt"]["version_id"] is not None
+            and report["prompt"]["mode"] == "custom"
+            and report["prompt"]["origin"] == "custom"
         )
         assert client.get("/api/v1/analysis-settings").json() == settings
         # Replay remains readable even while the service is closed or unavailable.
@@ -212,7 +228,7 @@ def test_interval_rejects_sub_microsecond_precision_without_admission(tmp_path, 
     app, db, model, media = api_environment(tmp_path, count=1)
     with TestClient(app, base_url="http://127.0.0.1") as client:
         saved(client)
-        payload = interval_request(db).model_dump()
+        payload = interval_request(db).model_dump(exclude_none=True)
         payload["selection"][field] = "2026-08-29T00:00:00.1234567Z"
         assert_error(
             client.post("/api/v1/topic-reports", json=payload), "invalid_request"
@@ -230,7 +246,7 @@ def test_active_revision_cancel_and_retry_contracts(tmp_path):
         client.portal.call(finish, app.state.content_analysis_service)
         created = client.post(
             "/api/v1/topic-reports",
-            json=interval_request(database).model_dump(),
+            json=interval_request(database).model_dump(exclude_none=True),
         )
         assert created.status_code == 202, created.text
         client.portal.call(model.entered.wait)
@@ -244,7 +260,6 @@ def test_active_revision_cancel_and_retry_contracts(tmp_path):
                     "request_id": str(uuid4()),
                     "expected_revision": report["revision"],
                     "configuration_revision": 1,
-                    "instructions_override": None,
                 },
             ),
             "topic_report_not_terminal",
@@ -274,17 +289,20 @@ def test_interval_semantics_prompt_cas_and_storage_errors(tmp_path, monkeypatch)
     with TestClient(app, base_url="http://127.0.0.1") as client:
         saved(client)
         assert_error(client.get("/api/v1/topic-reports/1"), "topic_report_not_found")
-        payload = interval_request(db).model_dump()
+        payload = interval_request(db).model_dump(exclude_none=True)
         payload["selection"]["first_seen_to"] = payload["selection"]["first_seen_from"]
         assert_error(
             client.post("/api/v1/topic-reports", json=payload),
             "invalid_report_interval",
         )
-        payload = interval_request(db).model_dump()
-        payload["report_prompt_version_id"] += 100
+        payload = interval_request(db).model_dump(exclude_none=True)
+        payload["report_prompt"] = {
+            "mode": "default",
+            "instructions": "不得在 default 选择中携带文本",
+        }
         assert_error(
             client.post("/api/v1/topic-reports", json=payload),
-            "analysis_prompt_changed",
+            "invalid_request",
         )
         assert not model.calls
 

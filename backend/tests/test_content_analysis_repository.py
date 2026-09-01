@@ -1,5 +1,6 @@
 """Real additive migrations, atomic uncapped membership and immutable history."""
 
+import hashlib
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 from uuid import uuid4
@@ -22,7 +23,11 @@ from longtian_api.repositories.search_runs import (
     SearchContentInput,
     SearchRunRepository,
 )
-from longtian_api.schemas.analysis_settings import AutomationUpdate, PromptUpdate
+from longtian_api.schemas.analysis_settings import (
+    DEFAULT_INITIAL_INSTRUCTIONS,
+    DEFAULT_REPORT_INSTRUCTIONS,
+    AutomationUpdate,
+)
 from longtian_api.services.analysis_errors import AnalysisError
 
 
@@ -52,19 +57,10 @@ def test_genuine_v11_preserves_old_data_and_forward_only_history(tmp_path):
     database.initialize()
     settings = AnalysisSettingsRepository(database)
     original = settings.read()
-    changed = settings.save_prompt(
-        "initial",
-        PromptUpdate(
-            expected_version_id=original.initial_prompt.id,
-            instructions="逐条保留来源与未知信息。",
-        ),
-    )
     database.initialize()
     after = old_projection(database)
     assert all(after[table] == rows for table, rows in before.items())
-    assert settings.read() == changed
-    assert changed.report_prompt == original.report_prompt
-    assert original.initial_prompt.id != changed.initial_prompt.id
+    assert settings.read() == original
     results = ResultsRepository(database).list()
     assert results.eligible_count == 3
     assert {r.analysis_state for r in results.items} == {"never_started"}
@@ -237,6 +233,41 @@ def test_automatic_and_manual_admissions_share_one_atomic_content_claim(tmp_path
             == 101
         )
     assert model.calls == worker.calls == []
+
+
+def test_automatic_handoff_uses_fixed_defaults_not_legacy_settings_pointers(tmp_path):
+    database, source, service, _, _, _, _ = environment(tmp_path, count=1)
+    with database.connect() as connection:
+        rows = []
+        for stage, instructions, schema in (
+            ("initial", "历史全局初步指令", "initial-understanding-v1"),
+            ("report", "历史全局报告指令", "topic-report-v1"),
+        ):
+            digest = hashlib.sha256(instructions.encode()).hexdigest()
+            rows.append(
+                connection.execute(
+                    """INSERT INTO analysis_prompt_versions(
+                      stage,instructions,content_hash,schema_version,created_at)
+                      VALUES (?,?,?,?,?) RETURNING id""",
+                    (stage, instructions, digest, schema, "2026-08-30T00:00:00+00:00"),
+                ).fetchone()[0]
+            )
+        connection.execute(
+            """UPDATE analysis_settings SET initial_prompt_version_id=?,
+              report_prompt_version_id=? WHERE id=1""",
+            rows,
+        )
+    AnalysisSettingsRepository(database).save_automation(
+        AutomationUpdate(expected_revision=1, enabled=True, configuration_revision=1)
+    )
+
+    result = service.repository.collection_finished("run", source, available=True)
+
+    assert result is not None and result.job is not None
+    assert result.job.initial_prompt.instructions == DEFAULT_INITIAL_INSTRUCTIONS
+    assert result.job.report_prompt.instructions == DEFAULT_REPORT_INSTRUCTIONS
+    assert result.job.initial_prompt.mode == "default"
+    assert result.job.report_prompt.mode == "default"
 
 
 def test_real_second_member_insert_failure_rolls_back_job_claims_and_uuid(tmp_path):

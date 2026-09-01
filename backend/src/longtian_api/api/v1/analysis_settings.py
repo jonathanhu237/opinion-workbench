@@ -7,8 +7,6 @@ from longtian_api.api.v1.analysis_common import ERROR_RESPONSES, AnalysisRoute
 from longtian_api.schemas.analysis_settings import (
     AnalysisSettings,
     AutomationUpdate,
-    PromptStage,
-    PromptUpdate,
 )
 from longtian_api.services.analysis_settings import AnalysisSettingsService
 
@@ -29,15 +27,6 @@ router = APIRouter(
 @router.get("/analysis-settings")
 def read_settings(service: Service) -> AnalysisSettings:
     return service.read()
-
-
-@router.put(
-    "/analysis-settings/prompts/{stage}", dependencies=[Depends(require_local_mutation)]
-)
-def save_prompt(
-    stage: PromptStage, payload: PromptUpdate, service: Service
-) -> AnalysisSettings:
-    return service.save_prompt(stage, payload)
 
 
 @router.put(

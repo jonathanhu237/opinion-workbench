@@ -1,6 +1,7 @@
 """Persistent homepage state is current, global, strict, and read-only."""
 
 import asyncio
+import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
@@ -31,14 +32,37 @@ def database(tmp_path):
 
 
 def _automation_task(connection, name, due_at, *, enabled=True):
+    report_prompt = connection.execute(
+        """SELECT id FROM analysis_prompt_versions
+           WHERE stage='report' AND instructions='识别与任务目标相关的舆情'"""
+    ).fetchone()
+    if report_prompt is None:
+        report_prompt = connection.execute(
+            """INSERT INTO analysis_prompt_versions(
+              stage,instructions,content_hash,schema_version,created_at)
+              VALUES ('report','识别与任务目标相关的舆情',?,
+                'topic-report-v1',?) RETURNING id""",
+            (
+                hashlib.sha256("识别与任务目标相关的舆情".encode()).hexdigest(),
+                NOW.isoformat(),
+            ),
+        ).fetchone()
+    prompts = connection.execute(
+        """SELECT initial_prompt_version_id FROM analysis_settings WHERE id=1"""
+    ).fetchone()
     return connection.execute(
         """INSERT INTO automation_tasks(name,normalized_name,monitoring_rule_id,
-          max_results_per_term,analysis_goal,schedule_kind,interval_minutes,
-          enabled,revision,next_due_at,anchor_at,created_at,updated_at)
-          VALUES (?,?,1,10,'识别与任务目标相关的舆情','interval',30,?,1,?,?,?,?)""",
+          max_results_per_term,analysis_goal,initial_prompt_mode,
+          initial_prompt_version_id,report_prompt_mode,report_prompt_version_id,
+          schedule_kind,interval_minutes,enabled,revision,next_due_at,anchor_at,
+          created_at,updated_at)
+          VALUES (?,?,1,10,?,'default',?,'custom',?,'interval',30,?,1,?,?,?,?)""",
         (
             name,
             name,
+            "识别与任务目标相关的舆情",
+            prompts[0],
+            report_prompt[0],
             int(enabled),
             due_at if enabled else None,
             NOW.isoformat() if enabled else None,
@@ -255,9 +279,11 @@ def _analysis_job(connection, run_id, status, attempt_status):
     terminal = status not in ("queued", "running")
     job_id = connection.execute(
         """INSERT INTO content_analysis_jobs(trigger,configuration_revision,
-          base_url,model,initial_prompt_version_id,report_prompt_version_id,
-          force_refresh,status,created_at,started_at,finished_at)
-          VALUES ('manual',1,'https://example.com/v1','saved-model',?,?,0,?,?,?,?)""",
+          base_url,model,initial_prompt_version_id,initial_prompt_mode,
+          report_prompt_version_id,report_prompt_mode,force_refresh,status,
+          created_at,started_at,finished_at)
+          VALUES ('manual',1,'https://example.com/v1','saved-model',?,'default',?,
+            'default',0,?,?,?,?)""",
         (
             prompts[0],
             prompts[1],

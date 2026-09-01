@@ -7,14 +7,14 @@ composition, retry/versioning, report history or the Results and Analysis UI.
 Read [Initial Analysis](./initial-analysis-guidelines.md) for the upstream job,
 evidence and prompt contracts, and
 [Unified Opinion Automation](./automation-workflow-guidelines.md) for automatic
-admission, task goals, fixed-stage progression and retry ownership.
+admission, task prompt snapshots, fixed-stage progression and retry ownership.
 The legacy [Manual AI Summaries](./ai-summary-guidelines.md) contract remains
 readable but is not the new workflow's creation path.
 
 `topic_reports` consumes durable initial-analysis output. Workflow admission
-freezes `selection.kind=workflow_run`, a durable operation key and the task goal
-as exact report instructions; zero-source workflow admission saves an empty
-report without model calls. It must not call a collector, browser,
+freezes `selection.kind=workflow_run`, a durable operation key and the run's
+stage-two prompt snapshot as exact report instructions; zero-source workflow
+admission saves an empty report without model calls. It must not call a collector, browser,
 enrichment/media acquisition or initial-understanding runner.
 Topic judgment and synthesis are internal parts of the workflow's report stage.
 
@@ -39,8 +39,7 @@ Required create fields:
 {
   "request_id": "cb5f9330-ea77-4e24-896d-6ad5c578ee43",
   "configuration_revision": 1,
-  "report_prompt_version_id": 2,
-  "instructions_override": null,
+  "report_prompt": {"mode": "default"},
   "selection": {
     "kind": "first_seen_interval",
     "first_seen_from": "2026-08-28T16:00:00Z",
@@ -49,16 +48,21 @@ Required create fields:
 }
 ```
 
-Retry requires `request_id`, `expected_revision`, `configuration_revision` and
-`instructions_override`. Cancel requires `request_id` and `expected_revision`.
+Retry requires `request_id`, `expected_revision` and `configuration_revision`.
+Omitting `report_prompt` preserves the parent's exact snapshot; including it
+selects `{"mode":"default"}` or
+`{"mode":"custom","instructions":"..."}` for the new version. Explicit
+`report_prompt:null` is invalid. Cancel requires `request_id` and
+`expected_revision`.
 Reject extra fields, coerced/unsafe IDs, noncanonical UUIDv4 and invalid UTC time.
 Interval endpoints support at most six fractional-second digits (microseconds);
 reject greater precision rather than silently truncate it. Frontend interval
 validation compares normalized UTC microseconds, not millisecond `Date.parse`
 values, including mixed `Z`/`+00:00` and absent/short fractional parts.
-An override is exact nonblank UTF-8 text of 1–8,000 characters, without NUL or
-surrogates; preserve accepted whitespace. `null` on retry preserves the original
-report instructions, not today's shared default.
+A custom prompt is exact nonblank UTF-8 text of 1–8,000 characters, without NUL
+or surrogates; preserve accepted whitespace. The backend-owned default is fixed
+and not editable through settings. Custom resolution creates/reuses an immutable
+version and never mutates that default.
 
 Core entry points are `TopicReportService.create`, `retry`, `cancel`,
 `workflow_admit`, `initialize` and `shutdown`. The historical
@@ -73,6 +77,9 @@ workflow-owned operation-key shape. The repair preserves report/source/node
 rows, IDs, JSON, timestamps, foreign keys and AUTOINCREMENT state; it validates
 the full table/index/trigger contract rather than trusting only the presence of
 `workflow_operation_key`.
+SQLite v18 gives automation runs/tasks explicit two-stage prompt snapshots;
+report reads normalize legacy/shared/override prompt origins without rewriting
+historical report JSON.
 
 The pure engine boundary is `schemas/topic_report_engine.py` plus
 `services/topic_report_engine.py`: `prepare_judgment`, `take_leaf`,
@@ -217,8 +224,8 @@ flatten preview evidence to the same coverage presentation as a full source.
 Keep selected report/version and source/section pagination in URL state, separate
 from result filters and initial-job selection. One-click initial analysis stays
 the primary action. Show workflow-owned report status beside its originating run;
-retry/cancel and optional interval/one-off override remain distinct secondary
-actions. Preserve ambiguous mutation intent/UUID; do not auto-retry a mutation or
+retry/cancel and optional interval default/custom choice remain distinct
+secondary actions. Preserve ambiguous mutation intent/UUID; do not auto-retry a mutation or
 turn an empty report-list response into authorization to create one.
 
 ## 4. Validation & Error Matrix
@@ -231,8 +238,8 @@ turn an empty report-list response into authorization to create one.
 | Retry active report / cancel terminal report | 409 `topic_report_not_terminal` / `topic_report_not_active`. |
 | Reversed/empty first-entry interval | 422 `invalid_report_interval`. |
 | Interval endpoint with more than six fractional-second digits | 422 `invalid_request`; no truncated interval or report admission. |
-| Blank, oversized, NUL or invalid UTF-8 override | 422 `invalid_analysis_prompt`; no admission. |
-| Shared prompt changed before explicit create | 409 `analysis_prompt_changed`; override does not bypass the displayed-default revision check. |
+| Blank, oversized, NUL or invalid UTF-8 custom prompt | 422 `invalid_analysis_prompt`; no admission. |
+| Default choice carries instructions, custom omits instructions, or retry sends explicit `null` | 422 `invalid_request`; no admission. |
 | Incompatible/unavailable provider lease | Configuration blocked; report-only execution failures retain `ai_configuration_required`, `ai_configuration_changed`, `ai_credentials_unavailable` or `ai_settings_storage_unavailable` with existing constant AI messages. Do not widen the legacy/A failure union or silently substitute a provider. |
 | Corrupt stored prompt, source, node, graph, usage or state | Sanitized 503 `topic_report_storage_unavailable`, not fabricated success or raw SQLite/source text. |
 | Eligible preview/partial saved input | Freeze coverage, judge available evidence, and retain its limits in citations/UI. |
@@ -279,8 +286,9 @@ exception detail to make a report error more descriptive.
   API decoding and visible report source labels; conflicting coverage fails closed.
 - Settled cancellation/shutdown, queue-exit admission race, configuration changes
   and recovered metadata remaining non-runnable after a later unrelated wake.
-- Strict HTTP/decoder errors, UUID replay and ambiguous transport retry, saved
-  default versus one-off override, interval timezone/first-entry semantics,
+- Strict HTTP/decoder errors, UUID replay and ambiguous transport retry, fixed
+  default versus per-report custom choice, omitted-prompt retry preservation,
+  explicit-null rejection, interval timezone/first-entry semantics,
   frozen cross-run citations, self/future retry and canonical-node references,
   and legacy read-only navigation.
 - Full backend and frozen frontend gates locally; isolated fake-service
@@ -298,6 +306,10 @@ await client.complete(configuration, messages=stored_messages(call))
 
 Correct: regenerate from immutable evidence and verified dependencies, verify
 the frozen provider intent and plan, then preflight the exact fresh request.
+
+Wrong: send `instructions_override: null` and silently re-resolve today's
+default during retry. Correct: omit `report_prompt` to reuse the parent snapshot,
+or send an explicit default/custom choice to create a new prompt intent.
 
 ```python
 call = prepare_judgment(context, frozen_source)

@@ -40,6 +40,13 @@ import {
 } from '@/routes/search-run-presenters'
 
 export function FrozenAnalysisPrompts({ job }: { job: AnalysisJob }) {
+  const sourceLabel = (prompt: AnalysisJob['initial_prompt']) => {
+    if (prompt.mode === 'legacy')
+      return `历史共享提示词 · 版本 ${prompt.version_id ?? prompt.id}`
+    if (prompt.mode === 'custom')
+      return `本次自定义提示词 · 版本 ${prompt.version_id ?? prompt.id}`
+    return `系统默认模板 · 版本 ${prompt.version_id ?? prompt.id}`
+  }
   return (
     <details className="rounded-lg border p-3">
       <summary className="min-h-8 cursor-pointer text-sm font-medium">
@@ -53,6 +60,9 @@ export function FrozenAnalysisPrompts({ job }: { job: AnalysisJob }) {
           <h4 className="text-sm font-medium">
             {prompt.stage === 'initial' ? '初步分析' : '报告'}提示词
           </h4>
+          <p className="mt-1 text-xs text-muted-foreground">
+            {sourceLabel(prompt)}
+          </p>
           <p className="mt-2 text-sm leading-6 [overflow-wrap:anywhere] whitespace-pre-wrap">
             {prompt.instructions}
           </p>

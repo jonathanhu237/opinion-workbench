@@ -4,8 +4,8 @@ import { useState } from 'react'
 import { Controller, useForm } from 'react-hook-form'
 import { z } from 'zod'
 
+import { PromptChoiceField } from '@/components/prompt-choice-field'
 import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
 import {
   Dialog,
   DialogContent,
@@ -16,7 +16,6 @@ import {
 } from '@/components/ui/dialog'
 import { Field, FieldError, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
 import { cacheSavedReport } from '@/hooks/use-topic-reports'
 import {
   AI_SETTINGS_QUERY_KEY,
@@ -26,6 +25,7 @@ import {
 import {
   ANALYSIS_SETTINGS_QUERY_KEY,
   fetchAnalysisSettings,
+  promptChoiceSchema,
   promptInstructionsSchema,
   type AnalysisSettings,
   type PromptVersion,
@@ -63,15 +63,19 @@ type ReportIntent =
   | { kind: 'cancel'; id: number; request: CancelReportRequest }
 type ReportDraft =
   | { kind: 'interval'; provider: AISettings; prompt: PromptVersion }
-  | { kind: 'override'; provider: AISettings; report: ReportRun }
+  | {
+      kind: 'override'
+      provider: AISettings
+      report: ReportRun
+      defaultPrompt: PromptVersion
+    }
 
 export function reportRequestFormSchema(interval: boolean) {
   return z
     .object({
       from: z.string(),
       to: z.string(),
-      override: z.boolean(),
-      instructions: z.string(),
+      prompt: promptChoiceSchema,
     })
     .superRefine((value, ctx) => {
       if (interval) {
@@ -91,17 +95,18 @@ export function reportRequestFormSchema(interval: boolean) {
           })
       }
       if (
-        (!interval || value.override) &&
-        !promptInstructionsSchema.safeParse(value.instructions).success
+        value.prompt.mode === 'custom' &&
+        !promptInstructionsSchema.safeParse(value.prompt.instructions).success
       )
         ctx.addIssue({
           code: 'custom',
-          path: ['instructions'],
+          path: ['prompt', 'instructions'],
           message: '提示词须为 1 至 8000 字的有效非空文本。',
         })
     })
 }
 type FormValues = z.infer<ReturnType<typeof reportRequestFormSchema>>
+
 function RequestDisclosure({
   provider,
   instructions,
@@ -187,13 +192,16 @@ function ReportRequestEditor({
     defaultValues: {
       from: '',
       to: '',
-      override: !interval,
-      instructions: interval
-        ? draft.prompt.instructions
-        : draft.report.prompt.instructions,
+      prompt:
+        draft.kind === 'interval'
+          ? { mode: 'default' }
+          : {
+              mode: 'custom',
+              instructions: draft.defaultPrompt.instructions,
+            },
     },
   })
-  const override = form.watch('override')
+  const prompt = form.watch('prompt')
   const isDirty = form.formState.isDirty
   const locked = pending || intent !== null || refreshing
   const close = () => {
@@ -284,61 +292,43 @@ function ReportRequestEditor({
               >
                 按北京时间计算，结束日期当天也包含在内。跨采集任务按首次发现时间选择内容；没有可用初步分析的内容不会自动重做。
               </p>
-              <Controller
-                name="override"
-                control={form.control}
-                render={({ field }) => (
-                  <FieldLabel className="min-h-11">
-                    <Checkbox
-                      checked={field.value}
-                      onCheckedChange={field.onChange}
-                      disabled={locked}
-                    />
-                    仅本报告使用其他提示词（可选）
-                  </FieldLabel>
-                )}
-              />
             </>
           )}
-          {(!interval || override) && (
-            <Controller
-              name="instructions"
-              control={form.control}
-              render={({ field, fieldState }) => (
-                <Field data-invalid={fieldState.invalid}>
-                  <FieldLabel htmlFor="report-override">
-                    本次专用报告提示词
-                  </FieldLabel>
-                  <Textarea
-                    {...field}
-                    id="report-override"
-                    rows={6}
-                    disabled={locked}
-                    aria-invalid={fieldState.invalid}
-                    aria-describedby="report-override-help report-override-error"
-                  />
-                  <p
-                    id="report-override-help"
-                    className="text-sm text-muted-foreground"
-                  >
-                    只影响这份新报告，不会保存为默认提示词，也不会重新获取媒体。
-                  </p>
-                  <FieldError
-                    id="report-override-error"
-                    errors={[fieldState.error]}
-                  />
-                </Field>
-              )}
-            />
-          )}
+          <Controller
+            name="prompt"
+            control={form.control}
+            render={({ field, fieldState }) => (
+              <PromptChoiceField
+                id="report-prompt"
+                label="相关性判断与报告提示词"
+                description={
+                  interval
+                    ? '默认模板固定不变；也可以只为这份报告填写自定义指令。'
+                    : '选择是否沿用系统默认模板，或为这份新报告填写自定义指令。'
+                }
+                value={field.value}
+                onChange={field.onChange}
+                onBlur={field.onBlur}
+                error={fieldState.error?.message}
+                defaultInstructions={
+                  interval
+                    ? draft.prompt.instructions
+                    : draft.defaultPrompt.instructions
+                }
+                disabled={locked}
+              />
+            )}
+          />
           <RequestDisclosure
             provider={draft.provider}
             instructions={
               intent && intent.kind !== 'cancel'
                 ? intent.instructions
-                : !interval || override
-                  ? form.watch('instructions')
-                  : draft.prompt.instructions
+                : prompt.mode === 'custom'
+                  ? prompt.instructions
+                  : interval
+                    ? draft.prompt.instructions
+                    : draft.defaultPrompt.instructions
             }
           />
         </form>
@@ -476,14 +466,14 @@ export function ReportActions({
       value = {
         kind: 'interval',
         provider: draft.provider,
-        instructions: values.override
-          ? values.instructions
-          : draft.prompt.instructions,
+        instructions:
+          values.prompt.mode === 'custom'
+            ? values.prompt.instructions
+            : draft.prompt.instructions,
         request: {
           request_id: crypto.randomUUID(),
           configuration_revision: draft.provider.revision,
-          report_prompt_version_id: draft.prompt.id,
-          instructions_override: values.override ? values.instructions : null,
+          report_prompt: values.prompt,
           selection: {
             kind: 'first_seen_interval',
             first_seen_from: from,
@@ -496,12 +486,15 @@ export function ReportActions({
         kind: 'retry',
         id: draft.report.id,
         provider: draft.provider,
-        instructions: values.instructions,
+        instructions:
+          values.prompt.mode === 'custom'
+            ? values.prompt.instructions
+            : draft.defaultPrompt.instructions,
         request: {
           request_id: crypto.randomUUID(),
           expected_revision: draft.report.revision,
           configuration_revision: draft.provider.revision,
-          instructions_override: values.instructions,
+          report_prompt: values.prompt,
         },
       }
     setIntent(value)
@@ -616,7 +609,6 @@ export function ReportActions({
                         request_id: crypto.randomUUID(),
                         expected_revision: report.revision,
                         configuration_revision: provider.revision,
-                        instructions_override: null,
                       },
                     })
                 }}
@@ -626,15 +618,16 @@ export function ReportActions({
             )}
             <Button
               variant="ghost"
-              disabled={blocked || !provider?.has_api_key}
+              disabled={blocked || !provider?.has_api_key || !settings}
               onClick={() => {
-                if (provider) {
+                if (provider && settings) {
                   mutation.reset()
                   setRefreshError(null)
                   setDraft({
                     kind: 'override',
                     provider: { ...provider },
                     report,
+                    defaultPrompt: settings.report_prompt,
                   })
                   setOpen(true)
                 }

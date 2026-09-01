@@ -71,12 +71,10 @@ def saved(client):
 
 
 def body(client, **overrides):
-    settings = client.get("/api/v1/analysis-settings").json()
     return {
         "request_id": str(uuid4()),
         "configuration_revision": 1,
-        "initial_prompt_version_id": settings["initial_prompt"]["id"],
-        "report_prompt_version_id": settings["report_prompt"]["id"],
+        "initial_prompt": {"mode": "default"},
         "force_refresh": False,
         "selection": {"kind": "all_never_started"},
         **overrides,
@@ -159,36 +157,16 @@ def test_invalid_admissions_have_no_work_and_no_store(tmp_path, overrides):
         assert model.calls == media.calls == []
 
 
-def test_prompts_authorization_noop_revisions_and_guard_errors(tmp_path):
+def test_prompts_are_read_only_and_authorization_keeps_revision_guards(tmp_path):
     app, _, model, media = api_fixture(tmp_path)
     with TestClient(app, base_url="http://127.0.0.1") as client:
         saved(client)
         old = client.get("/api/v1/analysis-settings").json()
-        prompt_id = old["initial_prompt"]["id"]
-        update = {
-            "expected_version_id": prompt_id,
-            "instructions": " 精确保留的内容 🌏 ",
-        }
-        new = client.put(
-            "/api/v1/analysis-settings/prompts/initial", json=update
-        ).json()
-        assert new["initial_prompt"]["instructions"] == update["instructions"]
-        assert new["report_prompt"] == old["report_prompt"]
-        assert_error(
-            client.put("/api/v1/analysis-settings/prompts/initial", json=update),
-            "analysis_prompt_changed",
-        )
-        for text in ("", " ", "a" * 8001, "x\x00y"):
-            assert_error(
-                client.put(
-                    "/api/v1/analysis-settings/prompts/initial",
-                    json={
-                        "expected_version_id": new["initial_prompt"]["id"],
-                        "instructions": text,
-                    },
-                ),
-                "invalid_analysis_prompt",
-            )
+        assert client.put(
+            "/api/v1/analysis-settings/prompts/initial",
+            json={"expected_version_id": 1, "instructions": "已停用"},
+        ).status_code == 404
+        assert client.get("/api/v1/analysis-settings").json() == old
         policy = client.put(
             "/api/v1/analysis-settings/automation",
             json={"expected_revision": 1, "enabled": True, "configuration_revision": 1},

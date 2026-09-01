@@ -1,13 +1,10 @@
-import { zodResolver } from '@hookform/resolvers/zod'
 import {
   useMutation,
   useQueryClient,
   type QueryClient,
 } from '@tanstack/react-query'
-import { useEffect, useState } from 'react'
-import { useForm } from 'react-hook-form'
+import { useState } from 'react'
 import { Link } from 'react-router'
-import { z } from 'zod'
 
 import { Button, buttonVariants } from '@/components/ui/button'
 import {
@@ -18,26 +15,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import {
-  Field,
-  FieldDescription,
-  FieldError,
-  FieldLabel,
-} from '@/components/ui/field'
-import { Textarea } from '@/components/ui/textarea'
 import type { AISettings } from '@/lib/api/ai-settings'
 import {
   ANALYSIS_SETTINGS_QUERY_KEY,
-  promptInstructionsSchema,
   saveAnalysisAutomation,
-  saveAnalysisPrompt,
   type AnalysisSettings,
-  type PromptVersion,
 } from '@/lib/api/analysis-settings'
 import { analysisErrorMessage } from '@/lib/api/analysis-shared'
-import { codePointLength } from '@/lib/monitoring-rule-composition'
-
-const promptFormSchema = z.object({ instructions: promptInstructionsSchema })
 
 async function cacheSavedSettings(
   client: QueryClient,
@@ -68,125 +52,6 @@ async function cacheSavedSettings(
                 : saved.automation,
           }
         : saved,
-  )
-}
-
-function PromptEditor({ prompt }: { prompt: PromptVersion }) {
-  const client = useQueryClient()
-  const [editingVersion, setEditingVersion] = useState(prompt)
-  const [feedback, setFeedback] = useState<string | null>(null)
-  const form = useForm({
-    resolver: zodResolver(promptFormSchema),
-    defaultValues: { instructions: prompt.instructions },
-  })
-  const { isDirty, isSubmitting, errors } = form.formState
-  const title = prompt.stage === 'initial' ? '初步分析提示词' : '报告提示词'
-  const id = `prompt-${prompt.stage}`
-  const mutation = useMutation({
-    mutationFn: (instructions: string) =>
-      saveAnalysisPrompt(prompt.stage, {
-        expected_version_id: editingVersion.id,
-        instructions,
-      }),
-    retry: false,
-    onSuccess: async (settings) => {
-      const saved =
-        prompt.stage === 'initial'
-          ? settings.initial_prompt
-          : settings.report_prompt
-      await cacheSavedSettings(client, settings)
-      form.reset({ instructions: saved.instructions })
-      setEditingVersion(saved)
-      setFeedback(`${title}已保存；仅用于之后提交的任务。`)
-    },
-    onError: () => {
-      void client.invalidateQueries({ queryKey: ANALYSIS_SETTINGS_QUERY_KEY })
-    },
-  })
-  useEffect(() => {
-    if (!isDirty && !mutation.isPending && prompt.id !== editingVersion.id) {
-      form.reset({ instructions: prompt.instructions })
-      setEditingVersion(prompt)
-    }
-  }, [prompt, editingVersion.id, form, isDirty, mutation.isPending])
-  return (
-    <form
-      className="min-w-0 space-y-3"
-      onSubmit={form.handleSubmit(({ instructions }) =>
-        mutation.mutate(instructions),
-      )}
-    >
-      <Field data-invalid={Boolean(errors.instructions)}>
-        <FieldLabel htmlFor={id}>{title}</FieldLabel>
-        <FieldDescription id={`${id}-help`}>
-          {prompt.stage === 'initial'
-            ? '理解每条内容，保留地点、时间、媒体观察和不确定性；不先按主题剔除内容。'
-            : '根据已有内容判断是否相关，并生成报告。'}
-        </FieldDescription>
-        <Textarea
-          id={id}
-          rows={7}
-          className="min-h-44 text-base sm:text-sm"
-          disabled={mutation.isPending}
-          aria-invalid={Boolean(errors.instructions)}
-          aria-describedby={`${id}-help ${id}-error`}
-          {...form.register('instructions', {
-            onChange: () => {
-              setFeedback(null)
-              mutation.reset()
-            },
-          })}
-        />
-        <FieldError id={`${id}-error`}>
-          {errors.instructions
-            ? '提示词须为 1 至 8000 字的有效非空文本。'
-            : null}
-        </FieldError>
-      </Field>
-      <p className="text-xs text-muted-foreground">
-        第 {editingVersion.id} 版 ·{' '}
-        {codePointLength(form.watch('instructions'))} / 8000 字
-      </p>
-      {prompt.id !== editingVersion.id && isDirty && (
-        <div className="space-y-2">
-          <p role="alert" className="text-sm text-warning-foreground">
-            默认提示词已被更新。当前草稿仍保留，保存前请重新确认。
-          </p>
-          <Button
-            type="button"
-            variant="outline"
-            className="min-h-11"
-            disabled={mutation.isPending}
-            onClick={() => {
-              setEditingVersion(prompt)
-              mutation.reset()
-              setFeedback('草稿已保留，请确认最新内容后再次保存。')
-            }}
-          >
-            保留草稿并采用最新版本
-          </Button>
-        </div>
-      )}
-      {mutation.isError && (
-        <p role="alert" className="text-sm text-destructive">
-          {analysisErrorMessage(mutation.error)}
-        </p>
-      )}
-      {feedback && (
-        <p role="status" className="text-sm text-muted-foreground">
-          {feedback}
-        </p>
-      )}
-      <Button
-        variant="outline"
-        className="min-h-11"
-        type="submit"
-        disabled={!isDirty || isSubmitting || mutation.isPending}
-        aria-busy={mutation.isPending}
-      >
-        {mutation.isPending ? '正在保存…' : `保存${title}`}
-      </Button>
-    </form>
   )
 }
 
@@ -227,12 +92,31 @@ export function ResultsSettings({
   return (
     <details className="rounded-xl border bg-card p-4 sm:p-5">
       <summary className="min-h-11 cursor-pointer font-medium">
-        提示词与自动分析设置
+        自动分析设置
       </summary>
-      <div className="mt-4 grid gap-6 lg:grid-cols-2">
-        <PromptEditor prompt={settings.initial_prompt} />
-        <PromptEditor prompt={settings.report_prompt} />
-      </div>
+      <section className="mt-4 space-y-3 rounded-lg border bg-muted/20 p-4">
+        <h3 className="font-medium">系统提示词（只读）</h3>
+        <p className="text-sm leading-6 text-muted-foreground">
+          默认模板由系统维护。提交手动分析或创建自动任务时，可以选择默认模板，或只为该次任务填写自定义指令。
+        </p>
+        <div className="grid gap-3 lg:grid-cols-2">
+          {(
+            [
+              ['内容理解', settings.initial_prompt],
+              ['相关性判断与报告', settings.report_prompt],
+            ] as const
+          ).map(([label, prompt]) => (
+            <details key={label} className="rounded-lg border bg-card p-3">
+              <summary className="min-h-8 cursor-pointer font-medium">
+                {label}
+              </summary>
+              <p className="mt-2 text-sm leading-6 whitespace-pre-wrap text-muted-foreground">
+                {prompt.instructions}
+              </p>
+            </details>
+          ))}
+        </div>
+      </section>
       <section
         aria-label="自动分析授权"
         className="mt-6 space-y-3 border-t pt-5"

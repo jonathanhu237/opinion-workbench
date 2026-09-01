@@ -16,6 +16,8 @@ import {
   deleteAutomationTask,
   runAutomationTaskNow,
 } from '@/lib/api/automation-workflows'
+import { analysisSettingsFixture } from '@/lib/api/analysis-fixtures'
+import { fetchAnalysisSettings } from '@/lib/api/analysis-settings'
 import { fetchMonitoringRules } from '@/lib/api/monitoring-rules'
 import {
   automationRunDetailKey,
@@ -46,6 +48,11 @@ vi.mock('@/lib/api/monitoring-rules', async (importOriginal) => ({
   fetchMonitoringRules: vi.fn(),
 }))
 
+vi.mock('@/lib/api/analysis-settings', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api/analysis-settings')>()),
+  fetchAnalysisSettings: vi.fn(),
+}))
+
 const mockedTasks = vi.mocked(fetchAutomationTasks)
 const mockedTask = vi.mocked(fetchAutomationTask)
 const mockedRuns = vi.mocked(fetchAutomationRuns)
@@ -53,6 +60,7 @@ const mockedOccurrences = vi.mocked(fetchAutomationOccurrences)
 const mockedRun = vi.mocked(fetchAutomationRun)
 const mockedRunNow = vi.mocked(runAutomationTaskNow)
 const mockedDelete = vi.mocked(deleteAutomationTask)
+const mockedAnalysisSettings = vi.mocked(fetchAnalysisSettings)
 
 function renderRoute(
   routes: Parameters<typeof createMemoryRouter>[0],
@@ -98,6 +106,7 @@ beforeEach(() => {
       },
     ],
   })
+  mockedAnalysisSettings.mockResolvedValue(analysisSettingsFixture())
 })
 
 describe('automation task route', () => {
@@ -111,9 +120,7 @@ describe('automation task route', () => {
     expect(
       await screen.findByRole('heading', { name: '自动任务' }),
     ).toBeVisible()
-    expect(
-      await screen.findByText('识别需要街道回应的公共事务内容。'),
-    ).toBeVisible()
+    expect(await screen.findAllByText('系统默认模板')).toHaveLength(2)
     expect(screen.getByRole('button', { name: '立即运行' })).toBeEnabled()
     expect(screen.getByRole('link', { name: /查看运行/u })).toHaveAttribute(
       'href',
@@ -154,8 +161,9 @@ describe('automation task route', () => {
     expect(screen.queryByText('每次任务都会按这个顺序处理。')).toBeNull()
     expect(screen.queryByText(/固定工作流/u)).toBeNull()
     expect(
-      screen.getByRole('button', { name: '创建停用的自动任务' }),
-    ).toBeEnabled()
+      await screen.findByText('理解全部来源并保留地点线索，不先判断主题。'),
+    ).toBeVisible()
+    expect(screen.getByRole('button', { name: '创建自动任务' })).toBeEnabled()
   })
 
   it('submits run-now only after an explicit confirmation and navigates to the run', async () => {

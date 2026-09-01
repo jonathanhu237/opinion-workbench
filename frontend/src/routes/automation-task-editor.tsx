@@ -1,5 +1,5 @@
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { GitBranch, Info } from 'lucide-react'
 import { useEffect } from 'react'
 import { Controller, useForm, useWatch } from 'react-hook-form'
@@ -30,11 +30,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Textarea } from '@/components/ui/textarea'
+import { PromptChoiceField } from '@/components/prompt-choice-field'
 import { useMonitoringRules } from '@/hooks/use-monitoring-rules'
 import {
   AUTOMATION_PLATFORM_ORDER,
-  MAX_AUTOMATION_GOAL_LENGTH,
   MAX_AUTOMATION_INTERVAL_MINUTES,
   AUTOMATION_TASKS_QUERY_KEY,
   AutomationApiError,
@@ -45,6 +44,12 @@ import {
   type AutomationTaskCreate,
   type AutomationTaskReplace,
 } from '@/lib/api/automation-workflows'
+import {
+  ANALYSIS_SETTINGS_QUERY_KEY,
+  fetchAnalysisSettings,
+  promptChoiceSchema,
+  type PromptChoice,
+} from '@/lib/api/analysis-settings'
 import {
   cacheSavedAutomationTask,
   automationTaskDetailKey,
@@ -71,12 +76,8 @@ const formSchema = z
       .int('请输入整数。')
       .min(1, '每个搜索词至少采集 1 条。')
       .max(50, '每个搜索词最多采集 50 条。'),
-    analysisGoal: z
-      .string()
-      .max(
-        MAX_AUTOMATION_GOAL_LENGTH,
-        `分析目标不能超过 ${MAX_AUTOMATION_GOAL_LENGTH} 个字符。`,
-      ),
+    initialPrompt: promptChoiceSchema,
+    reportPrompt: promptChoiceSchema,
     scheduleKind: z.enum(['interval', 'daily']),
     intervalMinutes: z.coerce
       .number<number>()
@@ -94,16 +95,6 @@ const formSchema = z
         code: 'custom',
         path: ['name'],
         message: '请输入自动任务名称。',
-      })
-    }
-    if (
-      value.analysisGoal.trim().length === 0 ||
-      value.analysisGoal.includes('\0')
-    ) {
-      context.addIssue({
-        code: 'custom',
-        path: ['analysisGoal'],
-        message: '请输入舆情分析目标。',
       })
     }
     if (value.scheduleKind === 'daily' && !isValidTimeZone(value.timezone)) {
@@ -126,6 +117,14 @@ const formSchema = z
   })
 
 type FormValues = z.infer<typeof formSchema>
+
+function choiceFromSnapshot(
+  snapshot: AutomationTask['initial_prompt'] | AutomationTask['report_prompt'],
+): PromptChoice {
+  return snapshot?.mode === 'custom' || snapshot?.mode === 'legacy'
+    ? { mode: 'custom', instructions: snapshot.instructions }
+    : { mode: 'default' }
+}
 
 function isValidTimeZone(value: string) {
   if (
@@ -154,7 +153,8 @@ function initialValues(task: AutomationTask | null): FormValues {
         : String(task.monitoring_rule_id),
     platforms: task?.platforms ?? [...AUTOMATION_PLATFORM_ORDER],
     maxResultsPerTerm: task?.max_results_per_term ?? 10,
-    analysisGoal: task?.analysis_goal ?? '',
+    initialPrompt: choiceFromSnapshot(task?.initial_prompt),
+    reportPrompt: choiceFromSnapshot(task?.report_prompt),
     scheduleKind: schedule?.kind ?? 'interval',
     intervalMinutes:
       schedule?.kind === 'interval' ? schedule.interval_minutes : 60,
@@ -315,7 +315,8 @@ function makePayload(values: FormValues): AutomationTaskCreate {
     monitoring_rule_id: Number(values.ruleId),
     platforms,
     max_results_per_term: values.maxResultsPerTerm,
-    analysis_goal: values.analysisGoal.trim(),
+    initial_prompt: values.initialPrompt,
+    report_prompt: values.reportPrompt,
     schedule:
       values.scheduleKind === 'interval'
         ? { kind: 'interval', interval_minutes: values.intervalMinutes }
@@ -338,6 +339,11 @@ export function AutomationTaskEditor({
 }) {
   const client = useQueryClient()
   const rules = useMonitoringRules()
+  const analysisSettings = useQuery({
+    queryKey: ANALYSIS_SETTINGS_QUERY_KEY,
+    queryFn: ({ signal }) => fetchAnalysisSettings(signal),
+    retry: false,
+  })
   const form = useForm<FormValues>({
     resolver: zodResolver(formSchema),
     mode: 'onBlur',
@@ -507,7 +513,7 @@ export function AutomationTaskEditor({
                       </SelectContent>
                     </Select>
                     <FieldDescription>
-                      搜索规则决定采集哪些内容；分析目标单独设置。
+                      搜索规则决定采集哪些内容；下面分别设置两个分析阶段的提示词。
                     </FieldDescription>
                     <FieldError
                       id="automation-task-rule-error"
@@ -597,34 +603,60 @@ export function AutomationTaskEditor({
             )}
           />
 
-          <Controller
-            name="analysisGoal"
-            control={form.control}
-            render={({ field, fieldState }) => (
-              <Field data-invalid={fieldState.invalid}>
-                <FieldLabel htmlFor="automation-task-goal">
-                  舆情分析目标
-                </FieldLabel>
-                <Textarea
-                  {...field}
-                  id="automation-task-goal"
-                  rows={4}
-                  maxLength={MAX_AUTOMATION_GOAL_LENGTH}
-                  placeholder="例如：识别涉及公共安全、服务投诉或可能需要街道回应的内容。"
-                  aria-invalid={fieldState.invalid}
-                  aria-describedby="automation-task-goal-help automation-task-goal-error"
-                  disabled={saveMutation.isPending}
+          <div className="grid gap-5 lg:grid-cols-2">
+            <Controller
+              name="initialPrompt"
+              control={form.control}
+              render={({ field, fieldState }) => (
+                <PromptChoiceField
+                  id="automation-initial-prompt"
+                  label="内容理解提示词"
+                  description="先理解每条来源，保留地点、时间、媒体观察和不确定性。"
+                  value={field.value}
+                  onChange={field.onChange}
+                  onBlur={field.onBlur}
+                  error={fieldState.error?.message}
+                  defaultInstructions={
+                    analysisSettings.data?.initial_prompt.instructions
+                  }
+                  disabled={
+                    saveMutation.isPending || !analysisSettings.isSuccess
+                  }
                 />
-                <FieldDescription id="automation-task-goal-help">
-                  只用于判断内容是否相关，不会改变采集规则。
-                </FieldDescription>
-                <FieldError
-                  id="automation-task-goal-error"
-                  errors={[fieldState.error]}
+              )}
+            />
+            <Controller
+              name="reportPrompt"
+              control={form.control}
+              render={({ field, fieldState }) => (
+                <PromptChoiceField
+                  id="automation-report-prompt"
+                  label="相关性判断与报告提示词"
+                  description="再根据内容理解判断相关性，并整理文字报告。"
+                  value={field.value}
+                  onChange={field.onChange}
+                  onBlur={field.onBlur}
+                  error={fieldState.error?.message}
+                  defaultInstructions={
+                    analysisSettings.data?.report_prompt.instructions
+                  }
+                  disabled={
+                    saveMutation.isPending || !analysisSettings.isSuccess
+                  }
                 />
-              </Field>
-            )}
-          />
+              )}
+            />
+          </div>
+          {analysisSettings.isPending && (
+            <p role="status" className="text-sm text-muted-foreground">
+              正在读取固定提示词…
+            </p>
+          )}
+          {analysisSettings.isError && (
+            <p role="alert" className="text-sm text-destructive">
+              固定提示词暂时无法读取，请刷新后重试。
+            </p>
+          )}
 
           <FieldSet className="rounded-xl border bg-muted/25 p-4">
             <FieldLegend variant="label">执行计划</FieldLegend>
@@ -801,12 +833,16 @@ export function AutomationTaskEditor({
           <Button
             type="submit"
             form="automation-task-editor"
-            disabled={saveMutation.isPending || isSubmitting}
+            disabled={
+              saveMutation.isPending ||
+              isSubmitting ||
+              !analysisSettings.isSuccess
+            }
           >
             {saveMutation.isPending
               ? '正在保存…'
               : task === null
-                ? '创建停用的自动任务'
+                ? '创建自动任务'
                 : '保存自动任务'}
           </Button>
         </DialogFooter>

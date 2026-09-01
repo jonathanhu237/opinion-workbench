@@ -131,17 +131,24 @@ and cross-layer tests live in [Batch Search](../backend/batch-search-guidelines.
 The `/results` route follows [Independent Initial Analysis](../backend/initial-analysis-guidelines.md).
 Its global bulk action is independent of URL filters/pagination. TanStack Query
 owns saved evidence and job progress, URL state owns selected IDs, and RHF owns
-the two separately saved prompt drafts. Confirmation retains one immutable
-UUID/provider/prompt intent; neither polling nor route entry starts analysis.
-Preserve drafts on compare-and-swap conflict and require explicit adoption of a
-new version before a separate save. Do not apply the legacy source cap below.
+the prompt choice for the pending operation. Each manual or automatic entry
+point sends a strict `{mode: "default"}` or
+`{mode: "custom", instructions: "..."}` intent; selecting custom starts from a
+copy of the fixed built-in text while keeping a local draft if the user toggles
+back to default. Initial analysis owns only the content-understanding choice,
+and report creation owns only the relevance-and-report choice. Confirmation
+retains one immutable UUID/provider/prompt intent; neither polling nor route
+entry starts analysis. Do not apply the legacy source cap below.
 
-Initial/report prompt saves and authorization saves return a whole settings
-projection but may finish out of order. Merge each prompt by its own version ID
-and authorization by its revision; never replace a newer sibling with an older
-response. Cancel in-flight settings GETs around successful writes so a read that
-started before or during the save cannot later roll the cache back. Test both
-save-response orders and late GET responses, not only one successful form.
+The built-in initial/report prompts returned by analysis settings are read-only;
+there is no frontend save flow or global mutable prompt draft. Only automation
+authorization mutates settings. Cancel in-flight settings GETs around a
+successful authorization write before publishing its whole projection, merge
+the authorization by revision, and never let a late read roll the cache back.
+Decode submitted task/run/report prompt snapshots as immutable historical data
+with explicit `default`, `custom`, or `legacy` provenance. Tests must cover
+default/custom switching, close-and-reopen behavior, strict payloads, frozen
+history, pending submission and late settings responses.
 
 The page-level Refresh action covers selected-result details, saved attempts,
 origins and legacy history as well as list/settings/job queries. A failed detail

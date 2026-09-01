@@ -13,7 +13,13 @@ from longtian_api.schemas.ai_summaries import (
     TokenUsage,
 )
 from longtian_api.schemas.analysis_evidence import AnalysisSource, SavedInput
-from longtian_api.schemas.analysis_settings import Count, PositiveId, PromptVersion
+from longtian_api.schemas.analysis_settings import (
+    Count,
+    PositiveId,
+    PromptChoice,
+    PromptSnapshotMode,
+    PromptVersion,
+)
 
 AttemptStatus = Literal[
     "queued",
@@ -93,13 +99,39 @@ class SelectedResults(StrictModel):
 class AnalysisCreate(StrictModel):
     request_id: str = Field(min_length=36, max_length=36)
     configuration_revision: PositiveId
-    initial_prompt_version_id: PositiveId
-    report_prompt_version_id: PositiveId
+    # Version IDs remain accepted for replay and internal callers.  Public
+    # callers may submit only the initial-stage choice; the report stage then
+    # resolves to the immutable built-in default unless explicitly selected.
+    initial_prompt_version_id: PositiveId | None = None
+    report_prompt_version_id: PositiveId | None = None
+    initial_prompt_mode: PromptSnapshotMode | None = None
+    report_prompt_mode: PromptSnapshotMode | None = None
+    initial_prompt: PromptChoice | None = None
+    report_prompt: PromptChoice | None = None
     force_refresh: bool
     selection: Annotated[AllNeverStarted | SelectedResults, Field(discriminator="kind")]
 
     @model_validator(mode="after")
     def canonical_request(self) -> Self:
+        request_id = UUID(self.request_id)
+        if request_id.version != 4 or str(request_id) != self.request_id:
+            raise ValueError("invalid request ID")
+        if self.initial_prompt is None and self.initial_prompt_version_id is None:
+            raise ValueError("initial prompt is required")
+        return self
+
+
+class AnalysisCreateRequest(StrictModel):
+    """Strict public payload for one initial-understanding submission."""
+
+    request_id: str = Field(min_length=36, max_length=36)
+    configuration_revision: PositiveId
+    initial_prompt: PromptChoice
+    force_refresh: bool
+    selection: Annotated[AllNeverStarted | SelectedResults, Field(discriminator="kind")]
+
+    @model_validator(mode="after")
+    def valid_request(self) -> Self:
         request_id = UUID(self.request_id)
         if request_id.version != 4 or str(request_id) != self.request_id:
             raise ValueError("invalid request ID")
@@ -111,8 +143,12 @@ class WorkflowAnalysisCreate(StrictModel):
 
     request_id: str = Field(min_length=36, max_length=36)
     configuration_revision: PositiveId
-    initial_prompt_version_id: PositiveId
-    report_prompt_version_id: PositiveId
+    initial_prompt_version_id: PositiveId | None = None
+    report_prompt_version_id: PositiveId | None = None
+    initial_prompt_mode: PromptSnapshotMode | None = None
+    report_prompt_mode: PromptSnapshotMode | None = None
+    initial_prompt: PromptChoice | None = None
+    report_prompt: PromptChoice | None = None
     force_refresh: bool
     result_ids: list[PositiveId] = Field(min_length=1)
 
@@ -123,6 +159,8 @@ class WorkflowAnalysisCreate(StrictModel):
             raise ValueError("invalid request ID")
         if len(self.result_ids) != len(set(self.result_ids)):
             raise ValueError("duplicate result")
+        if self.initial_prompt is None and self.initial_prompt_version_id is None:
+            raise ValueError("initial prompt is required")
         return self
 
 

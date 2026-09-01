@@ -17,8 +17,7 @@ export const analysisProvider = {
 export const analysisRequest: AnalysisRequest = {
   request_id: 'f3522a81-6e3f-41bd-a403-1ff8be1227b1',
   configuration_revision: 3,
-  initial_prompt_version_id: 1,
-  report_prompt_version_id: 2,
+  initial_prompt: { mode: 'default' },
   force_refresh: false,
   selection: { kind: 'all_never_started' },
 }
@@ -26,6 +25,8 @@ export function analysisSettingsFixture(): AnalysisSettings {
   return {
     initial_prompt: {
       id: 1,
+      version_id: 1,
+      mode: 'default',
       stage: 'initial',
       instructions: '理解全部来源并保留地点线索，不先判断主题。',
       content_hash: 'a'.repeat(64),
@@ -34,6 +35,8 @@ export function analysisSettingsFixture(): AnalysisSettings {
     },
     report_prompt: {
       id: 2,
+      version_id: 2,
+      mode: 'default',
       stage: 'report',
       instructions: '只依据保存文字判断地点；证据不足则保留不确定性。',
       content_hash: 'b'.repeat(64),

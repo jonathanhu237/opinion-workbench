@@ -17,8 +17,7 @@ export const reportRequestId = 'd70f7c78-f3a7-4179-9a3d-371fa8d3ebc2'
 export const reportCreateRequest: CreateReportRequest = {
   request_id: reportRequestId,
   configuration_revision: 3,
-  report_prompt_version_id: 2,
-  instructions_override: null,
+  report_prompt: { mode: 'default' },
   selection: {
     kind: 'first_seen_interval',
     first_seen_from: '2026-08-28T16:00:00.000Z',

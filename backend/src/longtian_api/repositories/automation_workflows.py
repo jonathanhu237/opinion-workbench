@@ -21,7 +21,15 @@ from typing import Literal, cast
 from zoneinfo import ZoneInfo
 
 from longtian_api.database import Database
+from longtian_api.repositories.analysis_settings import (
+    prompt_snapshot,
+    resolve_prompt_choice,
+)
 from longtian_api.repositories.monitoring_rules import _read_record
+from longtian_api.schemas.analysis_settings import (
+    REPORT_SCHEMA_VERSION,
+    PromptSnapshot,
+)
 from longtian_api.schemas.automation_workflows import (
     AUTOMATION_STAGES,
     AutomationFailure,
@@ -114,6 +122,8 @@ class AutomationTaskRecord:
     created_at: str
     updated_at: str
     latest_run: AutomationRunRecord | None
+    initial_prompt: PromptSnapshot | None = None
+    report_prompt: PromptSnapshot | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -225,22 +235,34 @@ class AutomationWorkflowRepository:
         timezone = getattr(schedule, "timezone", None)
         identity = normalized_name or _normalize(payload.name)
         with self._connection(write=True) as connection:
+            initial_prompt = resolve_prompt_choice(
+                connection, "initial", payload.initial_prompt
+            )
+            report_prompt = resolve_prompt_choice(
+                connection, "report", payload.report_prompt
+            )
             if connection.execute(
                 "SELECT 1 FROM automation_tasks WHERE normalized_name=?", (identity,)
             ).fetchone():
                 raise AutomationTaskNameConflictError
             cursor = connection.execute(
                 """INSERT INTO automation_tasks(
-                  name,normalized_name,monitoring_rule_id,max_results_per_term,analysis_goal,schedule_kind,
+                  name,normalized_name,monitoring_rule_id,max_results_per_term,analysis_goal,
+                  initial_prompt_mode,initial_prompt_version_id,
+                  report_prompt_mode,report_prompt_version_id,schedule_kind,
                   interval_minutes,daily_time,timezone,enabled,revision,next_due_at,
                   anchor_at,created_at,updated_at)
-                  VALUES (?,?,?,?,?,?,?,?,?,0,1,NULL,NULL,?,?)""",
+                  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,1,NULL,NULL,?,?)""",
                 (
                     payload.name,
                     identity,
                     payload.monitoring_rule_id,
                     payload.max_results_per_term,
-                    payload.analysis_goal,
+                    _prompt_mirror(report_prompt, payload.analysis_goal),
+                    initial_prompt.mode,
+                    initial_prompt.version_id,
+                    report_prompt.mode,
+                    report_prompt.version_id,
                     schedule.kind,
                     interval_minutes,
                     daily_time,
@@ -270,6 +292,12 @@ class AutomationWorkflowRepository:
         timezone = getattr(schedule, "timezone", None)
         identity = normalized_name or _normalize(payload.name)
         with self._connection(write=True) as connection:
+            initial_prompt = resolve_prompt_choice(
+                connection, "initial", payload.initial_prompt
+            )
+            report_prompt = resolve_prompt_choice(
+                connection, "report", payload.report_prompt
+            )
             old = _task_row(connection, task_id)
             if old["revision"] != payload.expected_revision:
                 raise AutomationTaskChangedError
@@ -281,7 +309,9 @@ class AutomationWorkflowRepository:
                 raise AutomationTaskNameConflictError
             connection.execute(
                 """UPDATE automation_tasks SET name=?,normalized_name=?,
-                  monitoring_rule_id=?,max_results_per_term=?,analysis_goal=?,schedule_kind=?,
+                  monitoring_rule_id=?,max_results_per_term=?,analysis_goal=?,
+                  initial_prompt_mode=?,initial_prompt_version_id=?,
+                  report_prompt_mode=?,report_prompt_version_id=?,schedule_kind=?,
                   interval_minutes=?,daily_time=?,timezone=?,enabled=?,
                   revision=revision+1,next_due_at=?,anchor_at=?,updated_at=?
                   WHERE id=? AND revision=?""",
@@ -290,7 +320,11 @@ class AutomationWorkflowRepository:
                     identity,
                     payload.monitoring_rule_id,
                     payload.max_results_per_term,
-                    payload.analysis_goal,
+                    _prompt_mirror(report_prompt, payload.analysis_goal),
+                    initial_prompt.mode,
+                    initial_prompt.version_id,
+                    report_prompt.mode,
+                    report_prompt.version_id,
                     schedule.kind,
                     interval_minutes,
                     daily_time,
@@ -1166,6 +1200,18 @@ def _read_task(connection: sqlite3.Connection, task_id: int) -> AutomationTaskRe
         latest_run=_read_run(connection, int(latest[0]))
         if latest is not None
         else None,
+        initial_prompt=prompt_snapshot(
+            connection,
+            "initial",
+            int(row["initial_prompt_version_id"]),
+            mode=str(row["initial_prompt_mode"]),
+        ),
+        report_prompt=prompt_snapshot(
+            connection,
+            "report",
+            int(row["report_prompt_version_id"]),
+            mode=str(row["report_prompt_mode"]),
+        ),
     )
 
 
@@ -1280,7 +1326,7 @@ def _read_run(connection: sqlite3.Connection, run_id: int) -> AutomationRunRecor
         task_id=int(row["task_id"]),
         trigger=cast(Literal["scheduled", "manual"], row["trigger"]),
         task_revision=int(row["task_revision"]),
-        snapshot=AutomationSnapshot.model_validate_json(row["snapshot_json"]),
+        snapshot=_read_snapshot(connection, row["snapshot_json"]),
         status=str(row["status"]),
         active_stage=cast(AutomationStageName | None, row["active_stage"]),
         stages=attempts,
@@ -1297,8 +1343,55 @@ def _read_run(connection: sqlite3.Connection, run_id: int) -> AutomationRunRecor
     )
 
 
+def _read_snapshot(
+    connection: sqlite3.Connection, snapshot_json: str
+) -> AutomationSnapshot:
+    """Project pre-v18 run snapshots without changing their stored JSON.
+
+    v18 added the complete prompt projections to new snapshots, but existing
+    runs only contain the two version IDs and the old ``analysis_goal`` field.
+    The old report ID points at the shared report setting; the task-specific
+    text in ``analysis_goal`` was the actual report instruction.  Keep that
+    historical distinction visible as ``legacy`` while resolving the initial
+    shared row from its immutable version ID.
+    """
+
+    snapshot = AutomationSnapshot.model_validate_json(snapshot_json)
+    updates: dict[str, PromptSnapshot] = {}
+    if (
+        snapshot.initial_prompt is None
+        and snapshot.initial_prompt_version_id is not None
+    ):
+        updates["initial_prompt"] = prompt_snapshot(
+            connection,
+            "initial",
+            snapshot.initial_prompt_version_id,
+            mode="legacy",
+        )
+    if (
+        snapshot.report_prompt is None
+        and snapshot.report_prompt_version_id is not None
+    ):
+        updates["report_prompt"] = PromptSnapshot(
+            mode="legacy",
+            version_id=snapshot.report_prompt_version_id,
+            instructions=snapshot.analysis_goal,
+            content_hash=snapshot.analysis_goal_hash,
+            schema_version=REPORT_SCHEMA_VERSION,
+        )
+    return snapshot.model_copy(update=updates) if updates else snapshot
+
+
 def _normalize(value: str) -> str:
     return unicodedata.normalize("NFKC", value.strip()).casefold()
+
+
+def _prompt_mirror(prompt: PromptSnapshot, legacy: str | None) -> str:
+    """Keep the old bounded column useful without making it authoritative."""
+    del legacy  # The full prompt is the source of truth for the v18 mirror.
+    if len(prompt.instructions) <= 4000:
+        return prompt.instructions
+    return f"使用已保存提示词版本 {prompt.version_id}"
 
 
 def _utc(value: datetime) -> str:

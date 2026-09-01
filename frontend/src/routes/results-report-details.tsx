@@ -76,6 +76,17 @@ const sectionLabels: Record<ReportSection['status'], string> = {
   interrupted: '已中断',
 }
 
+export function reportPromptSourceLabel(prompt: ReportRun['prompt']) {
+  if (prompt.origin === 'override') return '本次专用提示词（未更改默认）'
+  if (prompt.mode === 'legacy' || prompt.origin === 'legacy')
+    return `历史提示词 · 版本 ${prompt.version_id ?? '旧记录'}`
+  if (prompt.origin === 'shared')
+    return `历史共享提示词 · 版本 ${prompt.version_id ?? '旧记录'}`
+  if (prompt.mode === 'custom' || prompt.origin === 'custom')
+    return `本次自定义提示词 · 版本 ${prompt.version_id}`
+  return `系统默认模板 · 版本 ${prompt.version_id}`
+}
+
 function ReadError({ error, retry }: { error: unknown; retry: () => void }) {
   return (
     <div role="alert" className="space-y-2 text-sm">
@@ -177,11 +188,7 @@ export function ReportCoverage({ report }: { report: ReportRun }) {
         <summary className="min-h-8 cursor-pointer text-sm font-medium">
           本报告使用的提示词与模型
         </summary>
-        <p className="mt-2 text-sm">
-          {report.prompt.origin === 'override'
-            ? '本次专用提示词（未更改默认）'
-            : `默认报告提示词 · 版本 ${report.prompt.version_id}`}
-        </p>
+        <p className="mt-2 text-sm">{reportPromptSourceLabel(report.prompt)}</p>
         <p className="mt-2 text-sm leading-6 wrap-anywhere whitespace-pre-wrap">
           {report.prompt.instructions}
         </p>

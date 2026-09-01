@@ -11,8 +11,10 @@ from longtian_api.schemas.analysis_settings import MAX_SAFE_INTEGER
 from longtian_api.schemas.topic_reports import (
     ReportCancel,
     ReportCreate,
+    ReportCreateRequest,
     ReportList,
     ReportRetry,
+    ReportRetryRequest,
     ReportRun,
     ReportSection,
     ReportSectionList,
@@ -88,8 +90,12 @@ def list_reports(
 
 
 @router.post("", status_code=202, dependencies=[Depends(require_local_mutation)])
-async def create_report(payload: ReportCreate, service: Service) -> ReportRun:
-    return await service.create(payload)
+async def create_report(
+    payload: ReportCreateRequest, service: Service
+) -> ReportRun:
+    return await service.create(
+        ReportCreate(**payload.model_dump(exclude_none=True))
+    )
 
 
 @router.get("/{report_id}")
@@ -128,9 +134,11 @@ def read_section(
     dependencies=[Depends(require_local_mutation)],
 )
 async def retry_report(
-    report_id: ResourceId, payload: ReportRetry, service: Service
+    report_id: ResourceId, payload: ReportRetryRequest, service: Service
 ) -> ReportRun:
-    return await service.retry(report_id, payload)
+    return await service.retry(
+        report_id, ReportRetry(**payload.model_dump(exclude_none=True))
+    )
 
 
 @router.post("/{report_id}/cancel", dependencies=[Depends(require_local_mutation)])

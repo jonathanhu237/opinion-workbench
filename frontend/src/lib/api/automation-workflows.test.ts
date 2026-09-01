@@ -146,7 +146,11 @@ describe('automation workflow HTTP boundary', () => {
       monitoring_rule_id: 9,
       platforms: ['toutiao', 'wb'] as ('toutiao' | 'wb')[],
       max_results_per_term: 12,
-      analysis_goal: '筛选需要回应的公共事务内容。',
+      initial_prompt: { mode: 'default' as const },
+      report_prompt: {
+        mode: 'custom' as const,
+        instructions: '筛选需要回应的公共事务内容。',
+      },
       schedule: {
         kind: 'daily' as const,
         daily_time: '09:30',
@@ -156,7 +160,7 @@ describe('automation workflow HTTP boundary', () => {
     const saved = task({
       name: input.name,
       max_results_per_term: input.max_results_per_term,
-      analysis_goal: input.analysis_goal,
+      analysis_goal: input.report_prompt.instructions,
       schedule: input.schedule,
     })
     respond(saved, 201)
@@ -165,6 +169,21 @@ describe('automation workflow HTTP boundary', () => {
       method: 'POST',
       body: JSON.stringify(input),
     })
+  })
+
+  it('rejects an invalid task name before making the create request', async () => {
+    await expect(
+      createAutomationTask({
+        name: ' \t',
+        monitoring_rule_id: 9,
+        platforms: ['toutiao'],
+        max_results_per_term: 12,
+        initial_prompt: { mode: 'default' },
+        report_prompt: { mode: 'default' },
+        schedule: { kind: 'interval', interval_minutes: 30 },
+      }),
+    ).rejects.toMatchObject({ code: 'invalid_response' })
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('keeps request intent while admitting and retrying a run', async () => {
