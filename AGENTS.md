@@ -16,3 +16,13 @@
 - If the user explicitly requests Centaurus for a specific task, keep the local
   repository as the source of truth and apply the Centaurus workflow only to
   that task.
+
+## Agent skills
+
+### Issue tracker
+
+任务和规格使用本地 Markdown，存放于 `.scratch/`。详见 `docs/agents/issue-tracker.md`。
+
+### Domain docs
+
+采用 single-context 布局：根目录 `CONTEXT.md` 与 `docs/adr/`。详见 `docs/agents/domain.md`。
