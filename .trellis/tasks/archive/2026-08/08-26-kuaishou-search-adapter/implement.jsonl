@@ -1,9 +1,0 @@
-{"file": ".trellis/spec/backend/product-search-guidelines.md", "reason": "Extend the durable multi-platform run, strict protocol, borrowed-browser ownership, URL and deduplication contracts to Kuaishou."}
-{"file": ".trellis/spec/backend/platform-connection-guidelines.md", "reason": "Preserve the shared persistent worker, page-local Kuaishou signer, authoritative login proof and task-page cleanup."}
-{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Implement SQLite version 4 transactionally while preserving all existing platform data and relationships."}
-{"file": ".trellis/spec/backend/error-handling.md", "reason": "Keep signing values, platform responses, exceptions, credentials and search terms out of public errors and logs."}
-{"file": ".trellis/spec/frontend/state-management.md", "reason": "Extend existing TanStack Query and URL-owned run state without duplicating server state."}
-{"file": ".trellis/spec/frontend/component-guidelines.md", "reason": "Use the existing Shadcn Select, reviewed Kuaishou logo, accessibility and responsive conventions."}
-{"file": ".trellis/spec/frontend/type-safety.md", "reason": "Extend exact runtime platform and platform-dependent link validation without casts."}
-{"file": ".trellis/spec/infra/submodule-guidelines.md", "reason": "Commit and push the MediaCrawler derivative before moving the reproducible parent gitlink."}
-{"file": ".trellis/tasks/08-26-kuaishou-search-adapter/research/current-kuaishou-search-contract.md", "reason": "Use the audited signed endpoint and remove generic retries, comments, stores and raw logging from the product path."}

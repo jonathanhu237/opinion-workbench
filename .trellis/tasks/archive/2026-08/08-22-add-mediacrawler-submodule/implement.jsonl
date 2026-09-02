@@ -1,2 +1,0 @@
-{"file": ".trellis/spec/guides/index.md", "reason": "Apply repository-wide pre-modification and verification thinking before changing submodule metadata"}
-{"file": ".trellis/spec/infra/submodule-guidelines.md", "reason": "Follow the project contract for public HTTPS submodules and pinned reachable gitlinks"}

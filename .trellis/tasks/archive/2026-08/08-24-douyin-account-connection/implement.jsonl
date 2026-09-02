@@ -1,9 +1,0 @@
-{"file":".trellis/spec/backend/platform-connection-guidelines.md","reason":"Extend the exact authentication platform, online-proof, subprocess, event, and borrowed-Chrome contract from wb|ks to wb|dy|ks."}
-{"file":".trellis/spec/backend/auth-state-guidelines.md","reason":"Keep live authentication authoritative, prohibit credential/QR persistence, and preserve manual-only official safety challenges."}
-{"file":".trellis/spec/frontend/index.md","reason":"Extend the existing TanStack Query account-center flow through its runtime validation, accessibility, shadcn, and frozen quality contracts."}
-{"file":".trellis/spec/infra/submodule-guidelines.md","reason":"Modify and deliver the MediaCrawler derivative before updating the parent gitlink."}
-{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Trace dy events and terminal failures through MediaCrawler, FastAPI state, polling, and operator guidance."}
-{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Extend the shared typed protocol, command builder, catalog, and UI without a Douyin-specific duplicate service."}
-{"file":".trellis/tasks/08-24-douyin-account-connection/research/douyin-connection-evidence.md","reason":"Use the inspected Douyin login, local-only pong, CDP fallback, backend, and frontend gaps as the implementation baseline."}
-{"file":".trellis/tasks/08-24-douyin-account-connection/research/douyin-online-probe-spike.md","reason":"Implement the official account-info tri-state proof exactly and preserve the real-positive rollout gate."}
-{"file":".trellis/tasks/archive/2026-08/08-24-kuaishou-account-connection/research/real-chrome-acceptance.md","reason":"Reuse the proven non-sensitive borrowed-Chrome sentinel-tab and task-page ownership acceptance procedure."}

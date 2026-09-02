@@ -1,3 +1,0 @@
-{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Verify navigation accessibility, mobile behavior, and continued use of the project-owned Shadcn primitives."}
-{"file":".trellis/spec/frontend/directory-structure.md","reason":"Verify the redirect and route removal remain within the approved router boundary without deleting reusable workbench source."}
-{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Run and assess the complete frontend quality and loopback browser acceptance matrix."}

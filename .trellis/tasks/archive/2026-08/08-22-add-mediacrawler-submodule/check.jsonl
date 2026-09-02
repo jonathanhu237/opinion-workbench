@@ -1,2 +1,0 @@
-{"file": ".trellis/spec/guides/index.md", "reason": "Verify the submodule change against repository-wide quality and evidence rules"}
-{"file": ".trellis/spec/infra/submodule-guidelines.md", "reason": "Verify the submodule path, URL, gitlink, reachability, and fresh-clone contract"}

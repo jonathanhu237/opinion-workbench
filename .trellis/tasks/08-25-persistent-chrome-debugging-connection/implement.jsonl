@@ -1,8 +1,0 @@
-{"_example": "Fill with {\"file\": \"<path>\", \"reason\": \"<why>\"}. Put spec/research files only — no code paths. Run `python3 .trellis/scripts/get_context.py --mode packages` to list available specs. Delete this line once real entries are added."}
-{"file": ".trellis/spec/backend/platform-connection-guidelines.md", "reason": "现有五平台认证、API、浏览器所有权与子进程协议基线；实施时需迁移为常驻 worker 合约"}
-{"file": ".trellis/spec/backend/auth-state-guidelines.md", "reason": "保持在线探测权威、Cookie 不作为成功证明及认证材料安全边界"}
-{"file": ".trellis/spec/infra/submodule-guidelines.md", "reason": "MediaCrawler 派生仓库先提交推送、父仓库后更新 gitlink"}
-{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "设计并集中验证 FastAPI 与常驻 worker 之间的 v2 IPC 边界"}
-{"file": ".trellis/spec/guides/code-reuse-thinking-guide.md", "reason": "复用单一认证安全配置、协议解码器与五平台现有探测逻辑"}
-{"file": ".trellis/tasks/08-25-persistent-chrome-debugging-connection/research/current-auth-architecture.md", "reason": "现有链路、五平台注入点、共享 BrowserContext 风险与影响文件"}
-{"file": ".trellis/tasks/08-25-persistent-chrome-debugging-connection/research/persistent-worker-protocol.md", "reason": "常驻 worker 协议、状态机、异常恢复、关闭与回滚设计"}

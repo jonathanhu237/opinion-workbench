@@ -1,7 +1,0 @@
-{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Verify exact health payload, error states and Vite proxy behavior across the frontend/backend boundary"}
-{"file": ".trellis/spec/frontend/index.md", "reason": "Check the generated frontend is minimal, typed and does not invent unsupported project conventions"}
-{"file": ".trellis/spec/backend/index.md", "reason": "Check the FastAPI package, response model, tests and local-only entrypoint against backend boundaries"}
-{"file": ".trellis/spec/infra/submodule-guidelines.md", "reason": "Prove the MediaCrawler submodule revision and worktree were not changed"}
-{"file": ".trellis/tasks/08-24-initialize-react-fastapi-app/research/source-findings.md", "reason": "Verify implementation and lockfiles were produced with the selected supported toolchain"}
-{"file": ".trellis/tasks/08-24-initialize-react-fastapi-app/research/browser-session-reuse.md", "reason": "Confirm the scaffold contains no premature Chrome, login-state or scheduler implementation"}
-{"file": ".trellis/tasks/08-24-initialize-react-fastapi-app/research/mediacrawler-dependency-decision.md", "reason": "Confirm the product backend does not reuse MediaCrawler WebUI/API or import its global runtime"}

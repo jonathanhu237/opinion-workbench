@@ -1,8 +1,0 @@
-{"file":".trellis/spec/backend/platform-connection-guidelines.md","reason":"Extend the exact auth-only worker, constant event, online proof, fail-closed CDP, borrowed-page ownership, and readiness contract from four platforms to XHS."}
-{"file":".trellis/spec/backend/auth-state-guidelines.md","reason":"Keep the borrowed-Chrome account-center path separate from explicit auth-state restore/save and prevent credentials or identity from crossing product boundaries."}
-{"file":".trellis/spec/frontend/index.md","reason":"Use the existing catalog-driven TanStack Query account center, shadcn component rules, accessibility requirements, runtime validation, and frozen frontend gates."}
-{"file":".trellis/spec/infra/submodule-guidelines.md","reason":"Modify and deliver the MediaCrawler derivative before updating the parent gitlink."}
-{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Trace XHS phases and terminal failures through MediaCrawler, FastAPI state, React polling, and operator guidance."}
-{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Extend shared platform types, protocol, catalog, command builder, and generic UI instead of creating XHS-specific product services or components."}
-{"file":".trellis/tasks/08-24-xiaohongshu-account-connection/research/xhs-connection-evidence.md","reason":"Use the inspected current gaps and the difference between prior isolated-profile validation and the required borrowed-Chrome product path."}
-{"file":".trellis/tasks/archive/2026-08/08-24-verify-mediacrawler-xhs-login/research/validation-results.md","reason":"Reuse the proven XHS official pong, manual login, no-collection, and secret-safe evidence without treating isolated-browser acceptance as product acceptance."}

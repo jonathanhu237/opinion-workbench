@@ -1,7 +1,0 @@
-{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Define and preserve the React-to-FastAPI health contract and its validation boundary"}
-{"file": ".trellis/spec/frontend/index.md", "reason": "Respect the current frontend spec boundary while the application scaffold establishes the first real conventions"}
-{"file": ".trellis/spec/backend/index.md", "reason": "Respect the current backend spec index and avoid conflicting with active browser-specific guidelines"}
-{"file": ".trellis/spec/infra/submodule-guidelines.md", "reason": "Preserve the existing MediaCrawler submodule pointer and working tree during parent scaffold work"}
-{"file": ".trellis/tasks/08-24-initialize-react-fastapi-app/research/source-findings.md", "reason": "Use the verified Node, pnpm, uv, Vite, shadcn/ui and FastAPI initialization choices"}
-{"file": ".trellis/tasks/08-24-initialize-react-fastapi-app/research/browser-session-reuse.md", "reason": "Keep browser login and Chrome reuse decisions explicitly outside this initialization scope"}
-{"file": ".trellis/tasks/08-24-initialize-react-fastapi-app/research/mediacrawler-dependency-decision.md", "reason": "Keep MediaCrawler isolated as a future subprocess engine rather than importing it into the product backend"}

@@ -1,5 +1,0 @@
-{"file":".trellis/spec/frontend/index.md","reason":"Load the current project frontend guideline index before changing dependencies, application composition or quality tooling."}
-{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"The task changes shared configuration, component primitives and application composition; search existing values and usages before replacement."}
-{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Preserve the existing frontend-to-FastAPI health contract while changing the frontend composition root."}
-{"file":".trellis/tasks/08-24-establish-frontend-foundation/research/reference-frontend-stack.md","reason":"Authoritative comparison of the user's reference admin stack, current project differences and approved dependency boundary."}
-{"file":".trellis/tasks/08-24-initialize-react-fastapi-app/design.md","reason":"Preserve the initialization task's flat repository boundary, loopback API proxy and health-state behavior."}

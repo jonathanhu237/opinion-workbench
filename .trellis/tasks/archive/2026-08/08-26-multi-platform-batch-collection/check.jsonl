@@ -1,8 +1,0 @@
-{"file":".trellis/tasks/08-26-multi-platform-batch-collection/research/current-batch-boundaries.md","reason":"Review implementation against the repository evidence and every user-owned decision."}
-{"file":".trellis/spec/backend/product-search-guidelines.md","reason":"Check run compatibility, truthful statuses, strict serialization, privacy and deduplication."}
-{"file":".trellis/spec/backend/batch-search-guidelines.md","reason":"Check SQLite v7, batch API, serial ownership, immutable attempts, recovery and frontend batch projection."}
-{"file":".trellis/spec/backend/database-guidelines.md","reason":"Check schema migration, atomic attempt relationships, restart reconciliation and rollback safety."}
-{"file":".trellis/spec/backend/error-handling.md","reason":"Check all batch failures remain fixed, actionable and secret-free across layers."}
-{"file":".trellis/spec/frontend/state-management.md","reason":"Check durable server ownership, active polling and mutation invalidation rather than a React-only queue."}
-{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Check Shadcn component use, focus/labels, platform logos, responsive layout and existing theme preservation."}
-{"file":".trellis/spec/frontend/type-safety.md","reason":"Check strict runtime batch decoders and exact error pair handling."}

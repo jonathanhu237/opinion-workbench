@@ -1,3 +1,0 @@
-{"file": ".trellis/spec/guides/index.md", "reason": "Verify observable login outcomes and confirm existing untracked data remains untouched"}
-{"file": ".trellis/spec/infra/submodule-guidelines.md", "reason": "Verify the submodule source and gitlink are unchanged after runtime validation"}
-{"file": ".trellis/tasks/08-22-verify-mediacrawler-weibo-login/research/validation-results.md", "reason": "Audit the recorded runtime evidence against the PRD acceptance criteria without exposing sensitive Cookie data"}

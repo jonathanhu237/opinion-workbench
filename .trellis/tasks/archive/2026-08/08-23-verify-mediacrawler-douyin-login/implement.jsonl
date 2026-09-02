@@ -1,4 +1,0 @@
-{"file": ".trellis/spec/backend/auth-state-guidelines.md", "reason": "Implement Cookie persistence order, platform allowlisting, safe fallback, 0600 writes, manual challenge handling, and secret-safe logging"}
-{"file": ".trellis/spec/infra/submodule-guidelines.md", "reason": "Preserve MediaCrawler submodule ownership and make any delivered fork revision reproducible"}
-{"file": ".trellis/tasks/08-23-verify-mediacrawler-douyin-login/research/source-findings.md", "reason": "Use the inspected Douyin login flow, pong contract, slider risk, URL boundary, and prior platform decisions"}
-{"file": ".trellis/tasks/archive/2026-08/08-23-verify-mediacrawler-kuaishou-login/design.md", "reason": "Reuse the proven native-baseline-first and conditional-store orchestration pattern without copying platform assumptions"}

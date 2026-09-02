@@ -1,8 +1,0 @@
-{"file":".trellis/tasks/08-26-multi-platform-batch-collection/research/current-batch-boundaries.md","reason":"Current single-platform boundaries and user-confirmed batch decisions."}
-{"file":".trellis/spec/backend/product-search-guidelines.md","reason":"Authoritative run, worker, browser ownership, deduplication and UI search contracts to preserve."}
-{"file":".trellis/spec/backend/batch-search-guidelines.md","reason":"Authoritative SQLite v7, batch API, serial scheduling, immutable attempt, recovery and UI batch contracts."}
-{"file":".trellis/spec/backend/database-guidelines.md","reason":"SQLite migration, transaction, connection and persistence rules for the new batch aggregate."}
-{"file":".trellis/spec/backend/error-handling.md","reason":"Strict safe product errors for new batch APIs and scheduler failures."}
-{"file":".trellis/spec/frontend/state-management.md","reason":"TanStack Query, form ownership and exclusive browser operation sequencing conventions."}
-{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Shadcn Base UI, platform asset, accessibility and responsive component conventions."}
-{"file":".trellis/spec/frontend/type-safety.md","reason":"Runtime decoding and exact status/code validation requirements for the new batch boundary."}

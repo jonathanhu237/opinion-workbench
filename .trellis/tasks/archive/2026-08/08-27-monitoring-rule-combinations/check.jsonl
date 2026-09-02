@@ -1,8 +1,0 @@
-{"file":".trellis/spec/backend/monitoring-rules-guidelines.md","reason":"Lossless old rules, strict validation and atomic group updates."}
-{"file":".trellis/spec/backend/database-guidelines.md","reason":"Additive migration, no reseed/data loss and isolated databases."}
-{"file":".trellis/spec/backend/product-search-guidelines.md","reason":"Effective queries, 20-query gate, history and zero unexpected browser work."}
-{"file":".trellis/spec/backend/batch-search-guidelines.md","reason":"Batch snapshots stay stable after rule edits."}
-{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Frozen full frontend and responsive browser gates."}
-{"file":".trellis/spec/frontend/type-safety.md","reason":"Request/response migration and derived terms in every consumer."}
-{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Preserve shadcn preset/theme and accessible errors."}
-{"file":".trellis/tasks/08-27-monitoring-rule-combinations/research/current-rule-boundary.md","reason":"Cross-layer evidence and toggle regression targets."}

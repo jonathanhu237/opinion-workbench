@@ -1,6 +1,0 @@
-{"file":".trellis/tasks/08-29-homepage-workbench/research/current-state.md","reason":"Repository evidence, approved UX direction, and the read-model architecture conclusion."}
-{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"The feature adds one backend contract consumed by a route and must preserve field semantics end to end."}
-{"file":".trellis/spec/backend/database-guidelines.md","reason":"Defines consistent read transactions, deterministic SQL, layer ownership, and temporary SQLite tests."}
-{"file":".trellis/spec/backend/error-handling.md","reason":"Defines constant safe error envelopes and secret-safe translation."}
-{"file":".trellis/spec/frontend/state-management.md","reason":"Defines TanStack Query ownership, polling, cache correctness, and no read-triggered mutations."}
-{"file":".trellis/spec/frontend/component-guidelines.md","reason":"Defines the civic theme, existing components, accessibility, responsive behavior, and reduced motion."}

@@ -1,8 +1,0 @@
-{"file":".trellis/spec/backend/index.md","reason":"Preserve the FastAPI router/service/lifespan boundaries while enabling a second trusted authentication platform."}
-{"file":".trellis/spec/backend/auth-state-guidelines.md","reason":"Keep online authentication authoritative, protect browser credentials, and leave official safety challenges manual."}
-{"file":".trellis/spec/frontend/index.md","reason":"Extend the existing React connection UI through its server-state, accessibility, runtime-validation, and frozen-quality contracts."}
-{"file":".trellis/spec/infra/submodule-guidelines.md","reason":"Modify and deliver the MediaCrawler derivative before updating the parent gitlink."}
-{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Trace Kuaishou events through FastAPI state and TanStack Query into the visible operator guidance."}
-{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Generalize the current auth protocol and command builder without duplicating a Kuaishou-only service or UI flow."}
-{"file":".trellis/tasks/08-24-kuaishou-account-connection/research/kuaishou-connection-evidence.md","reason":"Use the inspected Kuaishou CDP, online-probe, login-helper, backend, and frontend gaps as the implementation baseline."}
-{"file":".trellis/tasks/archive/2026-08/08-24-platform-account-connection-center/research/real-chrome-weibo-acceptance.md","reason":"Preserve the proven borrowed-Chrome sentinel-tab and non-sensitive real-acceptance procedure."}

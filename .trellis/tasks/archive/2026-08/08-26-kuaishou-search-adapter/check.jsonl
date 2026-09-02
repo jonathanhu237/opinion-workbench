@@ -1,8 +1,0 @@
-{"file": ".trellis/spec/backend/product-search-guidelines.md", "reason": "Verify state, platform correlation, bounded requests, typed outcomes, privacy and real-browser acceptance across all supported search platforms."}
-{"file": ".trellis/spec/backend/platform-connection-guidelines.md", "reason": "Check persistent-worker reuse, page-local signing, browser ownership, cross-feature serialization and account-check regressions."}
-{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Verify migration preservation, transactions, foreign keys, indexes and cross-platform identity."}
-{"file": ".trellis/spec/backend/error-handling.md", "reason": "Audit API, logs and task evidence for signing, response, credential and exception leakage."}
-{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Run the full frontend gates and loopback browser smoke requirements."}
-{"file": ".trellis/spec/frontend/type-safety.md", "reason": "Check runtime decoding and exact Kuaishou original-link correlation."}
-{"file": ".trellis/spec/infra/submodule-guidelines.md", "reason": "Verify clean reachable derivative revision, gitlink mode, recursive initialization and fresh clone."}
-{"file": ".trellis/tasks/08-26-kuaishou-search-adapter/research/current-kuaishou-search-contract.md", "reason": "Verify implementation stays inside the audited page-local signer, single-attempt, no-extra-collection boundary."}

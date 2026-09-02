@@ -1,9 +1,0 @@
-{"file":".trellis/spec/frontend/index.md","reason":"Implement the React route, TanStack Query server-state boundary, runtime validation, accessibility, and frozen frontend gates according to established project conventions."}
-{"file":".trellis/spec/backend/index.md","reason":"Preserve the FastAPI package boundary and load the active browser-authentication contracts before adding the platform connection service."}
-{"file":".trellis/spec/backend/auth-state-guidelines.md","reason":"Keep browser credentials out of API/database/logs and require an authoritative online check after any manual login."}
-{"file":".trellis/spec/infra/submodule-guidelines.md","reason":"Modify, verify, and later deliver the MediaCrawler derivative without breaking the pinned submodule contract."}
-{"file":".trellis/spec/guides/cross-layer-thinking-guide.md","reason":"Implement one validated state contract across MediaCrawler events, FastAPI projections, TanStack Query, and visible UI states."}
-{"file":".trellis/spec/guides/code-reuse-thinking-guide.md","reason":"Reuse existing CDP, online-probe, health, router, provider, and UI primitive boundaries without duplicating platform or payload logic."}
-{"file":".trellis/tasks/08-24-platform-account-connection-center/research/account-connection-evidence.md","reason":"Use the inspected current-code evidence for CLI gaps, browser ownership hazards, platform differences, and derived implementation constraints."}
-{"file":".trellis/tasks/08-24-initialize-react-fastapi-app/research/browser-session-reuse.md","reason":"Preserve the approved MVP decision to reuse the user's current Chrome Profile through an approved loopback CDP connection."}
-{"file":".trellis/tasks/08-24-initialize-react-fastapi-app/research/mediacrawler-dependency-decision.md","reason":"Keep MediaCrawler in an isolated controlled subprocess rather than importing its global runtime into FastAPI."}

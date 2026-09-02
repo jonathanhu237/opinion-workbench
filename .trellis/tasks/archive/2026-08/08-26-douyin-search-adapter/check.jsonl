@@ -1,8 +1,0 @@
-{"file": ".trellis/spec/backend/product-search-guidelines.md", "reason": "Verify state, platform correlation, bounded requests, outcomes, privacy and real-browser acceptance across all supported platforms."}
-{"file": ".trellis/spec/backend/platform-connection-guidelines.md", "reason": "Check persistent-worker reuse, minimal Douyin state, manual challenge handling, ownership and account-check regressions."}
-{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Verify migration preservation, transactions, foreign keys, indexes and cross-platform identity."}
-{"file": ".trellis/spec/backend/error-handling.md", "reason": "Audit API, logs and evidence for temporary-state, response, credential and exception leakage."}
-{"file": ".trellis/spec/frontend/quality-guidelines.md", "reason": "Run the full frontend gates and loopback browser smoke requirements."}
-{"file": ".trellis/spec/frontend/type-safety.md", "reason": "Check runtime decoding and exact Douyin original-link correlation."}
-{"file": ".trellis/spec/infra/submodule-guidelines.md", "reason": "Verify clean reachable derivative revision, gitlink mode, recursive initialization and fresh clone."}
-{"file": ".trellis/tasks/08-26-douyin-search-adapter/research/current-douyin-search-contract.md", "reason": "Verify implementation stays inside the audited single-attempt, no-extra-collection boundary."}

@@ -1,8 +1,0 @@
-{"file":".trellis/spec/backend/database-guidelines.md","reason":"SQLite transaction, versioning and isolated test contracts."}
-{"file":".trellis/spec/backend/error-handling.md","reason":"Strict public errors and secret-safe diagnostics."}
-{"file":".trellis/spec/frontend/quality-guidelines.md","reason":"Full frozen frontend and browser acceptance gates."}
-{"file":".trellis/spec/frontend/type-safety.md","reason":"Frontend/API contract fidelity."}
-{"file":".trellis/spec/backend/product-search-guidelines.md","reason":"Unchanged source history and dedup."}
-{"file":".trellis/tasks/08-27-multimodal-opinion-analysis/research/current-input-boundary.md","reason":"Immutable source context and repeat-content/cache evidence."}
-{"file":".trellis/tasks/08-27-multimodal-opinion-analysis/research/model-transport-contract.md","reason":"Bounded explicit model transport, media envelope and validated outputs."}
-{"file":".trellis/tasks/08-27-multimodal-opinion-analysis/research/platform-media-plan.md","reason":"Verified source candidates, forbidden reuse paths and live media gates."}

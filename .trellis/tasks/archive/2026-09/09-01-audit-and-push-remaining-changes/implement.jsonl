@@ -1,5 +1,0 @@
-{"file":".trellis/spec/backend/initial-analysis-guidelines.md","reason":"Defines the historical-source compatibility, preservation, shared-matrix, and validation contracts."}
-{"file":".trellis/spec/backend/media-projection-guidelines.md","reason":"Defines strict media and evidence validation boundaries used by enrichment."}
-{"file":".trellis/spec/infra/submodule-guidelines.md","reason":"Defines child-first publication, gitlink reachability, and fresh-clone requirements."}
-{"file":".trellis/tasks/09-01-audit-and-push-remaining-changes/research/backend-review.md","reason":"Records code-path intent, completed focused checks, and missing regression coverage."}
-{"file":".trellis/tasks/09-01-audit-and-push-remaining-changes/research/meta-submodule-review.md","reason":"Records metadata provenance, submodule state, and safe commit ordering."}

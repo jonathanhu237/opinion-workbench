@@ -1,6 +1,0 @@
-{"file": ".trellis/spec/backend/auth-state-guidelines.md", "reason": "Verify auth order, authoritative pong checks, safe fallbacks, file permissions, manual challenge handling, and secret-safe evidence"}
-{"file": ".trellis/spec/infra/submodule-guidelines.md", "reason": "Verify scoped submodule changes, fork revision reachability, clean status, and parent gitlink ordering"}
-{"file": ".trellis/tasks/08-24-verify-mediacrawler-xhs-login/research/source-findings.md", "reason": "Check code and tests against the actual XHS URL boundary, login flow, challenge behavior, and planning baseline"}
-{"file": ".trellis/tasks/archive/2026-08/08-23-verify-mediacrawler-kuaishou-login/research/validation-results.md", "reason": "Apply the established two-start service-check and no-QR real-regression quality bar"}
-{"file": ".trellis/tasks/08-24-verify-mediacrawler-xhs-login/research/xhs_native_baseline_runner.py", "reason": "Verify that live evidence suppresses terminal QR data, rejects collection entry points, and records only non-sensitive authentication events"}
-{"file": ".trellis/tasks/08-24-verify-mediacrawler-xhs-login/research/validation-results.md", "reason": "Verify the native failure, conditional integration, two-start regression, permissions, test outcomes, and cleanup evidence"}
