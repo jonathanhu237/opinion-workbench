@@ -30,6 +30,13 @@ export const searchRunStatusSchema = z.enum([
 ])
 export const searchPlatformSchema = z.enum(SEARCH_PLATFORM_ORDER)
 export const isoDateSchema = z.string().datetime({ offset: true })
+export const searchFailureReasonSchema = z.enum([
+  'page_state_unrecognized',
+  'search_context_unavailable',
+  'search_response_incompatible',
+  'search_results_incompatible',
+  'search_pagination_incompatible',
+])
 const positiveSafeIntegerSchema = z
   .number()
   .int()
@@ -48,6 +55,8 @@ const summaryShape = {
   term_count: z.number().int().positive().max(20),
   max_results_per_term: z.number().int().min(1).max(50),
   status: searchRunStatusSchema,
+  failure_reason: searchFailureReasonSchema.nullable(),
+  execution_limit: z.enum(['requests', 'pages', 'time']).nullable().optional(),
   current_term_position: z.number().int().min(0).max(19).nullable(),
   new_count: nonnegativeSafeIntegerSchema,
   repeated_count: nonnegativeSafeIntegerSchema,
@@ -59,6 +68,12 @@ const summaryShape = {
 export const searchRunSummarySchema = z
   .strictObject(summaryShape)
   .superRefine((value, context) => {
+    if (value.execution_limit != null && value.status !== 'timed_out') {
+      context.addIssue({ code: 'custom', message: 'invalid execution limit' })
+    }
+    if (value.failure_reason !== null && value.status !== 'structure_changed') {
+      context.addIssue({ code: 'custom', message: 'invalid failure reason' })
+    }
     if (value.new_count + value.repeated_count !== value.total_count) {
       context.addIssue({ code: 'custom', message: 'invalid result counts' })
     }
@@ -66,6 +81,12 @@ export const searchRunSummarySchema = z
 const searchRunDetailSchema = z
   .strictObject({ ...summaryShape, terms: z.array(z.string()).min(1).max(20) })
   .superRefine((value, context) => {
+    if (value.execution_limit != null && value.status !== 'timed_out') {
+      context.addIssue({ code: 'custom', message: 'invalid execution limit' })
+    }
+    if (value.failure_reason !== null && value.status !== 'structure_changed') {
+      context.addIssue({ code: 'custom', message: 'invalid failure reason' })
+    }
     if (
       value.terms.length !== value.term_count ||
       value.new_count + value.repeated_count !== value.total_count
@@ -143,6 +164,7 @@ const errorEnvelopeSchema = z.strictObject({
 })
 
 export type SearchRunStatus = z.infer<typeof searchRunStatusSchema>
+export type SearchFailureReason = z.infer<typeof searchFailureReasonSchema>
 export type SearchPlatform = z.infer<typeof searchPlatformSchema>
 export type SearchRunSummary = z.infer<typeof searchRunSummarySchema>
 export type SearchRunDetail = z.infer<typeof searchRunDetailSchema>
@@ -158,6 +180,7 @@ export type SearchResultOpenResponse = z.infer<
 export type SearchResultFilter = 'all' | 'new' | 'repeated'
 
 type ProductErrorCode =
+  | 'search_platform_not_available'
   | 'invalid_request'
   | 'monitoring_rule_not_found'
   | 'monitoring_rule_disabled'
@@ -180,6 +203,10 @@ const productErrorContracts: Record<
   { status: number; message: string }
 > = {
   invalid_request: { status: 422, message: '请求内容不正确。' },
+  search_platform_not_available: {
+    status: 409,
+    message: '该平台尚未接入当前采集器，历史内容仍可查看。',
+  },
   monitoring_rule_not_found: { status: 404, message: '未找到该监控规则。' },
   monitoring_rule_disabled: {
     status: 409,

@@ -46,10 +46,11 @@ const pageTitles: Record<string, string> = {
   '/': '工作台',
   '/platform-accounts': '平台账号',
   '/monitoring-rules': '监控规则',
-  '/collection-runs': '手工采集',
+  '/collection-runs': '舆情爬取',
   '/automation-tasks': '自动任务',
-  '/results': '结果与分析',
+  '/results': '报告生成',
   '/ai-settings': 'AI 配置',
+  '/media-settings': '媒体缓存',
 }
 
 function healthReducer(_state: HealthState, action: HealthAction): HealthState {
@@ -120,7 +121,7 @@ function PrimaryNavigation() {
         location.pathname.startsWith('/automation-runs'),
     },
     {
-      label: '手工采集',
+      label: '舆情爬取',
       to: '/collection-runs',
       icon: ClipboardList,
       isActive:
@@ -128,7 +129,7 @@ function PrimaryNavigation() {
         location.pathname.startsWith('/collection-batches'),
     },
     {
-      label: '结果与分析',
+      label: '报告生成',
       to: '/results',
       icon: FileSearch,
       isActive: location.pathname === '/results',
@@ -138,6 +139,12 @@ function PrimaryNavigation() {
       to: '/ai-settings',
       icon: Settings2,
       isActive: location.pathname === '/ai-settings',
+    },
+    {
+      label: '媒体缓存',
+      to: '/media-settings',
+      icon: Settings2,
+      isActive: location.pathname === '/media-settings',
     },
   ] as const
 

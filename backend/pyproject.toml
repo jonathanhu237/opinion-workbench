@@ -7,6 +7,10 @@ requires-python = ">=3.11"
 dependencies = [
     "fastapi[standard]>=0.116.0",
     "httpx>=0.28.1,<0.29",
+    "lxml>=6.0,<7",
+    "playwright>=1.60,<1.62",
+    "gallery-dl==1.32.10",
+    "pillow>=12.3.0,<13",
 ]
 
 [build-system]

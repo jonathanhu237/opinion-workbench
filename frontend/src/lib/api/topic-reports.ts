@@ -75,10 +75,18 @@ const intervalSelection = z
     const to = intervalTimestampKey(value.first_seen_to)
     return from !== null && to !== null && from < to
   })
+const explicitSelection = z.strictObject({
+  kind: z.literal('explicit'),
+  result_ids: z
+    .array(safeId)
+    .min(1)
+    .refine((ids) => new Set(ids).size === ids.length),
+})
 const selectionSchema = z.union([
   z.strictObject({ kind: z.literal('initial_job'), job_id: safeId }),
   z.strictObject({ kind: z.literal('workflow_run'), run_id: safeId }),
   intervalSelection,
+  explicitSelection,
 ])
 const promptSchema = z
   .strictObject({
@@ -196,7 +204,7 @@ export const reportRunSchema = z
   .strictObject({
     id: safeId,
     request_id: uuid.nullable(),
-    trigger: z.enum(['automatic', 'interval', 'retry']),
+    trigger: z.enum(['automatic', 'interval', 'manual', 'retry']),
     initial_job_id: safeId.nullable(),
     completion_event_id: safeId.nullable(),
     parent_report_id: safeId.nullable(),
@@ -252,6 +260,9 @@ export const reportRunSchema = z
         value.selection.kind !== 'workflow_run') ||
       (value.trigger === 'interval' &&
         value.selection.kind !== 'first_seen_interval') ||
+      (value.trigger === 'manual' && value.selection.kind !== 'explicit') ||
+      (value.selection.kind === 'explicit' &&
+        value.coverage.total !== value.selection.result_ids.length) ||
       (value.recovery_reason !== null && value.status !== 'interrupted') ||
       (value.finished_at !== null &&
         Date.parse(value.finished_at) < Date.parse(value.created_at)) ||
@@ -477,6 +488,13 @@ const retrySchema = rejectExplicitUndefined(
   }),
   ['report_prompt'],
 )
+const selectedCreateSchema = z.strictObject({
+  request_id: uuid,
+  configuration_revision: safeId,
+  report_prompt: promptChoiceSchema,
+  selection: explicitSelection,
+})
+export type SelectedReportRequest = z.infer<typeof selectedCreateSchema>
 const cancelSchema = z.strictObject({
   request_id: uuid,
   expected_revision: safeId,
@@ -521,6 +539,10 @@ export const TOPIC_REPORT_ERROR_CONTRACTS = {
   invalid_report_interval: {
     status: 422,
     message: '请选择有效的首次入库时间范围。',
+  },
+  invalid_report_selection: {
+    status: 422,
+    message: '选中的内容已不存在或无法读取，请刷新后重新选择。',
   },
   topic_report_storage_unavailable: {
     status: 503,
@@ -794,6 +816,27 @@ export async function createTopicReport(input: CreateReportRequest) {
     throw new TopicReportApiError('invalid_response')
   return report
 }
+export async function createSelectedReport(input: SelectedReportRequest) {
+  decode(selectedCreateSchema, input, 'invalid_request')
+  const report = await request(
+    '',
+    reportRunSchema,
+    jsonMutation('POST', input),
+    202,
+  )
+  if (
+    report.trigger !== 'manual' ||
+    report.request_id !== input.request_id ||
+    report.configuration_revision !== input.configuration_revision ||
+    report.selection.kind !== 'explicit' ||
+    JSON.stringify(report.selection.result_ids) !==
+      JSON.stringify(input.selection.result_ids) ||
+    !reportPromptChoiceMatches(report.prompt, input.report_prompt)
+  )
+    throw new TopicReportApiError('invalid_response')
+  return report
+}
+
 export async function retryTopicReport(id: number, input: RetryReportRequest) {
   checkId(id)
   decode(retrySchema, input, 'invalid_request')

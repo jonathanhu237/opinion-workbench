@@ -1,6 +1,7 @@
 """Frozen report membership and short, settled graph/event transactions."""
 
 import hashlib
+import json
 import sqlite3
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -559,9 +560,7 @@ class TopicReportRepository:
             version_id=snapshot.version_id,
             mode=snapshot.mode,
             origin=(
-                snapshot.mode
-                if snapshot.mode in {"default", "custom"}
-                else "shared"
+                snapshot.mode if snapshot.mode in {"default", "custom"} else "shared"
             ),
             instructions=snapshot.instructions,
             content_hash=snapshot.content_hash,
@@ -632,8 +631,23 @@ class TopicReportRepository:
                 raise ValueError("invalid initial source identity")
             source, first_seen = item.source, item.first_seen_at.isoformat()
             if unavailable is None and item.status == "completed":
+                evidence_job_id = item.job_id
+                if item.reused_from_attempt_id is not None:
+                    original = connection.execute(
+                        "SELECT * FROM content_analysis_attempts WHERE id=?",
+                        (item.reused_from_attempt_id,),
+                    ).fetchone()
+                    if original is None or (
+                        original["status"] != "completed"
+                        or original["content_id"] != source.result_id
+                        or original["input_json"] != attempt["input_json"]
+                        or original["input_fingerprint"] != item.input_fingerprint
+                        or original["output_json"] != attempt["output_json"]
+                    ):
+                        raise ValueError("invalid reused evidence provenance")
+                    evidence_job_id = original["job_id"]
                 job = connection.execute(
-                    "SELECT * FROM content_analysis_jobs WHERE id=?", (item.job_id,)
+                    "SELECT * FROM content_analysis_jobs WHERE id=?", (evidence_job_id,)
                 ).fetchone()
                 evidence = FrozenTextSource(
                     position=position,
@@ -798,9 +812,7 @@ class TopicReportRepository:
                 # analysis job), but its frozen stage-one reference still has
                 # to be a real initial-stage prompt before the report is
                 # admitted.
-                resolve_prompt_version(
-                    connection, "initial", initial_prompt_version_id
-                )
+                resolve_prompt_version(connection, "initial", initial_prompt_version_id)
             if report_prompt is not None:
                 if report_prompt.version_id is None:
                     raise AnalysisError("analysis_prompt_changed")
@@ -919,7 +931,9 @@ class TopicReportRepository:
             )
             report_id = self._new(
                 connection,
-                trigger="interval",
+                trigger="manual"
+                if payload.selection.kind == "explicit"
+                else "interval",
                 selection=payload.selection.model_dump(),
                 prompt=prompt,
                 provider=self._provider(connection, payload.configuration_revision),
@@ -937,26 +951,37 @@ class TopicReportRepository:
                 ),
                 deterministic=True,
             )
-            start = (
-                datetime.fromisoformat(payload.selection.first_seen_from)
-                .astimezone(UTC)
-                .isoformat(timespec="microseconds")
-            )
-            end = (
-                datetime.fromisoformat(payload.selection.first_seen_to)
-                .astimezone(UTC)
-                .isoformat(timespec="microseconds")
-            )
-            for position, row in enumerate(
-                connection.execute(
+            if payload.selection.kind == "explicit":
+                rows = connection.execute(
                     """SELECT c.id,c.first_seen_at,cl.latest_attempt_id,
-              cl.known_input_fingerprint,cl.legacy_state FROM search_contents c JOIN
-          content_analysis_claims cl
-              ON cl.content_id=c.id WHERE report_utc(c.first_seen_at)>=? AND
-          report_utc(c.first_seen_at)<? ORDER BY c.id""",
-                    (start, end),
+                       cl.known_input_fingerprint,cl.legacy_state
+                       FROM json_each(?) selected JOIN search_contents c
+                       ON c.id=selected.value JOIN content_analysis_claims cl
+                       ON cl.content_id=c.id ORDER BY selected.key""",
+                    (json.dumps(payload.selection.result_ids),),
+                ).fetchall()
+                if len(rows) != len(payload.selection.result_ids):
+                    raise TopicReportError("invalid_report_selection")
+            else:
+                start = (
+                    datetime.fromisoformat(payload.selection.first_seen_from)
+                    .astimezone(UTC)
+                    .isoformat(timespec="microseconds")
                 )
-            ):
+                end = (
+                    datetime.fromisoformat(payload.selection.first_seen_to)
+                    .astimezone(UTC)
+                    .isoformat(timespec="microseconds")
+                )
+                rows = connection.execute(
+                    """SELECT c.id,c.first_seen_at,cl.latest_attempt_id,
+                       cl.known_input_fingerprint,cl.legacy_state
+                       FROM search_contents c JOIN content_analysis_claims cl
+                       ON cl.content_id=c.id WHERE report_utc(c.first_seen_at)>=?
+                       AND report_utc(c.first_seen_at)<? ORDER BY c.id""",
+                    (start, end),
+                ).fetchall()
+            for position, row in enumerate(rows):
                 attempt = connection.execute(
                     "SELECT * FROM content_analysis_attempts WHERE id=?",
                     (row["latest_attempt_id"],),

@@ -173,6 +173,71 @@ describe('platform connections API boundary', () => {
     )
   })
 
+  it('accepts managed-browser progress and retry guidance', async () => {
+    const managedCatalog = {
+      platforms: platforms.map((platform) =>
+        platform.platform === 'wb'
+          ? {
+              ...platform,
+              status: 'checking' as const,
+              guidance: 'starting_browser' as const,
+            }
+          : platform,
+      ),
+    }
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify(managedCatalog), { status: 200 }),
+    )
+
+    await expect(
+      fetchPlatformConnections(new AbortController().signal),
+    ).resolves.toEqual(managedCatalog)
+
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          platforms: managedCatalog.platforms.map((platform) =>
+            platform.platform === 'wb'
+              ? {
+                  ...platform,
+                  status: 'failed' as const,
+                  guidance: 'retry_browser' as const,
+                }
+              : platform,
+          ),
+        }),
+        { status: 200 },
+      ),
+    )
+    const retryProjection = await fetchPlatformConnections(
+      new AbortController().signal,
+    )
+    expect(retryProjection.platforms[0]).toMatchObject({
+      platform: 'wb',
+      status: 'failed',
+      guidance: 'retry_browser',
+    })
+  })
+
+  it('rejects managed guidance paired with the wrong status', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          platforms: platforms.map((platform) =>
+            platform.platform === 'wb'
+              ? { ...platform, guidance: 'starting_browser' }
+              : platform,
+          ),
+        }),
+        { status: 200 },
+      ),
+    )
+
+    await expect(
+      fetchPlatformConnections(new AbortController().signal),
+    ).rejects.toMatchObject({ code: 'invalid_response' })
+  })
+
   it('turns malformed error payloads into a bounded error', async () => {
     fetchMock.mockResolvedValue(
       new Response(JSON.stringify({ detail: 'credential-sentinel' }), {

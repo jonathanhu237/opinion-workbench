@@ -77,6 +77,20 @@ def test_large_multibyte_manifest_is_verified_without_text_truncation(tmp_path):
     operation.cleanup()
 
 
+def test_native_writer_cannot_overwrite_or_escape_its_owned_scope(tmp_path):
+    operation = MediaSpool(tmp_path / "native-media").create_operation(uuid4())
+    asset = image_asset()
+    operation.write_asset(asset["asset_id"], PNG)
+    with pytest.raises(MediaStagingError):
+        operation.write_asset(asset["asset_id"], b"overwrite")
+    with pytest.raises(MediaStagingError):
+        operation.write_asset("../user-data", PNG)
+    payload = content_payload()
+    payload.update(assets=[asset], detected_modalities=["text", "image"])
+    assert operation.read_assets(decoded(payload), 6 * 1024 * 1024)[0].data == PNG
+    operation.cleanup()
+
+
 @pytest.mark.parametrize(
     "damage",
     [

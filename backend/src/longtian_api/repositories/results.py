@@ -1,18 +1,23 @@
 """Read-only global projections; never derive analysis eligibility from cache misses."""
 
+from pydantic import ValidationError
+
 from longtian_api.repositories.analysis_shared import (
     AnalysisRepository,
     date,
     source_snapshot,
 )
+from longtian_api.schemas.analysis_evidence import SavedInput
 from longtian_api.schemas.results import (
     LegacyAnalysis,
     LegacyAnalysisList,
     Result,
     ResultList,
+    ResultMaterial,
     ResultOrigin,
     ResultOriginList,
 )
+from longtian_api.services.enrichment_models import EnrichedContent
 
 NEVER_STARTED_SQL = """cl.first_attempt_id IS NULL AND cl.legacy_state IS NULL
     AND cl.active_job_id IS NULL AND cl.active_legacy_summary_id IS NULL"""
@@ -26,6 +31,63 @@ FROM_SQL = """FROM search_contents c
 
 
 class ResultsRepository(AnalysisRepository):
+    @staticmethod
+    def _fallback_material(source) -> ResultMaterial:
+        return ResultMaterial(
+            text_available=bool(source.title.strip() or source.snippet.strip()),
+            image_count=0,
+            video_count=0,
+            inventory_complete=False,
+            missing=False,
+        )
+
+    def _material(self, connection, content_id, source) -> ResultMaterial:
+        row = connection.execute(
+            """SELECT content_json,input_json FROM content_materials
+            WHERE content_id=?""",
+            (content_id,),
+        ).fetchone()
+        if row is None:
+            return self._fallback_material(source)
+        payload = row["content_json"] or row["input_json"]
+        if not payload:
+            return self._fallback_material(source)
+        try:
+            value = EnrichedContent.model_validate_json(payload)
+            text_available = bool(value.text.title.strip() or value.text.body.strip())
+            image_count = sum(asset.kind == "image" for asset in value.assets)
+            video_count = sum(asset.kind == "video" for asset in value.assets)
+            missing = (
+                not text_available
+                or any(asset.status != "ready" for asset in value.assets)
+                or any(issue.code != "inventory_unknown" for issue in value.issues)
+            )
+            return ResultMaterial(
+                text_available=text_available,
+                image_count=image_count,
+                video_count=video_count,
+                inventory_complete=value.media_inventory_complete,
+                missing=missing,
+            )
+        except (ValidationError, ValueError, TypeError):
+            pass
+        try:
+            value = SavedInput.model_validate_json(payload)
+        except (ValidationError, ValueError, TypeError):
+            return self._fallback_material(source)
+        text_available = bool(value.text.title.strip() or value.text.body.strip())
+        image_count = sum(asset.kind == "image" for asset in value.assets)
+        video_count = sum(asset.kind == "video" for asset in value.assets)
+        return ResultMaterial(
+            text_available=text_available,
+            image_count=image_count,
+            video_count=video_count,
+            inventory_complete=value.media_inventory_complete,
+            missing=not text_available
+            or any(asset.status != "ready" for asset in value.assets)
+            or any(issue != "inventory_unknown" for issue in value.issues),
+        )
+
     def _read(self, connection, result_id) -> Result:
         source, content = source_snapshot(connection, result_id)
         row = connection.execute(
@@ -47,6 +109,7 @@ class ResultsRepository(AnalysisRepository):
             latest_attempt_id=row["latest_attempt_id"],
             active_job_id=row["active_job_id"],
             legacy_count=row["legacy_count"],
+            material=self._material(connection, result_id, source),
         )
 
     def read(self, result_id: int) -> Result:

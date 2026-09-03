@@ -38,3 +38,19 @@ class AIError(Exception):
         super().__init__(code)
         self.code = code
         self.status_code, self.message = AI_ERROR_CONTRACTS[code]
+
+
+# Definite provider/configuration-wide failures, not a malformed single answer
+# or a one-off item timeout. This policy is opt-in for the new manual flow.
+MANUAL_SYSTEMIC_AI_FAILURES = frozenset(
+    {
+        "ai_configuration_required",
+        "ai_configuration_changed",
+        "ai_credentials_unavailable",
+        "ai_settings_storage_unavailable",
+        "ai_authentication_failed",
+        "ai_model_not_found",
+        "ai_destination_forbidden",
+        "ai_rate_limited",
+    }
+)

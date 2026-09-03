@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 PlatformId = Literal["wb", "dy", "ks", "xhs", "toutiao"]
 PlatformAvailability = Literal["enabled", "coming_soon"]
@@ -19,6 +19,8 @@ PlatformConnectionStatus = Literal[
 ]
 PlatformConnectionGuidance = Literal[
     "none",
+    "starting_browser",
+    "retry_browser",
     "enable_remote_debugging",
     "approve_connection",
     "complete_login",
@@ -43,6 +45,15 @@ class PlatformConnection(BaseModel):
     guidance: PlatformConnectionGuidance
     last_checked_at: datetime | None
     active_attempt_id: UUID | None
+
+    @model_validator(mode="after")
+    def validate_managed_browser_guidance(self) -> "PlatformConnection":
+        """Keep the managed-browser guidance and public state in lockstep."""
+        if self.guidance == "starting_browser" and self.status != "checking":
+            raise ValueError("starting_browser guidance requires checking status")
+        if self.guidance == "retry_browser" and self.status != "failed":
+            raise ValueError("retry_browser guidance requires failed status")
+        return self
 
 
 class PlatformConnectionListResponse(BaseModel):

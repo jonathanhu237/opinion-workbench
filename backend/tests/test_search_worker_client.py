@@ -80,6 +80,25 @@ def search_event(
     )
 
 
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        "page_state_unrecognized",
+        "search_context_unavailable",
+        "search_response_incompatible",
+        "search_results_incompatible",
+        "search_pagination_incompatible",
+    ],
+)
+def test_search_event_parser_accepts_structured_failure_outcomes(outcome: str) -> None:
+    request_id = str(uuid4())
+
+    parsed = _parse_event(search_event("result", request_id, outcome=outcome))
+
+    assert parsed["protocol"] == "search"
+    assert parsed["outcome"] == outcome
+
+
 class Writer:
     def __init__(self, process: "SearchProcess") -> None:
         self.process = process

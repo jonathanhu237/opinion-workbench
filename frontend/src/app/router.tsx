@@ -70,6 +70,14 @@ export const appRoutes: RouteObject[] = [
         },
       },
       {
+        path: 'media-settings',
+        hydrateFallbackElement: <p role="status">正在加载媒体策略…</p>,
+        lazy: async () => {
+          const { MediaSettings } = await import('@/routes/media-settings')
+          return { Component: MediaSettings }
+        },
+      },
+      {
         path: 'monitoring-rules',
         hydrateFallbackElement: (
           <p role="status" className="text-sm text-muted-foreground">
@@ -85,7 +93,7 @@ export const appRoutes: RouteObject[] = [
         path: 'results',
         hydrateFallbackElement: (
           <p role="status" className="text-sm text-muted-foreground">
-            正在加载结果与分析…
+            正在加载报告生成…
           </p>
         ),
         lazy: async () => {

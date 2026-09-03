@@ -40,13 +40,25 @@ def old_projection(database):
                 "AND name NOT LIKE 'sqlite_%'"
             )
         ]
-        return {
-            table: [
-                tuple(row)
-                for row in connection.execute(f'SELECT * FROM "{table}" ORDER BY rowid')
+        projection = {}
+        for table in tables:
+            columns = [
+                row[1] for row in connection.execute(f'PRAGMA table_info("{table}")')
             ]
-            for table in tables
-        }
+            if table == "search_runs":
+                columns = [
+                    column
+                    for column in columns
+                    if column not in ("failure_reason", "execution_limit")
+                ]
+            selected = ", ".join(f'"{column}"' for column in columns)
+            projection[table] = [
+                tuple(row)
+                for row in connection.execute(
+                    f'SELECT {selected} FROM "{table}" ORDER BY rowid'
+                )
+            ]
+        return projection
 
 
 def test_genuine_v11_preserves_old_data_and_forward_only_history(tmp_path):

@@ -18,13 +18,78 @@ from longtian_api.search_platforms import (
     SearchPlatform,
     is_valid_search_content_url,
 )
+from longtian_api.services.collector_contracts import (
+    AuthOutcome as AuthOutcome,
+)
+from longtian_api.services.collector_contracts import (
+    AuthPlatformId as AuthPlatformId,
+)
+from longtian_api.services.collector_contracts import (
+    AuthProgressPhase as AuthProgressPhase,
+)
+from longtian_api.services.collector_contracts import (
+    AuthReason as AuthReason,
+)
+from longtian_api.services.collector_contracts import (
+    AuthWorkerBusyError as AuthWorkerBusyError,
+)
+from longtian_api.services.collector_contracts import (
+    AuthWorkerError as AuthWorkerError,
+)
+from longtian_api.services.collector_contracts import (
+    AuthWorkerResult as AuthWorkerResult,
+)
+from longtian_api.services.collector_contracts import (
+    EnrichmentWorkerResult as EnrichmentWorkerResult,
+)
+from longtian_api.services.collector_contracts import (
+    EnrichmentWorkerUnsettledError as EnrichmentWorkerUnsettledError,
+)
+from longtian_api.services.collector_contracts import (
+    ManualPageAction as ManualPageAction,
+)
+from longtian_api.services.collector_contracts import (
+    ManualPageOutcome as ManualPageOutcome,
+)
+from longtian_api.services.collector_contracts import (
+    ManualPageWorkerResult as ManualPageWorkerResult,
+)
+from longtian_api.services.collector_contracts import (
+    OpenResultOutcome as OpenResultOutcome,
+)
+from longtian_api.services.collector_contracts import (
+    OpenResultWorkerResult as OpenResultWorkerResult,
+)
+from longtian_api.services.collector_contracts import (
+    ProgressCallback as ProgressCallback,
+)
+from longtian_api.services.collector_contracts import (
+    SearchItemCallback as SearchItemCallback,
+)
+from longtian_api.services.collector_contracts import (
+    SearchOutcome as SearchOutcome,
+)
+from longtian_api.services.collector_contracts import (
+    SearchProgressCallback as SearchProgressCallback,
+)
+from longtian_api.services.collector_contracts import (
+    SearchTermCompletedCallback as SearchTermCompletedCallback,
+)
+from longtian_api.services.collector_contracts import (
+    SearchWorkerItem as SearchWorkerItem,
+)
+from longtian_api.services.collector_contracts import (
+    SearchWorkerResult as SearchWorkerResult,
+)
+from longtian_api.services.collector_contracts import (
+    SessionDisconnectedCallback as SessionDisconnectedCallback,
+)
 from longtian_api.services.enrichment_models import (
     ENRICHMENT_COMMAND_PREFIX,
     ENRICHMENT_EVENT_PREFIX,
     MAX_ENRICHMENT_COMMAND_BYTES,
     MAX_ENRICHMENT_EVENT_BYTES,
     MEDIA_ROOT_ENV,
-    EnrichedContent,
     EnrichmentBudget,
     EnrichmentOutcome,
     EnrichmentValidationError,
@@ -43,58 +108,9 @@ MAX_AUTH_FRAME_BYTES = 1024
 MAX_SEARCH_COMMAND_BYTES = 32 * 1024
 MAX_SEARCH_EVENT_BYTES = 64 * 1024
 MAX_CHILD_OUTPUT_LINE_BYTES = 64 * 1024
+LONGTIAN_BROWSER_PROFILE_DIR_ENV = "LONGTIAN_BROWSER_PROFILE_DIR"
 _MASKED_CREATOR_HASH = re.compile(r"[0-9a-f]{16}")
 
-AuthPlatformId = Literal["wb", "dy", "ks", "xhs", "toutiao"]
-AuthProgressPhase = Literal[
-    "waiting_for_browser",
-    "waiting_for_approval",
-    "checking",
-    "waiting_for_login",
-]
-AuthOutcome = Literal["connected", "disconnected", "failed", "cancelled"]
-AuthReason = Literal[
-    "none",
-    "login_required",
-    "browser_unavailable",
-    "browser_disconnected",
-    "internal_error",
-    "cancelled",
-]
-SearchOutcome = Literal[
-    "completed_with_results",
-    "completed_empty",
-    "login_required",
-    "manual_challenge_required",
-    "platform_blocked_or_rate_limited",
-    "structure_changed",
-    "browser_unavailable",
-    "browser_disconnected",
-    "cancelled",
-    "internal_error",
-]
-OpenResultOutcome = Literal[
-    "opened",
-    "content_not_found",
-    "content_unavailable",
-    "login_required",
-    "manual_challenge_required",
-    "platform_blocked_or_rate_limited",
-    "structure_changed",
-    "browser_unavailable",
-    "internal_error",
-]
-ManualPageAction = Literal["show", "close"]
-ManualPageOutcome = Literal[
-    "opened_existing",
-    "opened_homepage",
-    "browser_unavailable",
-    "navigation_failed",
-    "internal_error",
-    "cancelled",
-    "closed",
-    "not_present",
-]
 _MANUAL_OUTCOMES = {
     "show": {
         "opened_existing",
@@ -165,71 +181,6 @@ class ManagedProcess(Protocol):
 
 ProcessLauncher = Callable[[tuple[str, ...], Path], Awaitable[ManagedProcess]]
 ProcessGroupTerminator = Callable[[ManagedProcess, float], Awaitable[None]]
-ProgressCallback = Callable[[UUID, AuthPlatformId, AuthProgressPhase], Awaitable[None]]
-SessionDisconnectedCallback = Callable[[UUID | None], Awaitable[None]]
-SearchProgressCallback = Callable[[int, int], Awaitable[None]]
-SearchItemCallback = Callable[[int, "SearchWorkerItem"], Awaitable[None]]
-SearchTermCompletedCallback = Callable[[int, int], Awaitable[None]]
-
-
-class AuthWorkerError(Exception):
-    """A deliberately detail-free persistent-worker failure."""
-
-
-class AuthWorkerBusyError(AuthWorkerError):
-    """The worker client already owns one in-flight request."""
-
-
-class EnrichmentWorkerUnsettledError(AuthWorkerError):
-    """No terminal/exit proof: keep the operation quarantined, not reusable."""
-
-    def __init__(self, process: ManagedProcess):
-        super().__init__()
-        self._process = process
-
-    def quiescent(self) -> bool:
-        return self._process.returncode is not None
-
-
-@dataclass(frozen=True, slots=True)
-class AuthWorkerResult:
-    outcome: AuthOutcome
-    reason: AuthReason
-
-
-@dataclass(frozen=True, slots=True)
-class SearchWorkerItem:
-    content_id: str
-    content_type: str
-    title: str
-    snippet: str
-    creator_hash: str
-    publisher_name: str
-    published_at_text: str
-    content_url: str
-    discovered_at: int
-
-
-@dataclass(frozen=True, slots=True)
-class SearchWorkerResult:
-    outcome: SearchOutcome
-
-
-@dataclass(frozen=True, slots=True)
-class OpenResultWorkerResult:
-    outcome: OpenResultOutcome
-
-
-@dataclass(frozen=True, slots=True)
-class ManualPageWorkerResult:
-    outcome: ManualPageOutcome
-
-
-@dataclass(frozen=True, slots=True)
-class EnrichmentWorkerResult:
-    outcome: EnrichmentOutcome
-    content: EnrichedContent | None = field(default=None, repr=False)
-    manifest: ManifestDescriptor | None = None
 
 
 @dataclass(slots=True)
@@ -280,6 +231,7 @@ class PersistentAuthWorkerClient:
         shutdown_timeout_seconds: float = 5.0,
         termination_grace_seconds: float = 3.0,
         media_spool_root: Path | None = None,
+        browser_profile_dir: Path | None = None,
     ) -> None:
         self._media_crawler_dir = media_crawler_dir
         self._on_progress = on_progress
@@ -293,6 +245,9 @@ class PersistentAuthWorkerClient:
         self._cancel_timeout_seconds = cancel_timeout_seconds
         self._shutdown_timeout_seconds = shutdown_timeout_seconds
         self._termination_grace_seconds = termination_grace_seconds
+        self._browser_profile_dir = _validate_optional_configured_path(
+            browser_profile_dir
+        )
 
         self._request_lock = asyncio.Lock()
         self._lifecycle_lock = asyncio.Lock()
@@ -743,12 +698,18 @@ class PersistentAuthWorkerClient:
         async with self._lifecycle_lock:
             if self._closed:
                 raise AuthWorkerError
+            # A prior generation cleanup may have failed to prove that its
+            # owned group settled. Keep that exact handle quarantined instead
+            # of launching a new worker alongside a possible orphaned Chrome.
+            if self._process is not None:
+                raise AuthWorkerError
             try:
                 if self._process_launcher is None:
                     process = await launch_process(
                         self.command,
                         self._media_crawler_dir,
                         media_spool_root=self._media_spool_root,
+                        browser_profile_dir=self._browser_profile_dir,
                     )
                 else:
                     process = await self._process_launcher(
@@ -1080,6 +1041,11 @@ class PersistentAuthWorkerClient:
                 "manual_challenge_required",
                 "platform_blocked_or_rate_limited",
                 "structure_changed",
+                "page_state_unrecognized",
+                "search_context_unavailable",
+                "search_response_incompatible",
+                "search_results_incompatible",
+                "search_pagination_incompatible",
             }
             self._active = None
             active.result.set_result(SearchWorkerResult(outcome))
@@ -1183,20 +1149,30 @@ class PersistentAuthWorkerClient:
                 return
             process = self._process
             tasks = (self._reader_task, self._stderr_task, self._wait_task)
-            self._clear_generation()
 
         current = asyncio.current_task()
         for task in tasks:
             if task is not None and task is not current and not task.done():
                 task.cancel()
-        if process.returncode is None:
-            try:
-                await self._process_group_terminator(
-                    process, self._termination_grace_seconds
-                )
-            except Exception:
-                pass
+        # The worker leader can exit while a managed Chrome descendant keeps
+        # the owned process group alive.  Keep invoking the generation-scoped
+        # terminator after leader exit; the terminator itself decides whether
+        # the known group still exists.  Never discover or signal an arbitrary
+        # PID as a recovery shortcut.
+        cleanup_succeeded = True
+        try:
+            await self._process_group_terminator(
+                process, self._termination_grace_seconds
+            )
+        except Exception:
+            cleanup_succeeded = False
         await _settle_tasks(tasks, exclude=current)
+        async with self._lifecycle_lock:
+            if generation == self._generation and self._process is process:
+                # Keep the exact process handle when bounded cleanup could not
+                # prove group settlement.  The failed generation remains
+                # quarantined and cannot be replaced by a new worker.
+                self._clear_generation(preserve_process=not cleanup_succeeded)
         if should_invalidate:
             await self._on_session_disconnected(None)
 
@@ -1204,17 +1180,33 @@ class PersistentAuthWorkerClient:
         async with self._lifecycle_lock:
             if generation != self._generation:
                 return
+            process = self._process
+            if process is None:
+                return
             tasks = (self._reader_task, self._stderr_task, self._wait_task)
-            self._clear_generation()
         current = asyncio.current_task()
         for task in tasks:
             if task is not None and task is not current and not task.done():
                 task.cancel()
+        cleanup_succeeded = True
+        try:
+            # A graceful worker exit does not prove that a managed Chrome
+            # descendant exited.  Close the known generation group before
+            # releasing its process handle.
+            await self._process_group_terminator(
+                process, self._termination_grace_seconds
+            )
+        except Exception:
+            cleanup_succeeded = False
         await _settle_tasks(tasks, exclude=current)
+        async with self._lifecycle_lock:
+            if generation == self._generation and self._process is process:
+                self._clear_generation(preserve_process=not cleanup_succeeded)
 
-    def _clear_generation(self) -> None:
+    def _clear_generation(self, *, preserve_process: bool = False) -> None:
         self._browser_session_available = False
-        self._process = None
+        if not preserve_process:
+            self._process = None
         self._ready = None
         self._stopped = None
         self._exited = None
@@ -1446,6 +1438,11 @@ def _parse_search_event(line: bytes) -> dict[str, object]:
             "manual_challenge_required",
             "platform_blocked_or_rate_limited",
             "structure_changed",
+            "page_state_unrecognized",
+            "search_context_unavailable",
+            "search_response_incompatible",
+            "search_results_incompatible",
+            "search_pagination_incompatible",
             "browser_unavailable",
             "browser_disconnected",
             "cancelled",
@@ -1579,7 +1576,10 @@ def _validate_progress_transition(
 ) -> None:
     allowed: dict[AuthProgressPhase | None, set[AuthProgressPhase]] = {
         None: {"waiting_for_browser", "waiting_for_approval", "checking"},
-        "waiting_for_browser": {"waiting_for_approval"},
+        # Managed Chrome starts inside the worker and therefore has no
+        # user-approval phase.  Keep the legacy approval transition accepted
+        # for standalone/fixture compatibility.
+        "waiting_for_browser": {"waiting_for_approval", "checking"},
         "waiting_for_approval": {"checking"},
         "checking": {"waiting_for_login"},
         "waiting_for_login": {"checking"},
@@ -1608,12 +1608,29 @@ async def _settle_tasks(
 
 
 async def launch_process(
-    command: tuple[str, ...], cwd: Path, *, media_spool_root: Path | None = None
+    command: tuple[str, ...],
+    cwd: Path,
+    *,
+    media_spool_root: Path | None = None,
+    browser_profile_dir: Path | None = None,
 ) -> ManagedProcess:
-    """Launch the fixed worker command without a shell."""
+    """Launch the fixed worker command without a shell.
+
+    Runtime roots are passed through a private environment inherited by the
+    worker.  They are deliberately not put into the command line or protocol
+    frames, where they could become user-visible diagnostics.
+    """
+    configured_browser_profile = _validate_optional_configured_path(browser_profile_dir)
     options = {}
+    configured_env: dict[str, str] = {}
     if media_spool_root is not None:
-        options["env"] = {**os.environ, MEDIA_ROOT_ENV: str(media_spool_root)}
+        configured_env[MEDIA_ROOT_ENV] = str(media_spool_root)
+    if configured_browser_profile is not None:
+        configured_env[LONGTIAN_BROWSER_PROFILE_DIR_ENV] = str(
+            configured_browser_profile
+        )
+    if configured_env:
+        options["env"] = {**os.environ, **configured_env}
     process = await asyncio.create_subprocess_exec(
         *command,
         cwd=cwd,
@@ -1627,25 +1644,96 @@ async def launch_process(
     return cast(ManagedProcess, process)
 
 
+def _validate_optional_configured_path(root: Path | None) -> Path | None:
+    """Validate a local absolute runtime root without touching the filesystem."""
+    if root is None:
+        return None
+    if not isinstance(root, Path) or not root.is_absolute() or ".." in root.parts:
+        raise AuthWorkerError
+    # A filesystem root is never a valid application-owned runtime directory.
+    if root == Path(root.anchor):
+        raise AuthWorkerError
+    return root
+
+
 async def terminate_owned_process_group(
     process: ManagedProcess, grace_seconds: float
 ) -> None:
-    """Terminate only the worker process group, with a bounded kill fallback."""
-    if process.returncode is not None:
-        return
+    """Terminate and verify the exact worker group within bounded deadlines.
 
+    The default launcher starts the worker in a new session, making its PID
+    the owned process-group ID.  A worker leader may exit before managed Chrome;
+    every path therefore observes the known group after both TERM and KILL.
+    """
     _send_process_group_signal(process, signal.SIGTERM)
-    try:
-        await asyncio.wait_for(process.wait(), timeout=grace_seconds)
+
+    if process.returncode is None:
+        try:
+            await asyncio.wait_for(process.wait(), timeout=grace_seconds)
+        except TimeoutError:
+            pass
+
+    group_timeout = max(grace_seconds, 0.1)
+    if process.returncode is not None and not await _wait_for_owned_process_group_exit(
+        process.pid, grace_seconds
+    ):
         return
-    except TimeoutError:
-        pass
 
     _send_process_group_signal(process, signal.SIGKILL)
+    if process.returncode is None:
+        try:
+            await asyncio.wait_for(process.wait(), timeout=group_timeout)
+        except (ProcessLookupError, TimeoutError):
+            pass
+
+    # ``Process.wait`` cannot observe descendants after the leader has exited,
+    # including the case where SIGTERM made the leader exit immediately. Poll
+    # after KILL as well, and retry once if a child is still settling.
+    group_remains = await _wait_for_owned_process_group_exit(process.pid, group_timeout)
+    if process.returncode is not None and not group_remains:
+        return
+
+    _send_process_group_signal(process, signal.SIGKILL)
+    if process.returncode is None:
+        try:
+            await asyncio.wait_for(process.wait(), timeout=group_timeout)
+        except (ProcessLookupError, TimeoutError):
+            pass
+    group_remains = await _wait_for_owned_process_group_exit(process.pid, group_timeout)
+    if process.returncode is None or group_remains:
+        raise AuthWorkerError
+
+
+async def _wait_for_owned_process_group_exit(
+    process_group_id: int, timeout_seconds: float
+) -> bool:
+    """Return whether a known process group remains after bounded polling."""
+    if os.name != "posix":
+        # Windows' fallback uses the process handle, which is already settled
+        # when the leader has exited; it cannot safely enumerate descendants.
+        return False
+    deadline = asyncio.get_running_loop().time() + max(timeout_seconds, 0.0)
+    while _process_group_exists(process_group_id):
+        remaining = deadline - asyncio.get_running_loop().time()
+        if remaining <= 0:
+            return True
+        await asyncio.sleep(min(0.05, remaining))
+    return False
+
+
+def _process_group_exists(process_group_id: int) -> bool:
+    """Check only the known group id without inspecting untrusted processes."""
     try:
-        await asyncio.wait_for(process.wait(), timeout=max(grace_seconds, 0.1))
-    except (ProcessLookupError, TimeoutError):
-        pass
+        os.killpg(process_group_id, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # The group is present but inaccessible. Keep the known ownership
+        # result conservative so the caller attempts the bounded kill.
+        return True
+    except OSError:
+        return False
+    return True
 
 
 def _send_process_group_signal(process: ManagedProcess, sig: signal.Signals) -> None:

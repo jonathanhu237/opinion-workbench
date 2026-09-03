@@ -5,7 +5,16 @@ import { Link, useSearchParams } from 'react-router'
 import { Badge } from '@/components/ui/badge'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from '@/components/ui/sheet'
 import { analysisErrorMessage } from '@/lib/api/analysis-shared'
+import { mediaIssueLabels } from '@/lib/media-presenters'
+import { OriginalMediaCache } from '@/routes/original-media-cache'
 import {
   ANALYSIS_PAGE_SIZE,
   CONTENT_ANALYSES_QUERY_KEY,
@@ -58,7 +67,7 @@ export function FrozenAnalysisPrompts({ job }: { job: AnalysisJob }) {
       {[job.initial_prompt, job.report_prompt].map((prompt) => (
         <section key={prompt.stage} className="mt-4">
           <h4 className="text-sm font-medium">
-            {prompt.stage === 'initial' ? '初步分析' : '报告'}提示词
+            {prompt.stage === 'initial' ? '内容理解' : '报告生成'}提示词
           </h4>
           <p className="mt-1 text-xs text-muted-foreground">
             {sourceLabel(prompt)}
@@ -167,7 +176,7 @@ export function SavedAnalysisEvidence({
       ) : (
         !attempt.error && (
           <p className="text-sm text-muted-foreground">
-            尚无成功保存的初步分析；已有原始采集结果不受影响。
+            尚无成功保存的单条总结；已有原始采集结果不受影响。
           </p>
         )
       )}
@@ -212,11 +221,11 @@ export function SavedAnalysisEvidence({
               </dd>
             </div>
             <div>
-              <dt className="text-muted-foreground">媒体是否齐全</dt>
+              <dt className="text-muted-foreground">媒体清单</dt>
               <dd>
                 {attempt.input.media_inventory_complete
-                  ? '已确认齐全'
-                  : '还未确认齐全'}{' '}
+                  ? '已确认范围'
+                  : '仍有未确认媒体'}{' '}
                 · {attempt.input.assets.length} 项
               </dd>
             </div>
@@ -275,13 +284,40 @@ export function SavedAnalysisEvidence({
                   }
                   {asset.kind === 'video' &&
                     ` · 音轨${{ present: '存在', absent: '缺失', unknown: '未知', not_applicable: '不适用' }[asset.audio_track]}`}
+                  {asset.issue_code &&
+                    ` · ${mediaIssueLabels[asset.issue_code]}`}
                 </li>
               ))}
             </ul>
           )}
-          <p className="mt-3 text-xs text-muted-foreground">
-            仅保存文字和媒体状态，不保存原始图片和视频。重新分析时可能再次获取媒体。
-          </p>
+          {attempt.input.assets.some((asset) => asset.kind === 'video') && (
+            <p className="mt-2 text-xs text-muted-foreground">
+              当前视频范围：单帖最多 1 段、30 秒，MP4（H.264 画面及 AAC 音轨），
+              最高约 1080p；图片和视频合计不超过 6 MiB。超出范围会保留缺失原因，
+              不以封面代替视频，不自动转码或抽帧。
+            </p>
+          )}
+          {attempt.attempted && !attempt.reused_from_attempt_id && (
+            <p className="mt-3 text-xs text-muted-foreground">
+              本次提交模型：
+              {
+                attempt.input.assets.filter(
+                  (asset) => asset.kind === 'image' && asset.status === 'ready',
+                ).length
+              }{' '}
+              张图片，
+              {
+                attempt.input.assets.filter(
+                  (asset) => asset.kind === 'video' && asset.status === 'ready',
+                ).length
+              }{' '}
+              段视频。
+              已提交的媒体未在本机抽样或缩小；这不表示模型已完整识别所有细节。
+            </p>
+          )}
+          {attempt.input.assets.length > 0 && (
+            <OriginalMediaCache key={attempt.id} attemptId={attempt.id} />
+          )}
         </details>
       )}
     </article>
@@ -291,15 +327,17 @@ export function SavedAnalysisEvidence({
 export function ResultEvidence({
   resultId,
   controls,
-  onAnalyse,
-  actionPending,
+  onSelect,
+  selected,
   onClose,
+  asSheet = false,
 }: {
   resultId: number
   controls: ResultSourceControls
-  onAnalyse: (result: SharedResult) => void
-  actionPending: boolean
+  onSelect: (result: SharedResult) => void
+  selected: boolean
   onClose: () => void
+  asSheet?: boolean
 }) {
   const heading = useRef<HTMLHeadingElement>(null)
   const [params, setParams] = useSearchParams()
@@ -308,8 +346,11 @@ export function ResultEvidence({
   const legacyOffset = readOffset(params.get('legacy_offset'))
   const requestedAttempt = readId(params.get('attempt'))
   useEffect(() => {
-    heading.current?.focus({ preventScroll: true })
-    heading.current?.scrollIntoView?.({ block: 'start', behavior: 'instant' })
+    const timer = window.setTimeout(() => {
+      heading.current?.focus({ preventScroll: true })
+      heading.current?.scrollIntoView?.({ block: 'start', behavior: 'instant' })
+    }, 0)
+    return () => window.clearTimeout(timer)
   }, [resultId, requestedAttempt])
   const change = (key: string, value: number | null) => {
     const next = new URLSearchParams(params)
@@ -370,7 +411,7 @@ export function ResultEvidence({
     retry: false,
   })
   const result = resultQuery.data
-  return (
+  const panel = (
     <Card id="result-evidence">
       <CardHeader className="border-b">
         <div className="flex items-start justify-between gap-3">
@@ -379,7 +420,7 @@ export function ResultEvidence({
             tabIndex={-1}
             className="font-display text-xl outline-none"
           >
-            来源与初步分析
+            来源与单条总结
           </h2>
           <Button variant="ghost" className="min-h-11" onClick={onClose}>
             关闭详情
@@ -435,10 +476,14 @@ export function ResultEvidence({
               <Button
                 variant="outline"
                 className="min-h-11"
-                disabled={actionPending || active}
-                onClick={() => onAnalyse(result)}
+                disabled={selected || active}
+                onClick={() => onSelect(result)}
               >
-                {resultActionLabel(result)}
+                {active
+                  ? '此条正在处理中'
+                  : selected
+                    ? '已选入本次报告'
+                    : '选入本次报告'}
               </Button>
             </div>
             {result.legacy_count > 0 && (
@@ -448,11 +493,11 @@ export function ResultEvidence({
             )}
           </section>
         )}
-        <section aria-label="初步分析记录" className="space-y-3 border-t pt-4">
-          <h3 className="font-medium">分析记录</h3>
+        <section aria-label="单条总结记录" className="space-y-3 border-t pt-4">
+          <h3 className="font-medium">总结记录</h3>
           {history.isPending && (
             <p role="status" className="text-sm">
-              正在读取分析记录…
+              正在读取总结记录…
             </p>
           )}
           {history.isError && (
@@ -461,7 +506,7 @@ export function ResultEvidence({
             </p>
           )}
           {history.data?.total === 0 && (
-            <p className="text-sm text-muted-foreground">还没有初步分析。</p>
+            <p className="text-sm text-muted-foreground">还没有单条总结。</p>
           )}
           <div className="flex flex-wrap gap-2">
             {history.data?.items.map((item) => (
@@ -478,7 +523,7 @@ export function ResultEvidence({
           </div>
           {history.data && history.data.total > ANALYSIS_PAGE_SIZE && (
             <ResultsPagination
-              label="分析记录"
+              label="总结记录"
               offset={offset}
               limit={ANALYSIS_PAGE_SIZE}
               total={history.data.total}
@@ -598,21 +643,21 @@ export function ResultEvidence({
       </CardContent>
     </Card>
   )
-}
-
-export function resultActionLabel(result: SharedResult) {
-  switch (result.analysis_state) {
-    case 'never_started':
-    case 'pending_new':
-      return '初步分析此条'
-    case 'completed':
-    case 'legacy_completed':
-      return '重新获取并分析此条'
-    case 'queued':
-    case 'acquiring':
-    case 'analysing':
-      return '此条正在处理中'
-    default:
-      return '重试此条初步分析'
-  }
+  if (!asSheet) return panel
+  return (
+    <Sheet open onOpenChange={(open) => !open && onClose()}>
+      <SheetContent
+        side="right"
+        className="w-full overflow-y-auto sm:max-w-2xl"
+      >
+        <SheetHeader className="sr-only">
+          <SheetTitle>内容详情</SheetTitle>
+          <SheetDescription>
+            查看正文、媒体、总结、来源和历史处理记录。
+          </SheetDescription>
+        </SheetHeader>
+        {panel}
+      </SheetContent>
+    </Sheet>
+  )
 }

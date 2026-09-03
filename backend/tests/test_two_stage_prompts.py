@@ -422,7 +422,7 @@ def test_v18_backfills_legacy_automation_prompt_choices(tmp_path: Path):
             tuple(settings),
         ).fetchall()
         version = connection.execute("PRAGMA user_version").fetchone()[0]
-    assert version == CURRENT_DATABASE_VERSION == 18
+    assert version == CURRENT_DATABASE_VERSION
     assert row[0] == "default" and row[2] == "custom"
     assert row[1] is not None and row[3] is not None
     assert deleted[0] == "default" and deleted[2] == "custom"

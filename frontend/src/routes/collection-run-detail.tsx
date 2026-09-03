@@ -160,7 +160,7 @@ export function CollectionRunDetail() {
 
   const run = runQuery.data
   const platform = searchPlatformPresenters[run.platform]
-  const guidance = searchRunStatusGuidance(run.status, run.platform)
+  const guidance = searchRunStatusGuidance(run)
   const progress =
     run.current_term_position === null
       ? `正在连接${platform.label}…`
@@ -201,7 +201,7 @@ export function CollectionRunDetail() {
                   aria-hidden
                 />
               )}
-              {searchRunStatusLabel(run.status)}
+              {searchRunStatusLabel(run.status, run.failure_reason)}
             </Badge>
           </div>
         </CardHeader>

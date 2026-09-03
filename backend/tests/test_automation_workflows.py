@@ -42,6 +42,7 @@ from longtian_api.services.automation_workflows import (
     schedule_next_due,
 )
 from longtian_api.services.monitoring_rules import MonitoringRuleService
+from longtian_api.services.search_batches import SearchBatchError
 
 REQUEST = "123e4567-e89b-42d3-a456-426614174000"
 
@@ -115,7 +116,6 @@ def test_v15_is_additive_and_does_not_convert_old_schedules(tmp_path: Path):
         assert (
             connection.execute("PRAGMA user_version").fetchone()[0]
             == CURRENT_DATABASE_VERSION
-            == 18
         )
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
         assert (
@@ -130,8 +130,7 @@ def test_v15_is_additive_and_does_not_convert_old_schedules(tmp_path: Path):
         }
         assert "workflow_operation_key" in columns
         task_columns = {
-            row[1]
-            for row in connection.execute("PRAGMA table_info(automation_tasks)")
+            row[1] for row in connection.execute("PRAGMA table_info(automation_tasks)")
         }
         assert "deleted_at" in task_columns
         trigger_names = {
@@ -202,8 +201,7 @@ def test_v17_failure_rolls_back_soft_delete_schema(tmp_path: Path, monkeypatch):
     with database.connect() as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 16
         columns = {
-            row[1]
-            for row in connection.execute("PRAGMA table_info(automation_tasks)")
+            row[1] for row in connection.execute("PRAGMA table_info(automation_tasks)")
         }
         assert "deleted_at" not in columns
         trigger_names = {
@@ -388,9 +386,13 @@ def test_task_delete_rejects_stale_revision_and_active_run(tmp_path: Path):
     # The task remains editable after an active-run rejection.
     repository.delete_task(task.id, expected_revision=task.revision, now=now)
     with database.connect() as connection:
-        assert connection.execute(
-            "SELECT COUNT(*) FROM automation_occurrences WHERE task_id=?", (task.id,)
-        ).fetchone()[0] == 0
+        assert (
+            connection.execute(
+                "SELECT COUNT(*) FROM automation_occurrences WHERE task_id=?",
+                (task.id,),
+            ).fetchone()[0]
+            == 0
+        )
 
 
 def test_deleted_task_allows_monitoring_rule_cleanup(tmp_path: Path):
@@ -463,15 +465,28 @@ class _FakeBatch:
     def __init__(self, statuses):
         self.statuses = iter(statuses)
         self.calls = []
+        self.saved_statuses = {}
 
     async def start_workflow_batch(self, **kwargs):
         self.calls.append(kwargs)
-        return type(
-            "Batch", (), {"id": 100 + len(self.calls), "status": next(self.statuses)}
-        )()
+        batch_id = 100 + len(self.calls)
+        status = next(self.statuses)
+        self.saved_statuses[batch_id] = status
+        return type("Batch", (), {"id": batch_id, "status": status})()
 
     async def get_batch(self, batch_id):
-        return type("Batch", (), {"id": batch_id, "status": "completed"})()
+        return type(
+            "Batch", (), {"id": batch_id, "status": self.saved_statuses[batch_id]}
+        )()
+
+
+class _FailingBatch:
+    def __init__(self, error: Exception):
+        self.error = error
+
+    async def start_workflow_batch(self, **kwargs):
+        del kwargs
+        raise self.error
 
 
 class _NoModel:
@@ -637,6 +652,29 @@ class _QueuedAnalysisAdmission:
         return self._job(status="completed", queued=0, completed=1)
 
 
+class _BlockingAnalysisAdmission(_QueuedAnalysisAdmission):
+    """Finish durable admission only after the parent has been cancelled."""
+
+    def __init__(self):
+        super().__init__()
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+        self.cancel_calls = []
+
+    async def workflow_admit(self, **kwargs):
+        self.calls.append(kwargs)
+        self.entered.set()
+        await self.release.wait()
+        return AnalysisAdmission(
+            job=self._job(status="queued", queued=1, completed=0),
+            admitted_count=1,
+            already_active_count=0,
+        )
+
+    async def cancel(self, job_id):
+        self.cancel_calls.append(job_id)
+
+
 class _ReportSequence:
     def __init__(self, statuses, *, total=10, ready=8, unavailable=2):
         self.statuses = iter(statuses)
@@ -733,6 +771,51 @@ class _RecoveryBatch:
         return type("Batch", (), {"id": batch_id, "status": self.status})()
 
 
+class _PausedBatch:
+    def __init__(self, *, initial_status="paused_for_manual_action"):
+        self.status = initial_status
+        self.calls = []
+        self.batch_id = 777
+        self.items = (
+            type("Item", (), {"status": "completed"})(),
+            type("Item", (), {"status": "paused_for_manual_action"})(),
+            type("Item", (), {"status": "queued"})(),
+        )
+
+    async def start_workflow_batch(self, **kwargs):
+        self.calls.append(kwargs)
+        return self._detail(self.status)
+
+    async def get_batch(self, batch_id):
+        assert batch_id == self.batch_id
+        return self._detail(self.status)
+
+    def complete(self):
+        self.status = "completed"
+        self.items = tuple(
+            type("Item", (), {"status": "completed"})() for _ in self.items
+        )
+
+    def _detail(self, status):
+        return type(
+            "Batch",
+            (),
+            {"id": self.batch_id, "status": status, "items": self.items},
+        )()
+
+
+class _HistoricalPausedBatch(_PausedBatch):
+    async def start_workflow_batch(self, **kwargs):
+        self.calls.append(kwargs)
+        return self._detail("internal_error")
+
+
+class _UnreadableHistoricalBatch(_HistoricalPausedBatch):
+    async def get_batch(self, batch_id):
+        del batch_id
+        raise RuntimeError("synthetic unreadable child")
+
+
 def test_no_new_workflow_runs_fixed_stages_without_model_calls(tmp_path: Path):
     asyncio.run(_test_no_new_workflow_runs_fixed_stages_without_model_calls(tmp_path))
 
@@ -751,7 +834,7 @@ async def _test_no_new_workflow_runs_fixed_stages_without_model_calls(tmp_path: 
     service.initialize()
     task = service.create_task(_task_payload())
     run = await service.run_now(task.id, AutomationRunNow(request_id=REQUEST))
-    await asyncio.sleep(0.15)
+    await asyncio.wait_for(asyncio.shield(service._run_tasks[run.id]), 1)
     final = service.get_run(run.id)
     assert final.status == "completed"
     assert final.outcome == "no_new_sources"
@@ -805,19 +888,19 @@ async def _test_run_admission_rolls_back_when_request_proof_cannot_persist(
 
 @pytest.mark.parametrize(
     ("child_status", "expected_status"),
-    [("completed", "completed"), ("paused_for_manual_action", "interrupted")],
+    [("completed", "completed"), ("paused_for_manual_action", "collecting")],
 )
-def test_startup_trusts_only_settled_linked_child(
+def test_startup_resumes_settled_or_paused_linked_child(
     tmp_path: Path, child_status: str, expected_status: str
 ):
     asyncio.run(
-        _test_startup_trusts_only_settled_linked_child(
+        _test_startup_resumes_settled_or_paused_linked_child(
             tmp_path, child_status, expected_status
         )
     )
 
 
-async def _test_startup_trusts_only_settled_linked_child(
+async def _test_startup_resumes_settled_or_paused_linked_child(
     tmp_path: Path, child_status: str, expected_status: str
 ):
     database, rules, repository = _repository(tmp_path)
@@ -854,13 +937,271 @@ async def _test_startup_trusts_only_settled_linked_child(
         assert recovered.outcome == "no_new_sources"
         assert recovered.stages[0].child_id == 901
     else:
-        assert recovered.error.code == "backend_restart"
+        assert recovered.error is None
+        assert recovered.stages[0].status == "running"
+        assert recovered.stages[0].child_id == 901
     assert batches.calls == []
+    await service.shutdown()
+
+
+def test_paused_collection_waits_then_continues_without_duplicate_batch(
+    tmp_path: Path,
+):
+    asyncio.run(
+        _test_paused_collection_waits_then_continues_without_duplicate_batch(tmp_path)
+    )
+
+
+async def _test_paused_collection_waits_then_continues_without_duplicate_batch(
+    tmp_path: Path,
+):
+    database, rules, repository = _repository(tmp_path)
+    batches = _PausedBatch()
+    service = AutomationWorkflowService(
+        database,
+        monitoring_rules=rules,
+        batches=batches,
+        analyses=_NoModel(),
+        reports=_NoReport(),
+        repository=repository,
+    )
+    service.initialize()
+    task = service.create_task(_task_payload())
+    admitted = await service.run_now(task.id, AutomationRunNow(request_id=REQUEST))
+    await asyncio.sleep(0.1)
+
+    paused = service.get_run(admitted.id)
+    assert paused.status == "collecting"
+    assert paused.error is None
+    assert paused.stages[0].status == "running"
+    assert paused.stages[0].child_id == batches.batch_id
+    assert len(batches.calls) == 1
+
+    batches.complete()
+    await asyncio.wait_for(asyncio.shield(service._run_tasks[admitted.id]), 1)
+    completed = service.get_run(admitted.id)
+    assert completed.status == "completed"
+    assert [stage.status for stage in completed.stages] == ["completed"] * 3
+    assert len(batches.calls) == 1
+    await service.shutdown()
+
+
+def test_historical_failed_run_reuses_its_paused_collection_child(tmp_path: Path):
+    asyncio.run(
+        _test_historical_failed_run_reuses_its_paused_collection_child(tmp_path)
+    )
+
+
+async def _test_historical_failed_run_reuses_its_paused_collection_child(
+    tmp_path: Path,
+):
+    database, rules, repository = _repository(tmp_path)
+    batches = _HistoricalPausedBatch()
+    service = AutomationWorkflowService(
+        database,
+        monitoring_rules=rules,
+        batches=batches,
+        analyses=_NoModel(),
+        reports=_NoReport(),
+        repository=repository,
+    )
+    service.initialize()
+    task = service.create_task(_task_payload())
+    admitted = await service.run_now(task.id, AutomationRunNow(request_id=REQUEST))
+    await asyncio.wait_for(asyncio.shield(service._run_tasks[admitted.id]), 1)
+    failed = service.get_run(admitted.id)
+    assert failed.status == "failed"
+    assert failed.stages[0].child_id == batches.batch_id
+
+    retried = await service.retry_run(
+        failed.id,
+        AutomationRunRetry(
+            request_id="123e4567-e89b-42d3-a456-426614174011",
+            expected_revision=failed.revision,
+        ),
+    )
+    await asyncio.sleep(0.1)
+    waiting = service.get_run(retried.id)
+    assert waiting.status == "collecting"
+    assert waiting.stages[0].attempt_number == 2
+    assert waiting.stages[0].child_id == batches.batch_id
+    assert len(batches.calls) == 1
+
+    batches.complete()
+    await asyncio.wait_for(asyncio.shield(service._run_tasks[retried.id]), 1)
+    completed = service.get_run(retried.id)
+    assert completed.status == "completed"
+    assert len(batches.calls) == 1
+    await service.shutdown()
+
+
+def test_collection_retry_fails_closed_when_linked_child_cannot_be_read(
+    tmp_path: Path,
+):
+    asyncio.run(
+        _test_collection_retry_fails_closed_when_linked_child_cannot_be_read(tmp_path)
+    )
+
+
+async def _test_collection_retry_fails_closed_when_linked_child_cannot_be_read(
+    tmp_path: Path,
+):
+    database, rules, repository = _repository(tmp_path)
+    batches = _UnreadableHistoricalBatch()
+    service = AutomationWorkflowService(
+        database,
+        monitoring_rules=rules,
+        batches=batches,
+        analyses=_NoModel(),
+        reports=_NoReport(),
+        repository=repository,
+    )
+    service.initialize()
+    task = service.create_task(_task_payload())
+    admitted = await service.run_now(task.id, AutomationRunNow(request_id=REQUEST))
+    await asyncio.wait_for(asyncio.shield(service._run_tasks[admitted.id]), 1)
+    failed = service.get_run(admitted.id)
+
+    with pytest.raises(AutomationWorkflowError) as raised:
+        await service.retry_run(
+            failed.id,
+            AutomationRunRetry(
+                request_id="123e4567-e89b-42d3-a456-426614174012",
+                expected_revision=failed.revision,
+            ),
+        )
+
+    assert raised.value.code == "automation_storage_unavailable"
+    unchanged = service.get_run(failed.id)
+    assert unchanged.revision == failed.revision
+    assert unchanged.attempts == failed.attempts
+    assert len(batches.calls) == 1
+    await service.shutdown()
+
+
+def test_terminal_collection_metrics_count_only_completed_items_as_success(
+    tmp_path: Path,
+):
+    asyncio.run(
+        _test_terminal_collection_metrics_count_only_completed_items_as_success(
+            tmp_path
+        )
+    )
+
+
+async def _test_terminal_collection_metrics_count_only_completed_items_as_success(
+    tmp_path: Path,
+):
+    database, rules, repository = _repository(tmp_path)
+    batches = _PausedBatch(initial_status="internal_error")
+    service = AutomationWorkflowService(
+        database,
+        monitoring_rules=rules,
+        batches=batches,
+        analyses=_NoModel(),
+        reports=_NoReport(),
+        repository=repository,
+    )
+    service.initialize()
+    task = service.create_task(_task_payload())
+    admitted = await service.run_now(task.id, AutomationRunNow(request_id=REQUEST))
+    await asyncio.wait_for(asyncio.shield(service._run_tasks[admitted.id]), 1)
+
+    failed = service.get_run(admitted.id)
+    assert failed.status == "failed"
+    assert (
+        failed.stages[0].input_count,
+        failed.stages[0].success_count,
+        failed.stages[0].failure_count,
+    ) == (3, 1, 2)
     await service.shutdown()
 
 
 def test_collection_failure_retry_appends_downstream_attempts(tmp_path: Path):
     asyncio.run(_test_collection_failure_retry_appends_downstream_attempts(tmp_path))
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_code", "expected_message"),
+    [
+        (
+            SearchBatchError(
+                status_code=409,
+                code="browser_unavailable",
+                message="SENTINEL child detail",
+            ),
+            "collection_browser_unavailable",
+            "应用专用的谷歌浏览器暂时不可用。请从采集阶段重试；应用会在需要时自动启动。",
+        ),
+        (
+            SearchBatchError(
+                status_code=409,
+                code="browser_operation_active",
+                message="SENTINEL child detail",
+            ),
+            "collection_browser_busy",
+            "应用专用的谷歌浏览器正在执行其他采集或登录操作。请等待当前操作结束后，再从采集阶段重试。",
+        ),
+        (
+            SearchBatchError(
+                status_code=503,
+                code="search_storage_unavailable",
+                message="SENTINEL child detail",
+            ),
+            "collection_storage_unavailable",
+            "采集任务暂时无法读取或保存。请稍后从采集阶段重试。",
+        ),
+        (
+            RuntimeError("SENTINEL raw exception"),
+            "collection_start_failed",
+            "采集任务未能启动。请从采集阶段重试；如果应用专用的谷歌浏览器仍不可用，请到“平台账号”重新检查。",
+        ),
+    ],
+)
+def test_collection_admission_failure_is_actionable_and_sanitized(
+    tmp_path: Path,
+    error: Exception,
+    expected_code: str,
+    expected_message: str,
+):
+    asyncio.run(
+        _test_collection_admission_failure_is_actionable_and_sanitized(
+            tmp_path, error, expected_code, expected_message
+        )
+    )
+
+
+async def _test_collection_admission_failure_is_actionable_and_sanitized(
+    tmp_path: Path,
+    error: Exception,
+    expected_code: str,
+    expected_message: str,
+):
+    database, rules, repository = _repository(tmp_path)
+    service = AutomationWorkflowService(
+        database,
+        monitoring_rules=rules,
+        batches=_FailingBatch(error),
+        analyses=_NoModel(),
+        reports=_NoReport(),
+        repository=repository,
+    )
+    service.initialize()
+    task = service.create_task(_task_payload())
+    run = await service.run_now(task.id, AutomationRunNow(request_id=REQUEST))
+    await asyncio.wait_for(asyncio.shield(service._run_tasks[run.id]), 1)
+
+    failed = service.get_run(run.id)
+    assert failed.status == "failed"
+    assert failed.error is not None
+    assert (failed.error.code, failed.error.message) == (
+        expected_code,
+        expected_message,
+    )
+    assert failed.stages[0].error == failed.error
+    assert failed.stages[0].child_id is None
+    assert "SENTINEL" not in failed.model_dump_json()
+    await service.shutdown()
 
 
 async def _test_collection_failure_retry_appends_downstream_attempts(tmp_path: Path):
@@ -881,9 +1222,10 @@ async def _test_collection_failure_retry_appends_downstream_attempts(tmp_path: P
     service.initialize()
     task = service.create_task(_task_payload())
     first = await service.run_now(task.id, AutomationRunNow(request_id=REQUEST))
-    await asyncio.sleep(0.1)
+    await asyncio.wait_for(asyncio.shield(service._run_tasks[first.id]), 1)
     failed = service.get_run(first.id)
     assert failed.status == "failed"
+    assert failed.error is not None and failed.error.code == "collection_failed"
     retry = await service.retry_run(
         first.id,
         AutomationRunRetry(
@@ -891,7 +1233,7 @@ async def _test_collection_failure_retry_appends_downstream_attempts(tmp_path: P
             expected_revision=failed.revision,
         ),
     )
-    await asyncio.sleep(0.15)
+    await asyncio.wait_for(asyncio.shield(service._run_tasks[retry.id]), 1)
     final = service.get_run(retry.id)
     assert final.status == "completed"
     assert len(batches.calls) == 2
@@ -982,6 +1324,54 @@ async def _test_analysis_admission_waits_for_nested_job_to_settle(tmp_path: Path
     )
     assert analyses.read_calls == [analyses.job_id]
     assert reports.calls[0]["analysis_job_id"] == analyses.job_id
+    await service.shutdown()
+
+
+def test_cancelling_during_analysis_admission_cancels_the_unlinked_child(
+    tmp_path: Path,
+):
+    asyncio.run(_test_cancel_during_analysis_admission(tmp_path))
+
+
+async def _test_cancel_during_analysis_admission(tmp_path: Path):
+    from summary_fixtures import seed_run
+
+    database, rules, _ = _repository(tmp_path)
+    seed_run(database, 1)
+    analyses = _BlockingAnalysisAdmission()
+    reports = _NoReport()
+    service = AutomationWorkflowService(
+        database,
+        monitoring_rules=rules,
+        batches=_FakeBatch(["completed"]),
+        analyses=analyses,
+        reports=reports,
+        repository=_ContentRepository(database),
+    )
+    service.initialize()
+    task = service.create_task(_task_payload())
+    run = await service.run_now(task.id, AutomationRunNow(request_id=REQUEST))
+    await asyncio.wait_for(analyses.entered.wait(), 1)
+    active = service.get_run(run.id)
+    cancel_task = asyncio.create_task(
+        service.cancel_run(
+            run.id,
+            AutomationRunCancel(
+                request_id="123e4567-e89b-42d3-a456-426614174013",
+                expected_revision=active.revision,
+            ),
+        )
+    )
+    for _ in range(100):
+        if service.get_run(run.id).status == "cancelled":
+            break
+        await asyncio.sleep(0.01)
+    analyses.release.set()
+    cancelled = await asyncio.wait_for(cancel_task, 1)
+
+    assert cancelled.status == "cancelled"
+    assert analyses.cancel_calls == [analyses.job_id]
+    assert reports.calls == []
     await service.shutdown()
 
 
@@ -1168,9 +1558,7 @@ def test_http_contract_replaces_old_schedule_route_and_replays_run_now(tmp_path:
         assert client.get("/api/v1/collection-schedules").status_code == 404
         created = client.post(
             "/api/v1/automation-tasks",
-            json=_task_payload().model_dump(
-                mode="json", exclude={"analysis_goal"}
-            ),
+            json=_task_payload().model_dump(mode="json", exclude={"analysis_goal"}),
         )
         assert created.status_code == 201, created.text
         task = created.json()
@@ -1180,9 +1568,7 @@ def test_http_contract_replaces_old_schedule_route_and_replays_run_now(tmp_path:
         invalid = client.post(
             "/api/v1/automation-tasks",
             json={
-                **_task_payload().model_dump(
-                    mode="json", exclude={"analysis_goal"}
-                ),
+                **_task_payload().model_dump(mode="json", exclude={"analysis_goal"}),
                 "unknown": True,
             },
         )
@@ -1207,9 +1593,9 @@ def test_http_contract_replaces_old_schedule_route_and_replays_run_now(tmp_path:
         assert replay.status_code == 202 and replay.json() == finished
 
         openapi = client.get("/openapi.json").json()
-        delete_operation = openapi["paths"][
-            "/api/v1/automation-tasks/{task_id}"
-        ]["delete"]
+        delete_operation = openapi["paths"]["/api/v1/automation-tasks/{task_id}"][
+            "delete"
+        ]
         assert set(delete_operation["responses"]) >= {"204", "404", "409", "422", "503"}
         assert delete_operation["requestBody"]["required"] is True
 
@@ -1249,8 +1635,6 @@ def test_http_contract_replaces_old_schedule_route_and_replays_run_now(tmp_path:
         assert replay_delete.status_code == 204 and replay_delete.content == b""
         recreated = client.post(
             "/api/v1/automation-tasks",
-            json=_task_payload().model_dump(
-                mode="json", exclude={"analysis_goal"}
-            ),
+            json=_task_payload().model_dump(mode="json", exclude={"analysis_goal"}),
         )
         assert recreated.status_code == 201 and recreated.json()["id"] != task["id"]

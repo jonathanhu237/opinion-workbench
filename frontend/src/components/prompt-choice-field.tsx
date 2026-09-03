@@ -1,17 +1,13 @@
 import {
   Field,
+  FieldContent,
   FieldDescription,
   FieldError,
   FieldLabel,
+  FieldTitle,
 } from '@/components/ui/field'
 import { useEffect, useState } from 'react'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Textarea } from '@/components/ui/textarea'
 import { codePointLength } from '@/lib/monitoring-rule-composition'
 import type { PromptChoice } from '@/lib/api/analysis-settings'
@@ -47,55 +43,57 @@ export function PromptChoiceField({
   useEffect(() => {
     if (customInstructions !== null) setDraft(customInstructions)
   }, [customInstructions])
-  const modeDescription = custom
-    ? '本任务会保存这段自定义指令；之后修改不会影响已提交的运行。'
-    : '使用系统维护的固定模板；模板不能在这里或全局设置中编辑。'
 
   return (
     <Field data-invalid={Boolean(error)}>
-      <FieldLabel id={`${id}-label`} htmlFor={`${id}-mode`}>
-        {label}
-      </FieldLabel>
+      <FieldTitle id={`${id}-label`}>{label}</FieldTitle>
       <FieldDescription id={`${id}-description`}>
         {description}
       </FieldDescription>
-      <Select
-        items={[
-          { value: 'default', label: '使用系统默认模板' },
-          { value: 'custom', label: '使用本任务自定义指令' },
-        ]}
-        value={value.mode}
-        onValueChange={(mode) => {
-          if (mode === 'default') onChange({ mode: 'default' })
-          if (mode === 'custom')
-            onChange({
-              mode: 'custom',
-              instructions: custom
-                ? value.instructions
-                : (draft ?? defaultInstructions ?? ''),
-            })
-        }}
-        disabled={disabled}
+      <Field
+        orientation="horizontal"
+        data-disabled={disabled}
+        data-invalid={Boolean(error)}
       >
-        <SelectTrigger
-          id={`${id}-mode`}
-          className="min-h-11 w-full"
+        <Checkbox
+          id={`${id}-custom`}
+          checked={custom}
+          disabled={disabled}
           aria-invalid={Boolean(error)}
-          aria-describedby={`${id}-description ${id}-error`}
+          aria-describedby={`${id}-custom-description ${id}-error`}
           onBlur={onBlur}
-        >
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="default">使用系统默认模板</SelectItem>
-          <SelectItem value="custom">使用本任务自定义指令</SelectItem>
-        </SelectContent>
-      </Select>
-      <p className="text-sm leading-6 text-muted-foreground">
-        {modeDescription}
-      </p>
+          onCheckedChange={(checked) => {
+            if (checked) {
+              onChange({
+                mode: 'custom',
+                instructions: custom
+                  ? value.instructions
+                  : (draft ?? defaultInstructions ?? ''),
+              })
+            } else {
+              onChange({ mode: 'default' })
+            }
+          }}
+        />
+        <FieldContent>
+          <FieldLabel htmlFor={`${id}-custom`}>使用本任务自定义指令</FieldLabel>
+          <FieldDescription id={`${id}-custom-description`}>
+            {custom
+              ? '将保存下面的自定义指令；之后修改不会影响已提交的运行。'
+              : '不勾选时使用系统维护的固定模板。'}
+          </FieldDescription>
+        </FieldContent>
+      </Field>
       {custom ? (
         <>
+          <button
+            type="button"
+            className="min-h-8 self-start text-sm text-primary underline underline-offset-4"
+            disabled={disabled}
+            onClick={() => onChange({ mode: 'default' })}
+          >
+            恢复默认
+          </button>
           <Textarea
             id={`${id}-instructions`}
             value={value.instructions}

@@ -8,7 +8,12 @@ from datetime import UTC, datetime
 from typing import Literal, cast
 
 from longtian_api.database import Database
+from longtian_api.search_failure_reasons import (
+    SearchFailureReason,
+    is_search_failure_reason,
+)
 from longtian_api.search_platforms import SearchPlatform
+from longtian_api.services.native_browser_contracts import ExecutionLimit
 
 SearchRunStatus = Literal[
     "queued",
@@ -43,8 +48,10 @@ class SearchRunRecord:
     created_at: str
     started_at: str | None
     finished_at: str | None
+    failure_reason: SearchFailureReason | None = None
     execution_start_term_position: int = 0
     search_protocol_version: int = 2
+    execution_limit: ExecutionLimit | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,7 +146,7 @@ class SearchRunRepository:
             cursor = connection.execute(
                 """
                 UPDATE search_runs
-                SET status = 'internal_error', finished_at = ?
+                SET status = 'internal_error', failure_reason = NULL, finished_at = ?
                 WHERE status IN ('queued', 'running')
                 """,
                 (timestamp,),
@@ -190,7 +197,7 @@ class SearchRunRepository:
             cursor = connection.execute(
                 """
                 UPDATE search_runs
-                SET status = 'running', started_at = ?
+                SET status = 'running', failure_reason = NULL, started_at = ?
                 WHERE id = ? AND status = 'queued'
                 """,
                 (_utc_timestamp(), run_id),
@@ -427,17 +434,33 @@ class SearchRunRepository:
                     (content_id, run_id),
                 )
 
-    def finish(self, run_id: int, status: SearchRunStatus) -> SearchRunRecord:
+    def finish(
+        self,
+        run_id: int,
+        status: SearchRunStatus,
+        failure_reason: SearchFailureReason | None = None,
+        execution_limit: ExecutionLimit | None = None,
+    ) -> SearchRunRecord:
         if status in {"queued", "running"}:
             raise ValueError("terminal status required")
+        if execution_limit is not None and (
+            status != "timed_out"
+            or execution_limit not in ("requests", "pages", "time")
+        ):
+            raise ValueError("execution limit requires timed_out status")
+        if failure_reason is not None and (
+            status != "structure_changed"
+            or not is_search_failure_reason(failure_reason)
+        ):
+            raise ValueError("failure reason requires structure_changed status")
         with _translate_storage_errors(), self._write_connection() as connection:
             cursor = connection.execute(
                 """
                 UPDATE search_runs
-                SET status = ?, finished_at = ?
+                SET status = ?, failure_reason = ?, finished_at = ?, execution_limit = ?
                 WHERE id = ? AND status IN ('queued', 'running')
                 """,
-                (status, _utc_timestamp(), run_id),
+                (status, failure_reason, _utc_timestamp(), execution_limit, run_id),
             )
             if cursor.rowcount == 0:
                 _raise_missing_or_inactive(connection, run_id)
@@ -671,6 +694,9 @@ def _read_run(
     terms = tuple(str(term["value"]) for term in term_rows)
     if not terms and not allow_empty_terms:
         raise sqlite3.DatabaseError("Search run has no terms")
+    failure_reason = row["failure_reason"]
+    if failure_reason is not None and not is_search_failure_reason(failure_reason):
+        raise sqlite3.DatabaseError("Search run has an unknown failure reason")
     return SearchRunRecord(
         id=int(row["id"]),
         monitoring_rule_id=(
@@ -694,8 +720,10 @@ def _read_run(
         created_at=str(row["created_at"]),
         started_at=str(row["started_at"]) if row["started_at"] else None,
         finished_at=str(row["finished_at"]) if row["finished_at"] else None,
+        failure_reason=cast(SearchFailureReason | None, failure_reason),
         execution_start_term_position=int(row["execution_start_term_position"]),
         search_protocol_version=int(row["search_protocol_version"]),
+        execution_limit=cast(ExecutionLimit | None, row["execution_limit"]),
     )
 
 

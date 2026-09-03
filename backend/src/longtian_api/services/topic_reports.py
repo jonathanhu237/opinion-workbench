@@ -11,7 +11,7 @@ from longtian_api.schemas.topic_report_engine import CompletedOutput
 from longtian_api.schemas.topic_reports import ACTIVE_REPORTS
 from longtian_api.services.ai_analysis import AIAnalysisError
 from longtian_api.services.ai_client import AICompletion, decode_model_json
-from longtian_api.services.ai_errors import AIError
+from longtian_api.services.ai_errors import MANUAL_SYSTEMIC_AI_FAILURES, AIError
 from longtian_api.services.analysis_errors import AnalysisError
 from longtian_api.services.settled_tasks import database_call, settle
 from longtian_api.services.summary_errors import FAILURE_MESSAGES, failure
@@ -40,6 +40,7 @@ class TopicReportService:
         self._active_id = None
         self._closed = False
         self.available = available
+        self.on_manual_configuration_failure = None
 
     def initialize(self):
         self.repository.initialize()
@@ -57,6 +58,13 @@ class TopicReportService:
 
     async def create(self, payload):
         return await settle(self._admit("create", None, payload))
+
+    async def start_pending(self):
+        """Run reports already atomically admitted by a manual owner."""
+        async with self._admission:
+            if self._closed or not self.available:
+                raise TopicReportError("topic_report_unavailable")
+            await self._launch()
 
     async def workflow_admit(
         self, *, run_id: int, analysis_job_id: int | None, operation_key: str, snapshot
@@ -93,9 +101,7 @@ class TopicReportService:
                 analysis_job_id=analysis_job_id,
                 operation_key=operation_key,
                 analysis_goal=(
-                    None
-                    if report_prompt is not None
-                    else snapshot.analysis_goal
+                    None if report_prompt is not None else snapshot.analysis_goal
                 ),
                 configuration_revision=snapshot.ai_configuration_revision,
                 base_url=snapshot.ai_base_url,
@@ -121,9 +127,12 @@ class TopicReportService:
             if self._closed or not self.available:
                 raise TopicReportError("topic_report_unavailable")
             self._validate_override(payload.instructions_override)
-            if action == "create" and datetime.fromisoformat(
-                payload.selection.first_seen_from
-            ) >= datetime.fromisoformat(payload.selection.first_seen_to):
+            if (
+                action == "create"
+                and payload.selection.kind == "first_seen_interval"
+                and datetime.fromisoformat(payload.selection.first_seen_from)
+                >= datetime.fromisoformat(payload.selection.first_seen_to)
+            ):
                 raise TopicReportError("invalid_report_interval")
             await database_call(self._ai.read)
             result = (
@@ -156,6 +165,15 @@ class TopicReportService:
 
     async def cancel(self, report_id, payload):
         return await settle(self._cancel(report_id, payload))
+
+    async def stop_owned(self, report_id):
+        """Settle a parent-cancelled report even after its DB guard is terminal."""
+        async with self._admission:
+            if self._active_id == report_id and self._runner is not None:
+                self._runner.cancel()
+                await settle(asyncio.gather(self._runner, return_exceptions=True))
+            if not self._closed:
+                await self._launch()
 
     async def _cancel(self, report_id, payload):
         async with self._admission:
@@ -220,6 +238,14 @@ class TopicReportService:
                         await database_call(self.repository.queue, report.id)
                         await asyncio.sleep(0.25)
                         continue
+                    if (
+                        report.selection.kind == "explicit"
+                        and error.code in MANUAL_SYSTEMIC_AI_FAILURES
+                        and self.on_manual_configuration_failure is not None
+                    ):
+                        await self.on_manual_configuration_failure(
+                            report.configuration_revision, error
+                        )
                     await database_call(
                         self.repository.finish,
                         report.id,
@@ -510,3 +536,12 @@ class TopicReportService:
                 ),
                 usage=usage,
             )
+            if (
+                report.selection.kind == "explicit"
+                and error.code in MANUAL_SYSTEMIC_AI_FAILURES
+            ):
+                if self.on_manual_configuration_failure is not None:
+                    await self.on_manual_configuration_failure(
+                        report.configuration_revision, error
+                    )
+                raise

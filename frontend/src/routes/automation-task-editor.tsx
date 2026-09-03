@@ -603,7 +603,7 @@ export function AutomationTaskEditor({
             )}
           />
 
-          <div className="grid gap-5 lg:grid-cols-2">
+          <div className="grid gap-5">
             <Controller
               name="initialPrompt"
               control={form.control}

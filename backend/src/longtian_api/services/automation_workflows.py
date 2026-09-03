@@ -69,6 +69,7 @@ from longtian_api.services.monitoring_rules import (
     MonitoringRuleError,
     compose_monitoring_terms,
 )
+from longtian_api.services.search_batches import SearchBatchError
 from longtian_api.services.settled_tasks import database_call, settle
 
 
@@ -144,6 +145,52 @@ class _StageMetrics:
     failure_count: int = 0
     usage_attempted: int = 0
     usage_tokens: int | None = None
+
+
+_COLLECTION_ADMISSION_FAILURES: dict[str, tuple[str, str]] = {
+    "browser_unavailable": (
+        "collection_browser_unavailable",
+        "应用专用的谷歌浏览器暂时不可用。请从采集阶段重试；应用会在需要时自动启动。",
+    ),
+    "browser_operation_active": (
+        "collection_browser_busy",
+        "应用专用的谷歌浏览器正在执行其他采集或登录操作。请等待当前操作结束后，再从采集阶段重试。",
+    ),
+    "search_storage_unavailable": (
+        "collection_storage_unavailable",
+        "采集任务暂时无法读取或保存。请稍后从采集阶段重试。",
+    ),
+}
+
+_UNEXPECTED_STAGE_FAILURES: dict[AutomationStageName, tuple[str, str]] = {
+    "collection": (
+        "collection_start_failed",
+        "采集任务未能启动。请从采集阶段重试；如果应用专用的谷歌浏览器仍不可用，请到“平台账号”重新检查。",
+    ),
+    "initial_analysis": (
+        "initial_analysis_failed",
+        "初步分析未能完成。请确认 AI 配置可用，然后从初步分析阶段重试。",
+    ),
+    "topic_report": (
+        "topic_report_failed",
+        "相关性判断与报告未能完成。请确认 AI 配置可用，然后从报告阶段重试。",
+    ),
+}
+
+_SETTLED_STAGE_FAILURES: dict[AutomationStageName, tuple[str, str]] = {
+    "collection": (
+        "collection_failed",
+        "采集批次异常结束。已完成平台的结果仍然保留；请查看采集批次中的平台状态，处理未完成的平台后再从采集阶段重试。",
+    ),
+    "initial_analysis": (
+        "initial_analysis_failed",
+        "初步分析已结束，但仍有内容未能处理。请查看初步分析结果，再从初步分析阶段重试。",
+    ),
+    "topic_report": (
+        "topic_report_failed",
+        "相关性判断与报告未能生成。请查看本次报告记录，再从报告阶段重试。",
+    ),
+}
 
 
 class AutomationWorkflowService:
@@ -228,6 +275,12 @@ class AutomationWorkflowService:
             except Exception:
                 await self._interrupt_recovered_run(run.id)
                 continue
+            if stage == "collection" and status == "paused_for_manual_action":
+                await database_call(
+                    self.repository.prepare_recovered_stage, run.id, stage
+                )
+                resumable.append(run.id)
+                continue
             if status in {
                 "queued",
                 "running",
@@ -236,7 +289,6 @@ class AutomationWorkflowService:
                 "judging",
                 "composing",
                 "interrupted",
-                "paused_for_manual_action",
             }:
                 await self._interrupt_recovered_run(run.id)
                 continue
@@ -620,6 +672,9 @@ class AutomationWorkflowService:
         replay = await self._replay_request(payload.request_id, intent_hash)
         if replay is not None:
             return replay
+        reuse_child_kind, reuse_child_id = await self._retry_child(
+            run_id, payload.expected_revision
+        )
         try:
             run = await database_call(
                 self.repository.retry_run,
@@ -628,6 +683,8 @@ class AutomationWorkflowService:
                 request_id=payload.request_id,
                 request_intent_hash=intent_hash,
                 now=_as_utc(self._clock()),
+                reuse_child_kind=reuse_child_kind,
+                reuse_child_id=reuse_child_id,
             )
         except AutomationRunNotFoundError:
             raise AutomationWorkflowError("automation_run_not_found") from None
@@ -643,6 +700,53 @@ class AutomationWorkflowService:
             raise AutomationWorkflowError("automation_storage_unavailable") from None
         await self._launch_run(run_id)
         return self._to_run(run)
+
+    async def _retry_child(
+        self, run_id: int, expected_revision: int
+    ) -> tuple[str | None, int | None]:
+        """Keep a recoverable collection child instead of admitting a duplicate."""
+        try:
+            run = await database_call(self.repository.get_run, run_id)
+        except AutomationRunNotFoundError:
+            raise AutomationWorkflowError("automation_run_not_found") from None
+        except AutomationRepositoryUnavailableError:
+            raise AutomationWorkflowError("automation_storage_unavailable") from None
+        if run.revision != expected_revision:
+            raise AutomationWorkflowError("automation_run_changed")
+        if run.status not in {"failed", "interrupted", "configuration_blocked"}:
+            raise AutomationWorkflowError("automation_run_not_retryable")
+        stage = next(
+            (
+                name
+                for name in AUTOMATION_STAGES
+                if (_latest_stage(run, name) is None)
+                or _latest_stage(run, name).status != "completed"
+            ),
+            None,
+        )
+        if stage != "collection":
+            return None, None
+        attempt = _latest_stage(run, stage)
+        if attempt is None or attempt.child_id is None:
+            return None, None
+        try:
+            child = await self._read_recovery_child(stage, attempt.child_id)
+            status = _value(child, "status")
+        except Exception:
+            # A linked durable child is proof that work may already exist.  If
+            # it cannot be read, fail closed instead of starting a duplicate.
+            raise AutomationWorkflowError("automation_storage_unavailable") from None
+        if status in {
+            "queued",
+            "running",
+            "paused_for_manual_action",
+            "completed",
+            "completed_with_failures",
+        }:
+            return attempt.child_kind or "search_batch", attempt.child_id
+        if status in {"cancelled", "internal_error"}:
+            return None, None
+        raise AutomationWorkflowError("automation_storage_unavailable")
 
     async def _replay_request(
         self, request_id: str, intent_hash: str
@@ -712,43 +816,36 @@ class AutomationWorkflowService:
                 except asyncio.CancelledError:
                     return
                 except AutomationWorkflowError as error:
-                    await database_call(
-                        self.repository.finish_stage,
+                    status = (
+                        "configuration_blocked"
+                        if error.code.startswith("ai_")
+                        else "failed"
+                    )
+                    await self._fail_stage(
                         run_id,
                         stage,
-                        "configuration_blocked"
-                        if error.code.startswith("ai_")
-                        else "failed",
-                        error=AutomationFailure(code=error.code, message=error.message),
+                        status,
+                        AutomationFailure(code=error.code, message=error.message),
                     )
-                    await database_call(
-                        self.repository.set_run_terminal,
+                    return
+                except SearchBatchError as error:
+                    await self._fail_stage(
                         run_id,
-                        "configuration_blocked"
-                        if error.code.startswith("ai_")
-                        else "failed",
-                        error=AutomationFailure(code=error.code, message=error.message),
+                        stage,
+                        "failed",
+                        (
+                            _collection_admission_failure(error.code)
+                            if stage == "collection"
+                            else _stage_failure(_UNEXPECTED_STAGE_FAILURES[stage])
+                        ),
                     )
                     return
                 except Exception:
-                    await database_call(
-                        self.repository.finish_stage,
+                    await self._fail_stage(
                         run_id,
                         stage,
                         "failed",
-                        error=AutomationFailure(
-                            code="stage_failed",
-                            message="自动任务阶段执行失败，请重试。",
-                        ),
-                    )
-                    await database_call(
-                        self.repository.set_run_terminal,
-                        run_id,
-                        "failed",
-                        error=AutomationFailure(
-                            code="stage_failed",
-                            message="自动任务阶段执行失败，请重试。",
-                        ),
+                        _stage_failure(_UNEXPECTED_STAGE_FAILURES[stage]),
                     )
                     return
                 await database_call(
@@ -764,10 +861,7 @@ class AutomationWorkflowService:
                     error=(
                         None
                         if success
-                        else AutomationFailure(
-                            code="stage_failed",
-                            message="自动任务阶段执行失败，请从失败阶段重试。",
-                        )
+                        else _stage_failure(_SETTLED_STAGE_FAILURES[stage])
                     ),
                 )
                 if not success:
@@ -775,10 +869,7 @@ class AutomationWorkflowService:
                         self.repository.set_run_terminal,
                         run_id,
                         "failed",
-                        error=AutomationFailure(
-                            code="stage_failed",
-                            message="自动任务阶段未完成，请从失败阶段重试。",
-                        ),
+                        error=_stage_failure(_SETTLED_STAGE_FAILURES[stage]),
                     )
                     return
             run = await database_call(self.repository.get_run, run_id)
@@ -799,6 +890,27 @@ class AutomationWorkflowService:
             )
         finally:
             self._run_tasks.pop(run_id, None)
+
+    async def _fail_stage(
+        self,
+        run_id: int,
+        stage: AutomationStageName,
+        status: str,
+        failure: AutomationFailure,
+    ) -> None:
+        await database_call(
+            self.repository.finish_stage,
+            run_id,
+            stage,
+            status,
+            error=failure,
+        )
+        await database_call(
+            self.repository.set_run_terminal,
+            run_id,
+            status,
+            error=failure,
+        )
 
     async def _execute_collection(
         self, run_id: int, attempt: AutomationStageAttemptRecord
@@ -840,18 +952,15 @@ class AutomationWorkflowService:
         child = await self._wait_child(self._batches, "get_batch", child_id, child)
         status = _value(child, "status")
         items = tuple(_value(child, "items", ()) or ())
-        failed_items = sum(
-            _value(item, "status") in {"failed", "skipped", "cancelled"}
-            for item in items
-        )
+        completed_items = sum(_value(item, "status") == "completed" for item in items)
         if status not in {"completed", "completed_with_failures"}:
             return (
                 child_id,
                 False,
                 _StageMetrics(
                     input_count=len(items),
-                    success_count=max(0, len(items) - failed_items),
-                    failure_count=failed_items,
+                    success_count=completed_items,
+                    failure_count=max(0, len(items) - completed_items),
                 ),
             )
         entries = ()
@@ -889,7 +998,7 @@ class AutomationWorkflowService:
         else:
             method = getattr(self._analyses, "workflow_admit", None)
             if method is not None:
-                child = await method(
+                admission = method(
                     result_ids=ids,
                     operation_key=attempt.operation_key,
                     snapshot=run.snapshot,
@@ -931,22 +1040,13 @@ class AutomationWorkflowService:
                     force_refresh=False,
                     selection={"kind": "explicit", "result_ids": list(ids)},
                 )
-                child = await self._analyses.create(payload)
-            # ``workflow_admit`` returns an admission envelope while the
-            # generic child waiter consumes the lifecycle-owned job itself.
-            # Normalize at this boundary so it polls the nested job status;
-            # recovery paths already provide a direct job from ``read``.
-            child = _value(child, "job", child)
-            child_id = _value(child, "id")
+                admission = self._analyses.create(payload)
+            child_id, child = await self._admit_analysis_child(
+                run_id,
+                admission,
+            )
             if child_id is None:
                 return None, True, _StageMetrics()
-            await database_call(
-                self.repository.set_stage_child,
-                run_id,
-                "initial_analysis",
-                child_kind="content_analysis_job",
-                child_id=child_id,
-            )
         child = await self._wait_child(self._analyses, "read", child_id, child)
         status = _value(child, "status")
         counts = _value(child, "counts", {})
@@ -974,6 +1074,52 @@ class AutomationWorkflowService:
                 usage_tokens=_value(usage, "total_tokens"),
             ),
         )
+
+    async def _admit_analysis_child(self, run_id: int, admission):
+        """Link or cancel an admitted analysis child across parent cancellation.
+
+        Child admission is durable and cancellation-safe, so it may finish
+        after the parent task receives cancellation.  Shield it long enough to
+        recover the child ID, then either persist the link or cancel the child
+        directly.  This closes the orphan window between admission and link.
+        """
+
+        admission_task = asyncio.create_task(admission)
+        child = child_id = None
+        try:
+            admitted = await asyncio.shield(admission_task)
+            # ``workflow_admit`` returns an admission envelope while the
+            # generic child waiter consumes the lifecycle-owned job itself.
+            child = _value(admitted, "job", admitted)
+            child_id = _value(child, "id")
+            if child_id is None:
+                return None, child
+            await database_call(
+                self.repository.set_stage_child,
+                run_id,
+                "initial_analysis",
+                child_kind="content_analysis_job",
+                child_id=child_id,
+            )
+            return child_id, child
+        except asyncio.CancelledError:
+            if child is None:
+                try:
+                    admitted = await settle(admission_task)
+                except (asyncio.CancelledError, Exception):
+                    admitted = None
+                child = _value(admitted, "job", admitted)
+                child_id = _value(child, "id")
+            if child_id is not None:
+                await self._cancel_child_id("initial_analysis", child_id)
+            raise
+        except AutomationRunChangedError:
+            latest = await database_call(self.repository.get_run, run_id)
+            if latest.cancel_requested or latest.status == "cancelled":
+                if child_id is not None:
+                    await self._cancel_child_id("initial_analysis", child_id)
+                raise asyncio.CancelledError from None
+            raise
 
     async def _execute_report(self, run_id: int, attempt: AutomationStageAttemptRecord):
         if self._reports is None:
@@ -1062,12 +1208,16 @@ class AutomationWorkflowService:
         while _value(child, "status") in {
             "queued",
             "running",
+            "paused_for_manual_action",
             "judging",
             "composing",
             "acquiring",
             "analysing",
         }:
-            await asyncio.sleep(0.05)
+            delay = (
+                0.5 if _value(child, "status") == "paused_for_manual_action" else 0.05
+            )
+            await asyncio.sleep(delay)
             method = getattr(getter, method_name, None)
             if method is None:
                 break
@@ -1102,6 +1252,11 @@ class AutomationWorkflowService:
         child_id = _value(attempt, "child_id")
         if child_id is None:
             return
+        await self._cancel_child_id(stage, child_id)
+
+    async def _cancel_child_id(self, stage: AutomationStageName, child_id: int) -> None:
+        """Best-effort cancel one known child without requiring a parent link."""
+
         try:
             if stage == "collection" and self._batches is not None:
                 cancel = getattr(self._batches, "cancel_batch", None)
@@ -1385,6 +1540,19 @@ def _value(value, key: str, default=None):
     if isinstance(value, dict):
         return value.get(key, default)
     return getattr(value, key, default)
+
+
+def _stage_failure(contract: tuple[str, str]) -> AutomationFailure:
+    code, message = contract
+    return AutomationFailure(code=code, message=message)
+
+
+def _collection_admission_failure(code: str) -> AutomationFailure:
+    return _stage_failure(
+        _COLLECTION_ADMISSION_FAILURES.get(
+            code, _UNEXPECTED_STAGE_FAILURES["collection"]
+        )
+    )
 
 
 def _batch_content_entry(value) -> BatchContentRecord:

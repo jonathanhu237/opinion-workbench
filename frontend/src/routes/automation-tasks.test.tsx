@@ -20,6 +20,10 @@ import { analysisSettingsFixture } from '@/lib/api/analysis-fixtures'
 import { fetchAnalysisSettings } from '@/lib/api/analysis-settings'
 import { fetchMonitoringRules } from '@/lib/api/monitoring-rules'
 import {
+  fetchSearchBatch,
+  type SearchBatchDetail,
+} from '@/lib/api/search-batches'
+import {
   automationRunDetailKey,
   automationRunsKey,
   cacheSavedAutomationRun,
@@ -29,6 +33,7 @@ import { nextRunPreview } from '@/routes/automation-task-editor'
 import { AutomationTaskRuns, AutomationTasks } from '@/routes/automation-tasks'
 import {
   automationRun,
+  automationStage,
   automationTask,
 } from '@/lib/api/automation-workflows.fixtures'
 
@@ -53,6 +58,11 @@ vi.mock('@/lib/api/analysis-settings', async (importOriginal) => ({
   fetchAnalysisSettings: vi.fn(),
 }))
 
+vi.mock('@/lib/api/search-batches', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/api/search-batches')>()),
+  fetchSearchBatch: vi.fn(),
+}))
+
 const mockedTasks = vi.mocked(fetchAutomationTasks)
 const mockedTask = vi.mocked(fetchAutomationTask)
 const mockedRuns = vi.mocked(fetchAutomationRuns)
@@ -61,6 +71,48 @@ const mockedRun = vi.mocked(fetchAutomationRun)
 const mockedRunNow = vi.mocked(runAutomationTaskNow)
 const mockedDelete = vi.mocked(deleteAutomationTask)
 const mockedAnalysisSettings = vi.mocked(fetchAnalysisSettings)
+const mockedSearchBatch = vi.mocked(fetchSearchBatch)
+
+function pausedSearchBatch(): SearchBatchDetail {
+  return {
+    id: 201,
+    control_revision: 5,
+    monitoring_rule_id: 9,
+    rule_name: '公共事务',
+    term_count: 2,
+    platform_count: 1,
+    terminal_item_count: 0,
+    max_results_per_term: 10,
+    status: 'paused_for_manual_action',
+    current_item_position: 0,
+    terms: ['街道', '社区'],
+    items: [
+      {
+        position: 0,
+        platform: 'toutiao',
+        status: 'paused_for_manual_action',
+        attempt_count: 1,
+        latest_attempt: null,
+        completed_term_count: 1,
+        remaining_term_count: 1,
+        next_term_position: 1,
+        checkpoint_basis: 'explicit',
+        recovery_available: true,
+        pause_reason: 'attempt_failed',
+        completion_basis: null,
+        new_count: 8,
+        repeated_count: 1,
+        total_count: 9,
+        created_at: '2026-08-30T01:00:00Z',
+        started_at: '2026-08-30T01:00:01Z',
+        finished_at: null,
+      },
+    ],
+    created_at: '2026-08-30T01:00:00Z',
+    started_at: '2026-08-30T01:00:01Z',
+    finished_at: null,
+  }
+}
 
 function renderRoute(
   routes: Parameters<typeof createMemoryRouter>[0],
@@ -94,6 +146,7 @@ beforeEach(() => {
   mockedRun.mockResolvedValue(automationRun())
   mockedRunNow.mockResolvedValue(automationRun({ id: 102, revision: 1 }))
   mockedDelete.mockResolvedValue(undefined)
+  mockedSearchBatch.mockResolvedValue(pausedSearchBatch())
   vi.mocked(fetchMonitoringRules).mockResolvedValue({
     rules: [
       {
@@ -377,6 +430,166 @@ describe('automation run routes', () => {
     await user.click(screen.getByText('查看之前 1 次记录'))
     expect(screen.getByText('第一次报告失败。')).toBeVisible()
     expect(screen.getAllByRole('listitem')).toHaveLength(4)
+  })
+
+  it('turns a legacy generic collection failure into actionable guidance', async () => {
+    const genericFailure = {
+      code: 'stage_failed',
+      message: '自动任务阶段执行失败，请重试。',
+    }
+    const failedCollection = {
+      ...automationRun().stages[0]!,
+      status: 'failed' as const,
+      child_kind: null,
+      child_id: null,
+      error: genericFailure,
+    }
+    const cancelledAnalysis = {
+      ...automationRun().stages[1]!,
+      status: 'cancelled' as const,
+      child_kind: null,
+      child_id: null,
+      error: null,
+      started_at: null,
+    }
+    const cancelledReport = {
+      ...automationRun().stages[2]!,
+      status: 'cancelled' as const,
+      child_kind: null,
+      child_id: null,
+      error: null,
+      started_at: null,
+    }
+    mockedRun.mockResolvedValue(
+      automationRun({
+        status: 'failed',
+        outcome: null,
+        topic_report_id: null,
+        error: genericFailure,
+        stages: [failedCollection, cancelledAnalysis, cancelledReport],
+        attempts: [failedCollection, cancelledAnalysis, cancelledReport],
+      }),
+    )
+    renderRoute(
+      [{ path: '/automation-runs/:runId', element: <AutomationRunDetail /> }],
+      '/automation-runs/101',
+    )
+
+    expect(await screen.findByText('采集未启动')).toBeVisible()
+    expect(screen.getByText(/旧记录未保留具体原因/u)).toBeVisible()
+    expect(screen.queryByText('这一步没有完成。')).toBeNull()
+    expect(screen.getByRole('link', { name: /检查平台连接/u })).toHaveAttribute(
+      'href',
+      '/platform-accounts',
+    )
+  })
+
+  it('shows a recoverable paused collection without marking the run failed', async () => {
+    const collection = automationStage('collection', {
+      status: 'running',
+      child_kind: 'search_batch',
+      child_id: 201,
+      finished_at: null,
+    })
+    const analysis = automationStage('initial_analysis', {
+      status: 'queued',
+      child_kind: null,
+      child_id: null,
+      started_at: null,
+      finished_at: null,
+    })
+    const report = automationStage('topic_report', {
+      status: 'queued',
+      child_kind: null,
+      child_id: null,
+      started_at: null,
+      finished_at: null,
+    })
+    mockedRun.mockResolvedValue(
+      automationRun({
+        status: 'collecting',
+        active_stage: 'collection',
+        outcome: null,
+        topic_report_id: null,
+        error: null,
+        finished_at: null,
+        stages: [collection, analysis, report],
+        attempts: [collection, analysis, report],
+      }),
+    )
+
+    renderRoute(
+      [{ path: '/automation-runs/:runId', element: <AutomationRunDetail /> }],
+      '/automation-runs/101',
+    )
+
+    expect(await screen.findByText('采集已暂停，需要处理')).toBeVisible()
+    expect(
+      screen.getByText(/完成后，本次自动任务会自动继续初步分析/u),
+    ).toBeVisible()
+    expect(
+      screen.getByText(/已完成 0 个平台 · 待处理 1 个平台 · 共 1 个平台/u),
+    ).toBeVisible()
+    expect(screen.getByText('等待处理')).toBeVisible()
+    expect(screen.queryByRole('button', { name: /从失败阶段重试/u })).toBeNull()
+    expect(screen.getByRole('link', { name: /处理采集批次/u })).toHaveAttribute(
+      'href',
+      '/collection-batches/201',
+    )
+  })
+
+  it('guides a historical failed run to reclaim its paused batch', async () => {
+    const failure = {
+      code: 'collection_failed',
+      message: '采集已结束，但没有成功完成。',
+    }
+    const collection = automationStage('collection', {
+      status: 'failed',
+      child_kind: 'search_batch',
+      child_id: 201,
+      input_count: 5,
+      success_count: 5,
+      failure_count: 0,
+      error: failure,
+    })
+    const analysis = automationStage('initial_analysis', {
+      status: 'cancelled',
+      child_kind: null,
+      child_id: null,
+      started_at: null,
+      error: null,
+    })
+    const report = automationStage('topic_report', {
+      status: 'cancelled',
+      child_kind: null,
+      child_id: null,
+      started_at: null,
+      error: null,
+    })
+    mockedRun.mockResolvedValue(
+      automationRun({
+        status: 'failed',
+        active_stage: null,
+        outcome: null,
+        topic_report_id: null,
+        error: failure,
+        stages: [collection, analysis, report],
+        attempts: [collection, analysis, report],
+      }),
+    )
+
+    renderRoute(
+      [{ path: '/automation-runs/:runId', element: <AutomationRunDetail /> }],
+      '/automation-runs/101',
+    )
+
+    expect(await screen.findByText('采集已暂停，需要处理')).toBeVisible()
+    expect(screen.getByText(/系统会重新接管同一个采集批次/u)).toBeVisible()
+    expect(screen.queryByText('采集已结束，但没有成功完成。')).toBeNull()
+    expect(screen.queryByText(/成功 5 条 · 未成功 0 条/u)).toBeNull()
+    expect(
+      screen.getByRole('button', { name: /从失败阶段重试/u }),
+    ).toBeEnabled()
   })
 })
 

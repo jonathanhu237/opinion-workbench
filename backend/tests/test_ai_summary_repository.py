@@ -41,10 +41,22 @@ def test_v11_appends_only_summary_tables_preserving_actual_v10_rows(tmp_path):
                 "WHERE type='table' AND name NOT LIKE 'sqlite_%'"
             )
         ]
+        columns = {
+            table: [
+                row[1] for row in connection.execute(f'PRAGMA table_info("{table}")')
+            ]
+            for table in tables
+        }
+        selections = {
+            table: ", ".join(f'"{column}"' for column in table_columns)
+            for table, table_columns in columns.items()
+        }
         before = {
             table: [
                 tuple(r)
-                for r in connection.execute(f'SELECT * FROM "{table}" ORDER BY rowid')
+                for r in connection.execute(
+                    f'SELECT {selections[table]} FROM "{table}" ORDER BY rowid'
+                )
             ]
             for table in tables
         }
@@ -59,7 +71,9 @@ def test_v11_appends_only_summary_tables_preserving_actual_v10_rows(tmp_path):
         for table, rows in before.items():
             assert [
                 tuple(r)
-                for r in connection.execute(f'SELECT * FROM "{table}" ORDER BY rowid')
+                for r in connection.execute(
+                    f'SELECT {selections[table]} FROM "{table}" ORDER BY rowid'
+                )
             ] == rows
         assert connection.execute("SELECT * FROM ai_summary_runs").fetchall() == []
         assert connection.execute("SELECT * FROM ai_summary_items").fetchall() == []

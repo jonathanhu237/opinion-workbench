@@ -369,7 +369,9 @@ def test_v16_failure_rolls_back_historical_report_table_swap(tmp_path, monkeypat
 def test_v16_accepts_already_new_v15_report_shape_without_rewrite(tmp_path):
     database = _historical_v15(tmp_path)
     _seed_historical_report_graph(database)
-    database.initialize()
+    with database.connect() as connection:
+        # Construct the historical v16 shape, not today's schema relabelled v15.
+        migrations._migrate_to_version_16(connection)
     before = _historical_report_projection(database)
     with database.connect() as connection:
         connection.execute("PRAGMA user_version = 15")
@@ -385,7 +387,8 @@ def test_v16_accepts_already_new_v15_report_shape_without_rewrite(tmp_path):
 def test_v16_repairs_a_new_column_with_an_old_trigger_shape(tmp_path):
     database = _historical_v15(tmp_path)
     _seed_historical_report_graph(database)
-    database.initialize()
+    with database.connect() as connection:
+        migrations._migrate_to_version_16(connection)
     expected = _historical_report_projection(database)
     with database.connect() as connection:
         connection.execute("PRAGMA user_version = 15")

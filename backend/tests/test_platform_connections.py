@@ -11,8 +11,10 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from longtian_api.main import create_app
+from longtian_api.schemas.platform_connections import PlatformConnection
 from longtian_api.services import media_crawler_auth_worker as worker_module
 from longtian_api.services import platform_connections as service_module
 from longtian_api.services.media_crawler_auth_worker import (
@@ -316,6 +318,17 @@ def build_service(
     return service, launcher, terminator
 
 
+def test_product_worker_uses_ignored_managed_browser_profile_by_default() -> None:
+    service, _, _ = build_service(FakeProcess())
+    expected = (
+        Path(__file__).resolve().parents[2] / "runtime" / "browser" / "managed-chrome"
+    )
+
+    assert service_module._default_browser_profile_dir() == expected
+    assert service._browser_profile_dir == expected
+    assert service.worker._browser_profile_dir == expected
+
+
 def command_actions(process: FakeProcess) -> list[str]:
     return [str(command["command"]) for command in process.commands]
 
@@ -439,7 +452,7 @@ def test_start_returns_exact_202_and_fixed_worker_command(
         (expected_worker_command(), Path("/repo/third_party/MediaCrawler"))
     ]
     assert command_actions(process) == ["check", "cancel", "shutdown"]
-    assert terminator.calls == []
+    assert terminator.calls == [(process, 0.01)]
 
 
 def test_concurrent_attempt_preserves_exact_409_and_one_check(
@@ -523,7 +536,8 @@ def test_full_five_platform_sequence_uses_one_worker() -> None:
 @pytest.mark.parametrize(
     ("phases", "expected_status", "expected_guidance"),
     [
-        (["waiting_for_browser"], "action_required", "enable_remote_debugging"),
+        (["waiting_for_browser"], "checking", "starting_browser"),
+        (["waiting_for_browser", "checking"], "checking", "none"),
         (["waiting_for_approval"], "action_required", "approve_connection"),
         (["checking"], "checking", "none"),
         (["checking", "waiting_for_login"], "action_required", "complete_login"),
@@ -562,8 +576,8 @@ def test_progress_updates_visible_projection(
     [
         ("connected", "none", "connected", "none"),
         ("disconnected", "login_required", "disconnected", "retry"),
-        ("failed", "browser_unavailable", "failed", "enable_remote_debugging"),
-        ("failed", "browser_disconnected", "failed", "retry"),
+        ("failed", "browser_unavailable", "failed", "retry_browser"),
+        ("failed", "browser_disconnected", "failed", "retry_browser"),
         ("failed", "internal_error", "failed", "retry"),
     ],
 )
@@ -682,7 +696,6 @@ def test_malformed_protocol_recycles_worker_without_leaking_raw_output(
     [
         ["checking", "checking"],
         ["checking", "waiting_for_approval"],
-        ["waiting_for_browser", "checking"],
         ["checking", "waiting_for_login", "checking", "waiting_for_login"],
     ],
 )
@@ -814,9 +827,38 @@ def test_unexpected_eof_before_or_after_ready_recycles(emit_ready: bool) -> None
         process.finish(7)
         assert (await wait_for_terminal(service))["status"] == "failed"
         assert process.returncode == 7
-        assert terminator.calls == []
+        # A dead worker leader can still leave a managed Chrome descendant in
+        # its owned process group, so the generation terminator is invoked even
+        # after the leader's return code is known.
+        assert terminator.calls == [(process, 0.01)]
 
     asyncio.run(scenario())
+
+
+def test_managed_guidance_requires_matching_public_status() -> None:
+    base = {
+        "platform": "wb",
+        "display_name": "微博",
+        "availability": "enabled",
+        "last_checked_at": None,
+        "active_attempt_id": None,
+    }
+
+    with pytest.raises(ValidationError):
+        PlatformConnection(**base, status="failed", guidance="starting_browser")
+    with pytest.raises(ValidationError):
+        PlatformConnection(**base, status="checking", guidance="retry_browser")
+
+    assert (
+        PlatformConnection(
+            **base, status="checking", guidance="starting_browser"
+        ).guidance
+        == "starting_browser"
+    )
+    assert (
+        PlatformConnection(**base, status="failed", guidance="retry_browser").guidance
+        == "retry_browser"
+    )
 
 
 def test_late_callback_from_recycled_generation_cannot_mutate_current_state() -> None:
@@ -1038,7 +1080,7 @@ def test_shutdown_cancels_active_request_then_stops_worker() -> None:
         row = (await service.list_connections()).platforms[0]
         assert command_actions(process) == ["check", "cancel", "shutdown"]
         assert process.returncode == 0
-        assert terminator.calls == []
+        assert terminator.calls == [(process, 0.01)]
         assert row.status == "failed"
         assert row.active_attempt_id is None
 
@@ -1164,6 +1206,61 @@ def test_default_launcher_uses_exec_with_duplex_pipes() -> None:
         monkeypatch.undo()
 
 
+def test_managed_launcher_passes_only_trusted_profile_root_through_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        process = FakeProcess()
+        captured: dict[str, object] = {}
+        profile = Path("/repo/runtime/browser/managed-chrome")
+
+        async def fake_create_subprocess_exec(
+            *command: str, **options: object
+        ) -> FakeProcess:
+            captured["command"] = command
+            captured["options"] = options
+            return process
+
+        monkeypatch.setattr(
+            asyncio, "create_subprocess_exec", fake_create_subprocess_exec
+        )
+        await worker_module.launch_process(
+            expected_worker_command(),
+            Path("/repo/third_party/MediaCrawler"),
+            browser_profile_dir=profile,
+        )
+
+        options = captured["options"]
+        assert isinstance(options, dict)
+        environment = options["env"]
+        assert isinstance(environment, dict)
+        assert environment[worker_module.LONGTIAN_BROWSER_PROFILE_DIR_ENV] == str(
+            profile
+        )
+        assert (
+            environment[worker_module.LONGTIAN_BROWSER_PROFILE_DIR_ENV]
+            not in (captured["command"])
+        )
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    "profile", [Path("relative/profile"), Path("/"), Path("/repo/../daily")]
+)
+def test_worker_rejects_unsafe_profile_configuration(profile: Path) -> None:
+    async def progress(*_args: object) -> None:
+        return None
+
+    with pytest.raises(AuthWorkerError):
+        worker_module.PersistentAuthWorkerClient(
+            media_crawler_dir=Path("/repo/third_party/MediaCrawler"),
+            on_progress=progress,
+            on_session_disconnected=progress,
+            browser_profile_dir=profile,
+        )
+
+
 def test_owned_process_group_is_killed_after_grace_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1185,5 +1282,135 @@ def test_owned_process_group_is_killed_after_grace_timeout(
         await worker_module.terminate_owned_process_group(process, 0)
         assert sent_signals == [signal.SIGTERM, signal.SIGKILL]
         assert process.returncode == -9
+
+    asyncio.run(scenario())
+
+
+def test_owned_process_group_is_cleaned_after_worker_leader_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        process = FakeProcess()
+        process.finish(7)
+        sent_signals: list[signal.Signals] = []
+
+        def fake_send_group_signal(
+            target: FakeProcess, sent_signal: signal.Signals
+        ) -> None:
+            assert target is process
+            sent_signals.append(sent_signal)
+
+        monkeypatch.setattr(
+            worker_module, "_send_process_group_signal", fake_send_group_signal
+        )
+        group_states = iter((True, False))
+        monkeypatch.setattr(
+            worker_module,
+            "_process_group_exists",
+            lambda _pid: next(group_states, False),
+        )
+        await worker_module.terminate_owned_process_group(process, 0)
+        assert sent_signals == [signal.SIGTERM, signal.SIGKILL]
+
+    asyncio.run(scenario())
+
+
+def test_owned_process_group_rechecks_after_kill_when_child_still_settles(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        process = FakeProcess()
+        sent_signals: list[signal.Signals] = []
+
+        def fake_send_group_signal(
+            target: FakeProcess, sent_signal: signal.Signals
+        ) -> None:
+            assert target is process
+            sent_signals.append(sent_signal)
+            if sent_signal == signal.SIGKILL:
+                process.finish(-9)
+
+        # TERM leaves the leader/child group alive. The first KILL is observed
+        # while the child is still settling, then the second KILL proves exit.
+        # Keep the group present for the first bounded post-KILL poll so the
+        # terminator must retry KILL; the next poll observes that it settled.
+        group_states = iter((True, True, True, False))
+        monkeypatch.setattr(
+            worker_module, "_send_process_group_signal", fake_send_group_signal
+        )
+        monkeypatch.setattr(
+            worker_module,
+            "_process_group_exists",
+            lambda _pid: next(group_states, False),
+        )
+        await worker_module.terminate_owned_process_group(process, 0)
+        assert sent_signals == [signal.SIGTERM, signal.SIGKILL, signal.SIGKILL]
+        assert process.returncode == -9
+
+    asyncio.run(scenario())
+
+
+def test_graceful_shutdown_cleans_known_group_before_detaching() -> None:
+    async def scenario() -> None:
+        process = FakeProcess(connected_plan)
+        service, _, terminator = build_service(process)
+        await service.start_attempt("wb")
+        assert (await wait_for_terminal(service))["status"] == "connected"
+
+        await service.shutdown()
+
+        assert command_actions(process) == ["check", "shutdown"]
+        assert process.returncode == 0
+        assert terminator.calls == [(process, 0.01)]
+        assert service.worker._process is None
+
+    asyncio.run(scenario())
+
+
+def test_unsettled_worker_group_keeps_ownership_and_blocks_replacement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        first, replacement = FakeProcess(), FakeProcess()
+        service, launcher, terminator = build_service(first, replacement)
+        worker = service.worker
+        await worker._ensure_worker()
+
+        async def refuse_cleanup(process: FakeProcess, _grace: float) -> None:
+            assert process is first
+            raise worker_module.AuthWorkerError
+
+        monkeypatch.setattr(worker, "_process_group_terminator", refuse_cleanup)
+        try:
+            await worker.discard_session()
+            assert worker._process is first
+            with pytest.raises(worker_module.AuthWorkerError):
+                await worker._ensure_worker()
+            assert worker._process is first
+            assert len(launcher.calls) == 1
+        finally:
+            monkeypatch.setattr(worker, "_process_group_terminator", terminator)
+            await service.shutdown()
+        assert worker._process is None
+
+    asyncio.run(scenario())
+
+
+def test_owned_process_group_reports_unconfirmed_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def scenario() -> None:
+        process = FakeProcess()
+        process.finish(0)
+        signals: list[signal.Signals] = []
+        monkeypatch.setattr(
+            worker_module,
+            "_send_process_group_signal",
+            lambda target, value: signals.append(value),
+        )
+        monkeypatch.setattr(worker_module, "_process_group_exists", lambda _pid: True)
+        with pytest.raises(worker_module.AuthWorkerError):
+            await worker_module.terminate_owned_process_group(process, 0)
+        assert signals == [signal.SIGTERM, signal.SIGKILL, signal.SIGKILL]
 
     asyncio.run(scenario())

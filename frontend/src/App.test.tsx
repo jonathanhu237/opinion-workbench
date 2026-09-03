@@ -242,7 +242,7 @@ describe('Longtian public opinion application', () => {
     expect(mockedFetchMonitoringRules).not.toHaveBeenCalled()
   })
 
-  it('keeps only the seven real navigation destinations and marks them exactly', async () => {
+  it('keeps the eight real navigation destinations and marks them exactly', async () => {
     const user = userEvent.setup()
     const { router } = renderRoute()
 
@@ -252,15 +252,16 @@ describe('Longtian public opinion application', () => {
     ).toBeInTheDocument()
     const navigation = screen.getByRole('navigation', { name: '主导航' })
     const links = within(navigation).getAllByRole('link')
-    expect(links).toHaveLength(7)
+    expect(links).toHaveLength(8)
     expect(links.map((link) => link.textContent)).toEqual([
       '工作台',
       '平台账号',
       '监控规则',
       '自动任务',
-      '手工采集',
-      '结果与分析',
+      '舆情爬取',
+      '报告生成',
       'AI 配置',
+      '媒体缓存',
     ])
     const workbenchLink = within(navigation).getByRole('link', {
       name: '工作台',
@@ -319,18 +320,18 @@ describe('Longtian public opinion application', () => {
     expect(screen.getByRole('main')).toHaveAccessibleName('监控规则')
     expect(screen.getByRole('main')).toHaveFocus()
 
-    await user.click(within(navigation).getByRole('link', { name: '手工采集' }))
+    await user.click(within(navigation).getByRole('link', { name: '舆情爬取' }))
 
     await waitFor(() =>
       expect(router.state.location.pathname).toBe('/collection-runs'),
     )
     expect(
-      await screen.findByRole('heading', { name: '手工采集', level: 1 }),
+      await screen.findByRole('heading', { name: '舆情爬取', level: 1 }),
     ).toBeInTheDocument()
     expect(
-      within(navigation).getByRole('link', { name: '手工采集' }),
+      within(navigation).getByRole('link', { name: '舆情爬取' }),
     ).toHaveAttribute('aria-current', 'page')
-    expect(screen.getByRole('main')).toHaveAccessibleName('手工采集')
+    expect(screen.getByRole('main')).toHaveAccessibleName('舆情爬取')
     expect(screen.getByRole('main')).toHaveFocus()
 
     await user.click(within(navigation).getByRole('link', { name: 'AI 配置' }))
@@ -392,15 +393,16 @@ describe('Longtian public opinion application', () => {
       name: '主导航',
     })
     const links = within(navigation).getAllByRole('link')
-    expect(links).toHaveLength(7)
+    expect(links).toHaveLength(8)
     expect(links.map((link) => link.textContent)).toEqual([
       '工作台',
       '平台账号',
       '监控规则',
       '自动任务',
-      '手工采集',
-      '结果与分析',
+      '舆情爬取',
+      '报告生成',
       'AI 配置',
+      '媒体缓存',
     ])
     expect(within(dialog).getAllByRole('separator')).toHaveLength(1)
     expect(within(dialog).queryByText('单机值守模式')).toBeNull()
@@ -458,7 +460,7 @@ describe('Longtian public opinion application', () => {
     ).toBeInTheDocument()
     expect(
       screen.getByText(
-        '需要登录、扫码或安全验证时，请在打开的谷歌浏览器中完成。',
+        '需要登录、扫码或安全验证时，请在应用打开的专用谷歌浏览器中完成。首次使用需要在该窗口登录，登录状态会由浏览器保留。',
       ),
     ).toBeInTheDocument()
     expect(screen.getByText('登录状态', { exact: true })).toBeInTheDocument()
@@ -575,11 +577,18 @@ describe('Longtian public opinion application', () => {
 
   it.each([
     [
+      'checking',
+      'starting_browser',
+      '检查中',
+      '处理中…',
+      '正在启动应用专用的谷歌浏览器，请稍候。',
+    ],
+    [
       'action_required',
       'complete_login',
       '需要操作',
       '处理中…',
-      '请在当前打开的谷歌浏览器中登录微博。',
+      '请在应用打开的专用谷歌浏览器中登录微博。',
     ],
     ['connected', 'none', '已登录', '重新检查', null],
     [
@@ -587,14 +596,21 @@ describe('Longtian public opinion application', () => {
       'retry',
       '未登录',
       '重新检查',
-      '请在当前打开的谷歌浏览器中登录微博，然后重新检查。',
+      '请在应用打开的专用谷歌浏览器中登录微博，然后重新检查。',
     ],
     [
       'failed',
       'retry',
       '检查失败',
       '重新检查',
-      '检查失败。请确认已登录微博，然后重新检查。',
+      '检查未能完成，请重新检查；应用会在需要时启动专用的谷歌浏览器。',
+    ],
+    [
+      'failed',
+      'retry_browser',
+      '检查失败',
+      '重新检查',
+      '专用谷歌浏览器暂时不可用，请重新检查；应用会在需要时自动启动。',
     ],
   ] as const)(
     'renders the %s row status with contextual recovery guidance',
@@ -609,8 +625,14 @@ describe('Longtian public opinion application', () => {
       expect(
         screen.getByRole('button', { name: actionLabel }),
       ).toBeInTheDocument()
+      const platformRow = screen.getByText('微博').closest('li')
+      if (platformRow === null) {
+        throw new Error('微博 row was not rendered')
+      }
       if (recoveryMessage === null) {
-        expect(screen.queryByText(/当前打开的谷歌浏览器/)).toBeNull()
+        expect(
+          within(platformRow).queryByText(/应用打开的专用谷歌浏览器/),
+        ).toBeNull()
       } else {
         expect(screen.getByText(recoveryMessage)).toBeInTheDocument()
       }
@@ -691,10 +713,14 @@ describe('Longtian public opinion application', () => {
       expectedPlatforms,
     )
     expect(
-      screen.getByText('检查失败。请确认已登录微博，然后重新检查。'),
+      screen.getByText(
+        '检查未能完成，请重新检查；应用会在需要时启动专用的谷歌浏览器。',
+      ),
     ).toBeInTheDocument()
     expect(
-      screen.getByText('请在当前打开的谷歌浏览器中登录抖音，然后重新检查。'),
+      screen.getByText(
+        '请在应用打开的专用谷歌浏览器中登录抖音，然后重新检查。',
+      ),
     ).toBeInTheDocument()
   })
 

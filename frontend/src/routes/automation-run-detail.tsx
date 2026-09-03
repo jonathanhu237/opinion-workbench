@@ -37,6 +37,7 @@ import {
   firstFailedStage,
   isAutomationRunRetryable,
 } from '@/hooks/use-automation-workflows'
+import { useSearchBatch } from '@/hooks/use-search-batches'
 import {
   automationErrorMessage,
   cancelAutomationRun,
@@ -47,6 +48,7 @@ import {
   type AutomationRun,
   type AutomationStage,
 } from '@/lib/api/automation-workflows'
+import type { SearchBatchDetail } from '@/lib/api/search-batches'
 import { searchPlatformPresenters } from '@/routes/search-run-presenters'
 
 const stageLabels: Record<AutomationStage['name'], string> = {
@@ -125,16 +127,81 @@ function stageLinkLabel(stage: AutomationStage) {
   return '查看报告'
 }
 
-function failureMessage(failure: { code: string; message: string }) {
-  return failure.code === 'stage_failed' &&
-    ['自动任务阶段执行失败，请重试。', '自动任务阶段未完成。'].includes(
-      failure.message,
-    )
-    ? '这一步没有完成。'
-    : failure.message
+const legacyGenericFailureMessages = new Set([
+  '自动任务阶段执行失败，请重试。',
+  '自动任务阶段执行失败，请从失败阶段重试。',
+  '自动任务阶段未完成。',
+  '自动任务阶段未完成，请从失败阶段重试。',
+])
+
+const failureTitles: Record<string, string> = {
+  collection_browser_unavailable: '采集浏览器未就绪',
+  collection_browser_busy: '采集浏览器正忙',
+  collection_storage_unavailable: '采集数据暂时不可用',
+  collection_start_failed: '采集未启动',
+  collection_failed: '采集未完成',
+  initial_analysis_failed: '初步分析未完成',
+  topic_report_failed: '报告未生成',
 }
 
-function stageCounts(stage: AutomationStage) {
+function failurePresentation(
+  failure: { code: string; message: string },
+  stage: AutomationStage | null,
+) {
+  if (
+    stage &&
+    failure.code === 'stage_failed' &&
+    legacyGenericFailureMessages.has(failure.message)
+  ) {
+    if (stage.name === 'collection' && stage.child_id === null) {
+      return {
+        title: '采集未启动',
+        message:
+          '采集任务没有成功启动，旧记录未保留具体原因。请先到“平台账号”检查应用专用的谷歌浏览器与平台连接，然后再从采集阶段重试。',
+      }
+    }
+    if (stage.name === 'collection') {
+      return {
+        title: '采集未完成',
+        message:
+          '采集任务已经创建，但没有成功完成。请查看采集批次中的平台状态，处理后再从采集阶段重试。',
+      }
+    }
+    if (stage.name === 'initial_analysis') {
+      return {
+        title: '初步分析未完成',
+        message:
+          '本次初步分析没有完成。请检查 AI 配置和已保存的分析结果，然后再从初步分析阶段重试。',
+      }
+    }
+    return {
+      title: '报告未生成',
+      message:
+        '本次相关性判断与报告没有完成。请检查 AI 配置和已保存的报告记录，然后再从报告阶段重试。',
+    }
+  }
+  return {
+    title:
+      failureTitles[failure.code] ??
+      (stage ? `${stageLabels[stage.name]}未完成` : '本次运行未完成'),
+    message: failure.message,
+  }
+}
+
+function stageCounts(
+  stage: AutomationStage,
+  collectionBatch?: SearchBatchDetail,
+) {
+  if (
+    stage.name === 'collection' &&
+    stage.child_id === collectionBatch?.id &&
+    collectionBatch.status === 'paused_for_manual_action'
+  ) {
+    const completed = collectionBatch.items.filter(
+      (item) => item.status === 'completed',
+    ).length
+    return `已完成 ${completed} 个平台 · 待处理 ${collectionBatch.platform_count - completed} 个平台 · 共 ${collectionBatch.platform_count} 个平台`
+  }
   if (
     stage.input_count === 0 &&
     stage.success_count === 0 &&
@@ -264,6 +331,23 @@ export function AutomationRunDetail() {
   const runId = parseId(useParams().runId)
   const queryClient = useQueryClient()
   const runQuery = useAutomationRun(runId)
+  const projectedRun = runQuery.data
+  const projectedFailedStage = projectedRun
+    ? firstFailedStage(projectedRun)
+    : null
+  const projectedCollection = projectedRun?.stages.find(
+    (stage) => stage.name === 'collection',
+  )
+  const projectedCollectionId = projectedCollection?.child_id ?? null
+  const observeCollection =
+    projectedRun !== undefined &&
+    ((isAutomationRunActive(projectedRun) &&
+      projectedRun.active_stage === 'collection') ||
+      (isAutomationRunRetryable(projectedRun) &&
+        projectedFailedStage?.name === 'collection'))
+  const collectionBatchQuery = useSearchBatch(
+    observeCollection ? projectedCollectionId : null,
+  )
   const [action, setAction] = useState<Action>(null)
   const [feedback, setFeedback] = useState<string | null>(null)
   const mutation = useMutation({
@@ -370,13 +454,21 @@ export function AutomationRunDetail() {
   const active = isAutomationRunActive(run)
   const retryable = isAutomationRunRetryable(run)
   const failedStage = firstFailedStage(run)
-  const liveMessage = active
-    ? `正在${run.active_stage ? stageLabels[run.active_stage] : '等待执行'}。`
-    : run.status === 'completed'
-      ? runOutcome(run)
-      : run.error
-        ? ''
-        : runOutcome(run)
+  const pausedCollection =
+    collectionBatchQuery.data?.status === 'paused_for_manual_action'
+  const runFailure = run.error
+    ? failurePresentation(run.error, failedStage)
+    : null
+  const visibleOutcome = pausedCollection ? '等待处理' : runOutcome(run)
+  const liveMessage = pausedCollection
+    ? '采集已暂停，等待处理当前平台。'
+    : active
+      ? `正在${run.active_stage ? stageLabels[run.active_stage] : '等待执行'}。`
+      : run.status === 'completed'
+        ? runOutcome(run)
+        : run.error
+          ? ''
+          : runOutcome(run)
 
   return (
     <div className="space-y-6">
@@ -404,16 +496,23 @@ export function AutomationRunDetail() {
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge
                     variant={
-                      run.status === 'completed'
-                        ? 'secondary'
-                        : active
-                          ? 'default'
-                          : run.status === 'cancelled'
-                            ? 'outline'
-                            : 'destructive'
+                      pausedCollection
+                        ? 'outline'
+                        : run.status === 'completed'
+                          ? 'secondary'
+                          : active
+                            ? 'default'
+                            : run.status === 'cancelled'
+                              ? 'outline'
+                              : 'destructive'
+                    }
+                    className={
+                      pausedCollection
+                        ? 'border-warning/40 bg-warning/5 text-foreground'
+                        : undefined
                     }
                   >
-                    {runOutcome(run)}
+                    {visibleOutcome}
                   </Badge>
                   <Badge variant="outline">
                     {run.trigger === 'manual' ? '立即运行' : '按计划'}
@@ -477,16 +576,70 @@ export function AutomationRunDetail() {
             >
               {feedback ?? liveMessage}
             </p>
-            {run.error && (
-              <p
+            {pausedCollection && projectedCollectionId !== null && (
+              <div className="rounded-xl border border-warning/35 bg-warning/5 p-4 text-sm leading-6">
+                <div className="flex gap-3">
+                  <PauseCircle
+                    className="mt-0.5 size-5 shrink-0 text-warning"
+                    aria-hidden
+                  />
+                  <div className="min-w-0">
+                    <p className="font-medium">采集已暂停，需要处理</p>
+                    <p className="mt-1 text-muted-foreground">
+                      已完成平台的采集结果和当前平台的续采位置都已保留。
+                      {active
+                        ? '请进入采集批次处理当前平台；处理完成后，本次自动任务会自动继续初步分析。'
+                        : '这条旧运行已被标记为失败。请先从失败阶段重试，系统会重新接管同一个采集批次；再处理当前平台，完成后会自动继续初步分析。'}
+                    </p>
+                    <Link
+                      className={buttonVariants({
+                        variant: 'outline',
+                        size: 'sm',
+                        className: 'mt-3 min-h-9',
+                      })}
+                      to={`/collection-batches/${projectedCollectionId}`}
+                    >
+                      处理采集批次
+                      <ArrowUpRight aria-hidden />
+                    </Link>
+                  </div>
+                </div>
+              </div>
+            )}
+            {run.error && runFailure && !pausedCollection && (
+              <div
                 role="alert"
-                className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm leading-6 text-destructive"
+                className="rounded-xl border border-destructive/30 bg-destructive/5 p-4 text-sm leading-6"
               >
-                {failureMessage(run.error)}
-                {failedStage
-                  ? ` 可从“${stageLabels[failedStage.name]}”重试。`
-                  : ''}
-              </p>
+                <div className="flex gap-3">
+                  <AlertCircle
+                    className="mt-0.5 size-5 shrink-0 text-destructive"
+                    aria-hidden
+                  />
+                  <div className="min-w-0">
+                    <p className="font-medium text-destructive">
+                      {runFailure.title}
+                    </p>
+                    <p className="mt-1 text-muted-foreground">
+                      {runFailure.message}
+                    </p>
+                    {failedStage?.name === 'collection' &&
+                      failedStage.child_id === null && (
+                        <Link
+                          className={buttonVariants({
+                            variant: 'link',
+                            size: 'sm',
+                            className: 'mt-2 h-auto min-h-8 px-0',
+                          })}
+                          to="/platform-accounts"
+                        >
+                          检查平台连接
+                          <ArrowUpRight aria-hidden />
+                        </Link>
+                      )}
+                  </div>
+                </div>
+              </div>
             )}
             {run.outcome === 'no_new_sources' && (
               <div className="rounded-lg border border-primary/20 bg-primary/5 p-4 text-sm leading-6">
@@ -513,12 +666,20 @@ export function AutomationRunDetail() {
             >
               {run.stages.map((stage, index) => {
                 const link = stageLink(stage)
-                const counts = stageCounts(stage)
+                const counts = stageCounts(stage, collectionBatchQuery.data)
                 const previousAttempts = run.attempts.filter(
                   (attempt) =>
                     attempt.name === stage.name &&
                     attempt.attempt_number < stage.attempt_number,
                 )
+                const stageFailure = stage.error
+                  ? failurePresentation(stage.error, stage)
+                  : null
+                const stageFailureIsRunSummary =
+                  stage.error !== null &&
+                  run.error?.code === stage.error.code &&
+                  run.error.message === stage.error.message &&
+                  failedStage?.name === stage.name
                 return (
                   <li
                     key={`${stage.name}-${stage.attempt_number}`}
@@ -585,13 +746,18 @@ export function AutomationRunDetail() {
                           {stageUsage(stage)}
                         </span>
                       </div>
-                      {stage.error && (
-                        <p
+                      {stageFailure && !stageFailureIsRunSummary && (
+                        <div
                           role="alert"
-                          className="mt-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm leading-6 text-destructive"
+                          className="mt-3 rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm leading-6"
                         >
-                          {failureMessage(stage.error)}
-                        </p>
+                          <p className="font-medium text-destructive">
+                            {stageFailure.title}
+                          </p>
+                          <p className="mt-1 text-muted-foreground">
+                            {stageFailure.message}
+                          </p>
+                        </div>
                       )}
                       {previousAttempts.length > 0 && (
                         <details className="mt-3 rounded-lg border bg-muted/20 p-3 text-sm">
@@ -615,7 +781,11 @@ export function AutomationRunDetail() {
                                 <p className="mt-1">{stageUsage(attempt)}</p>
                                 {stageCounts(attempt) && (
                                   <p className="mt-1">
-                                    处理结果：{stageCounts(attempt)}
+                                    处理结果：
+                                    {stageCounts(
+                                      attempt,
+                                      collectionBatchQuery.data,
+                                    )}
                                   </p>
                                 )}
                                 {attempt.child_id !== null && (
@@ -623,7 +793,12 @@ export function AutomationRunDetail() {
                                 )}
                                 {attempt.error && (
                                   <p className="mt-1 text-destructive">
-                                    {failureMessage(attempt.error)}
+                                    {
+                                      failurePresentation(
+                                        attempt.error,
+                                        attempt,
+                                      ).message
+                                    }
                                   </p>
                                 )}
                               </li>

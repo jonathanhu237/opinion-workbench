@@ -16,8 +16,10 @@ from longtian_api.services.automation_workflows import AutomationWorkflowService
 from longtian_api.services.content_analyses import ContentAnalysisService
 from longtian_api.services.content_enrichment import ContentEnrichmentService
 from longtian_api.services.enrichment_staging import MediaSpool
+from longtian_api.services.media_cache import MediaCache
 from longtian_api.services.monitoring_rules import MonitoringRuleService
 from longtian_api.services.platform_connections import PlatformConnectionService
+from longtian_api.services.report_generations import ReportGenerationService
 from longtian_api.services.results import ResultsService
 from longtian_api.services.search_batches import SearchBatchService
 from longtian_api.services.search_runs import SearchRunService
@@ -117,6 +119,10 @@ def create_app(
                     spool=MediaSpool(batch_database.path.parent / "media"),
                 )
             )
+            media_cache = MediaCache(batch_database)
+            enrichment_service.media_cache = media_cache
+            application.state.media_cache = media_cache
+            media_retention = media_cache.retention
             summary_service = SummaryService(
                 database=batch_database,
                 ai_settings=ai_settings_service,
@@ -151,6 +157,11 @@ def create_app(
                 )
             )
             await run_in_threadpool(topic_report_service.initialize)
+            report_generation_service = ReportGenerationService(
+                batch_database, analyses=content_analysis_service,
+                reports=topic_report_service, ai_settings=ai_settings_service,
+            )
+            await run_in_threadpool(report_generation_service.initialize)
             # Automatic progression belongs exclusively to the fixed workflow
             # owner.  The domain services remain independently callable; their
             # historical callback attributes are deliberately inert.
@@ -175,6 +186,7 @@ def create_app(
             application.state.analysis_settings_service = analysis_settings_service
             application.state.content_analysis_service = content_analysis_service
             application.state.topic_report_service = topic_report_service
+            application.state.report_generation_service = report_generation_service
             application.state.workbench_service = WorkbenchService(
                 batch_database,
                 automation_available=automation_workflow_available,
@@ -189,6 +201,7 @@ def create_app(
             application.state.automation_workflow_service = automation_workflow_service
             await search_batch_service.resume_after_startup()
             await automation_workflow_service.start()
+            media_retention.start()
             yield
         finally:
             # Stop timer admission first; drain every owner even after a failure.
@@ -196,6 +209,8 @@ def create_app(
             await _shutdown_services(
                 [
                     scope.get("automation_workflow_service"),
+                    scope.get("media_retention"),
+                    scope.get("report_generation_service"),
                     scope.get("content_analysis_service"),
                     scope.get("topic_report_service"),
                     scope.get("summary_service"),

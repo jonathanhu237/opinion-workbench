@@ -307,6 +307,7 @@ export type SearchBatchControl = {
 export type SearchBatchRecovery = Omit<SearchBatchControl, 'item_position'>
 
 type ProductErrorCode =
+  | 'search_platform_not_available'
   | 'invalid_request'
   | 'monitoring_rule_not_found'
   | 'monitoring_rule_disabled'
@@ -331,6 +332,10 @@ const productErrorContracts: Record<
   { status: number; message: string }
 > = {
   invalid_request: { status: 422, message: '请求内容不正确。' },
+  search_platform_not_available: {
+    status: 409,
+    message: '该平台尚未接入当前采集器，历史内容仍可查看。',
+  },
   monitoring_rule_not_found: { status: 404, message: '未找到该监控规则。' },
   monitoring_rule_disabled: {
     status: 409,

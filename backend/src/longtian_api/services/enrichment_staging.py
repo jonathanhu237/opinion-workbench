@@ -137,6 +137,32 @@ class MediaOperation:
         self._directory_identity = os.fstat(directory_fd)
         self._closed = False
 
+    def write_asset(self, handle: str, data: bytes) -> None:
+        """Write only a new opaque file in this descriptor-owned scope."""
+        from longtian_api.services.enrichment_models import MAX_MEDIA_BYTES
+
+        try:
+            validate_handle(handle)
+            self._check_identity()
+            if type(data) is not bytes or not 0 < len(data) <= MAX_MEDIA_BYTES:
+                raise MediaStagingError
+            fd = os.open(
+                handle,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=self._directory_fd,
+            )
+            try:
+                with os.fdopen(fd, "wb", closefd=False) as target:
+                    target.write(data)
+                    target.flush()
+                    os.fsync(fd)
+            finally:
+                os.close(fd)
+            self._check_identity()
+        except (OSError, ValueError, EnrichmentValidationError):
+            raise MediaStagingError from None
+
     def _check_identity(self) -> None:
         if self._closed:
             raise MediaStagingError

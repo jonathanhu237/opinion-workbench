@@ -11,6 +11,7 @@ import {
   fetchAnalysisAttempt,
   fetchAnalysisJob,
   fetchAnalysisJobItems,
+  fetchAnalysisJobs,
   fetchResultAnalyses,
   startContentAnalysis,
   understandingSchema,
@@ -56,6 +57,47 @@ describe('initial analysis HTTP contract', () => {
       json({ job: null, admitted_count: 0, already_active_count: 8 }, 202),
     )
     expect((await startContentAnalysis(analysisRequest)).job).toBeNull()
+  })
+  it.each([
+    ['legacy automatic job', null],
+    ['automatic workflow replay job', '0f4d6c3a-5b7e-4a91-8c2d-1e3f5a7b9c0d'],
+  ] as const)(
+    'accepts %s in both list and detail responses',
+    async (_, requestId) => {
+      const job = analysisJobFixture({
+        trigger: 'automatic',
+        request_id: requestId,
+      })
+      fetchMock.mockResolvedValueOnce(
+        json({ jobs: [job], next_before_id: null }),
+      )
+      expect((await fetchAnalysisJobs(signal)).jobs[0].request_id).toBe(
+        requestId,
+      )
+      fetchMock.mockResolvedValueOnce(json(job))
+      expect((await fetchAnalysisJob(job.id, signal)).request_id).toBe(
+        requestId,
+      )
+    },
+  )
+  it.each([
+    [
+      'automatic job with an invalid request ID',
+      {
+        ...analysisJobFixture(),
+        trigger: 'automatic' as const,
+        request_id: 'not-a-uuid',
+      },
+    ],
+    [
+      'manual job without a request ID',
+      { ...analysisJobFixture(), trigger: 'manual' as const, request_id: null },
+    ],
+  ] as const)('rejects %s at the detail boundary', async (_, job) => {
+    fetchMock.mockResolvedValue(json(job))
+    await expect(fetchAnalysisJob(job.id, signal)).rejects.toMatchObject({
+      code: 'invalid_response',
+    })
   })
   it('requires the returned prompt source to match a custom submission', async () => {
     const request = {
@@ -181,6 +223,32 @@ describe('initial analysis HTTP contract', () => {
       duration_ms: 1000,
       audio_track: 'present',
     }
+    const pureImage = {
+      ...item,
+      input: {
+        ...item.input,
+        text: { title: '', body: '', coverage: 'complete' },
+        detected_modalities: ['text', 'image'],
+        assets: [image],
+        coverage: {
+          schema_version: 'evidence-coverage-v1',
+          input_contract_version: 'analysis-evidence-v2',
+          level: 'validated_media',
+          text_origin: 'detail',
+          text_available: false,
+          text_complete: false,
+          text: { expected: 1, ready: 0, failed: 1, unknown: 0 },
+          image: { expected: 1, ready: 1, failed: 0, unknown: 0 },
+          video: { expected: 0, ready: 0, failed: 0, unknown: 0 },
+          audio: { expected: 0, ready: 0, failed: 0, unknown: 0 },
+          issues: [],
+        },
+      },
+    }
+    fetchMock.mockResolvedValueOnce(json(pureImage))
+    expect(
+      (await fetchAnalysisAttempt(21, signal)).input?.coverage?.level,
+    ).toBe('validated_media')
     for (const inventory of [
       { detected_modalities: ['text', 'image'], assets: [image] },
       { detected_modalities: ['text', 'video', 'audio'], assets: [video] },

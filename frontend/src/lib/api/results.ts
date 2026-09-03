@@ -35,6 +35,13 @@ export const resultStateSchema = z.enum([
   'legacy_completed',
   'legacy_attempted',
 ])
+const materialSchema = z.strictObject({
+  text_available: z.boolean(),
+  image_count: safeCount,
+  video_count: safeCount,
+  inventory_complete: z.boolean(),
+  missing: z.boolean(),
+})
 const resultSchema = z
   .strictObject({
     id: safeId,
@@ -46,6 +53,7 @@ const resultSchema = z
     latest_attempt_id: safeId.nullable(),
     active_job_id: safeId.nullable(),
     legacy_count: safeCount,
+    material: materialSchema.nullable().optional(),
   })
   .refine(
     (value) =>

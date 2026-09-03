@@ -298,6 +298,7 @@ class SearchBatchService:
         return await settle(self._start_batch(payload))
 
     async def _start_batch(self, payload: SearchBatchCreate) -> SearchBatchDetail:
+        self._require_platforms(payload.platforms)
         rule = await self._load_rule(payload.monitoring_rule_id)
         requested = set(payload.platforms)
         platforms = tuple(
@@ -328,6 +329,16 @@ class SearchBatchService:
             self._active_owner = owner
             self._current_task = self._create_runner(record.id, owner)
         return _to_detail(record)
+
+    def _require_platforms(self, platforms):
+        if any(
+            not self._search_runs.supports_platform(platform) for platform in platforms
+        ):
+            raise SearchBatchError(
+                status_code=409,
+                code="search_platform_not_available",
+                message="该平台尚未接入当前采集器，历史内容仍可查看。",
+            )
 
     async def _load_rule(self, rule_id: int) -> MonitoringRule:
         try:
@@ -516,6 +527,14 @@ class SearchBatchService:
                 and not record.items[payload.item_position].checkpoint.available
             ):
                 raise _repository_error(SearchBatchRecoveryUnavailableError())
+            self._require_platforms(
+                [
+                    item.platform
+                    for item in record.items
+                    if item.status == "queued"
+                    or (not skip and item.position == payload.item_position)
+                ]
+            )
             self._control_task = asyncio.current_task()
             manual = self._manual_task
             platform = record.items[payload.item_position].platform
@@ -553,6 +572,7 @@ class SearchBatchService:
             self._require_owner(batch_id)
             if self._control_task is not None or self._manual_task is not None:
                 raise _browser_operation_active()
+            self._require_platforms([record.items[payload.item_position].platform])
             task = asyncio.create_task(
                 self._search_runs.manual_page(
                     record.items[payload.item_position].platform, "show"
@@ -584,6 +604,9 @@ class SearchBatchService:
     async def _recover_item(
         self, batch_id: int, position: int, payload: SearchBatchRecover
     ) -> SearchBatchDetail:
+        previous = await self._call(self._repository.get, batch_id)
+        if 0 <= position < len(previous.items):
+            self._require_platforms([previous.items[position].platform])
         owner = BrowserOperationOwner("search_batch", uuid4())
         async with self._lock:
             if self._shutdown_started or self._active_batch_id is not None:
@@ -779,6 +802,8 @@ def _to_run_summary(record: SearchRunRecord) -> SearchRunSummary:
         term_count=len(record.terms),
         max_results_per_term=record.max_results_per_term,
         status=record.status,
+        failure_reason=record.failure_reason,
+        execution_limit=record.execution_limit,
         current_term_position=record.current_term_position,
         new_count=record.new_count,
         repeated_count=record.repeated_count,

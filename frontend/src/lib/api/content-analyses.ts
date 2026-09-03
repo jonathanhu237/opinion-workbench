@@ -170,11 +170,12 @@ const savedInputSchema = z
       const preview = input.extractor_version.endsWith('-search-preview-v1')
       if (
         input.coverage.text_available !== textAvailable ||
-        input.coverage.text_complete !== (input.text.coverage === 'complete') ||
+        input.coverage.text_complete !==
+          (textAvailable && input.text.coverage === 'complete') ||
         input.coverage.text.ready !== (textAvailable ? 1 : 0) ||
         input.coverage.text.failed !== (textAvailable ? 0 : 1) ||
         (input.coverage.text_origin === 'search_preview') !== preview ||
-        (input.status === 'ready') !==
+        (input.status === 'ready' && textAvailable) !==
           (input.coverage.level === 'full_source') ||
         (preview &&
           (input.status === 'ready' ||
@@ -343,9 +344,7 @@ export const analysisJobSchema = z
         job.counts.queued + job.counts.acquiring + job.counts.analysing ===
           0) &&
       (job.status === 'completed') === (job.completion_event_id !== null) &&
-      (job.trigger === 'manual'
-        ? job.request_id !== null
-        : job.request_id === null) &&
+      (job.trigger === 'manual' ? job.request_id !== null : true) &&
       job.usage.attempted_requests <= job.counts.total,
   )
 

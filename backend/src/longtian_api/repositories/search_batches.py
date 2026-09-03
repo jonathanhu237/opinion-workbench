@@ -581,7 +581,8 @@ class SearchBatchRepository:
                 (timestamp, batch_id),
             )
             connection.execute(
-                """UPDATE search_runs SET status = 'cancelled', finished_at = ?
+                """UPDATE search_runs SET status = 'cancelled', failure_reason = NULL,
+                   finished_at = ?
                    WHERE status IN ('queued','running') AND id IN (
                      SELECT search_run_id FROM search_batch_attempts WHERE batch_id = ?
                    )""",
@@ -853,7 +854,8 @@ def _settle_unfinished_attempts(
         (batch_id,),
     )
     connection.execute(
-        """UPDATE search_runs SET status = 'internal_error', finished_at = ?
+        """UPDATE search_runs SET status = 'internal_error', failure_reason = NULL,
+           finished_at = ?
            WHERE status IN ('queued','running') AND id IN (
              SELECT search_run_id FROM search_batch_attempts WHERE batch_id = ?
            )""",

@@ -610,7 +610,7 @@ def test_migration_preserves_history_backfills_empty_terms_and_audits_old_recove
     assert recovered.items[0].latest_attempt.run.status == "structure_changed"
     with database.connect() as connection:
         after = [
-            tuple(row)[:-2] for row in connection.execute("SELECT * FROM search_runs")
+            tuple(row)[:-4] for row in connection.execute("SELECT * FROM search_runs")
         ]
         assert before == after
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []

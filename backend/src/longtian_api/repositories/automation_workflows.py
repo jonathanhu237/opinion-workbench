@@ -458,7 +458,7 @@ class AutomationWorkflowRepository:
     def prepare_recovered_stage(
         self, run_id: int, stage: AutomationStageName
     ) -> AutomationRunRecord:
-        """Make one proven settled child projectable without a new admission."""
+        """Make one proven reusable child projectable without a new admission."""
         with self._connection(write=True) as connection:
             run = _read_run(connection, run_id)
             if run.status not in ACTIVE_RUN_STATUSES:
@@ -912,7 +912,11 @@ class AutomationWorkflowRepository:
         request_id: str,
         request_intent_hash: str,
         now: datetime,
+        reuse_child_kind: str | None = None,
+        reuse_child_id: int | None = None,
     ) -> AutomationRunRecord:
+        if (reuse_child_kind is None) != (reuse_child_id is None):
+            raise ValueError("retry child kind and id must be provided together")
         timestamp = _utc(now)
         with self._connection(write=True) as connection:
             run = _read_run(connection, run_id)
@@ -939,11 +943,22 @@ class AutomationWorkflowRepository:
                 previous = _latest_attempt(connection, run_id, next_stage)
                 number = previous.attempt_number + 1 if previous else 1
                 key = f"{run.admission_key}:{next_stage}:{number}:{request_id}"
+                child_kind = reuse_child_kind if next_stage == stage else None
+                child_id = reuse_child_id if next_stage == stage else None
                 connection.execute(
                     """INSERT INTO automation_stage_attempts(
-                      run_id,stage,attempt_number,operation_key,status,created_at)
-                      VALUES (?,?,?,?,'queued',?)""",
-                    (run_id, next_stage, number, key, timestamp),
+                      run_id,stage,attempt_number,operation_key,status,child_kind,
+                      child_id,created_at)
+                      VALUES (?,?,?,?,'queued',?,?,?)""",
+                    (
+                        run_id,
+                        next_stage,
+                        number,
+                        key,
+                        child_kind,
+                        child_id,
+                        timestamp,
+                    ),
                 )
             status = {
                 "collection": "collecting",
@@ -1368,10 +1383,7 @@ def _read_snapshot(
             snapshot.initial_prompt_version_id,
             mode="legacy",
         )
-    if (
-        snapshot.report_prompt is None
-        and snapshot.report_prompt_version_id is not None
-    ):
+    if snapshot.report_prompt is None and snapshot.report_prompt_version_id is not None:
         updates["report_prompt"] = PromptSnapshot(
             mode="legacy",
             version_id=snapshot.report_prompt_version_id,

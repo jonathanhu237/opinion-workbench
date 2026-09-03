@@ -238,9 +238,16 @@ class EvidenceCoverage(StrictModel):
             ),
         )
         issues = list(dict.fromkeys(issue.code for issue in content.issues))
+        if content.text.coverage != "complete" and not any(
+            code in issues
+            for code in ("text_incomplete", "text_unavailable", "text_limit")
+        ):
+            issues.append("text_incomplete")
+        if not content.media_inventory_complete and "inventory_unknown" not in issues:
+            issues.append("inventory_unknown")
         if content.status != "ready" and not issues:
             issues = ["text_incomplete"]
-        if content.status == "ready":
+        if content.status == "ready" and text_available:
             level: EvidenceLevel = "full_source"
         elif text_available and content.extractor_version.endswith("-enrichment-v1"):
             level = "detail_text"
@@ -254,7 +261,7 @@ class EvidenceCoverage(StrictModel):
             level=level,
             text_origin="detail",
             text_available=text_available,
-            text_complete=content.text.coverage == "complete",
+            text_complete=text_available and content.text.coverage == "complete",
             text=text,
             image=image,
             video=video,
@@ -308,11 +315,14 @@ class EvidenceCoverage(StrictModel):
         )
         inventory_unknown = not value.media_inventory_complete
         issues = list(dict.fromkeys(value.issues))
-        if text.coverage != "complete" and "text_incomplete" not in issues:
+        if text.coverage != "complete" and not any(
+            code in issues
+            for code in ("text_incomplete", "text_unavailable", "text_limit")
+        ):
             issues.append("text_incomplete")
         if inventory_unknown and "inventory_unknown" not in issues:
             issues.append("inventory_unknown")
-        if value.status == "ready":
+        if value.status == "ready" and text_available:
             level: EvidenceLevel = "full_source"
         elif value.extractor_version.endswith("-enrichment-v1") and text_available:
             level = "detail_text"
@@ -330,7 +340,7 @@ class EvidenceCoverage(StrictModel):
                 else "search_preview"
             ),
             text_available=text_available,
-            text_complete=text.coverage == "complete",
+            text_complete=text_available and text.coverage == "complete",
             text=EvidenceModalityCoverage(
                 expected=1,
                 ready=1 if text_available else 0,

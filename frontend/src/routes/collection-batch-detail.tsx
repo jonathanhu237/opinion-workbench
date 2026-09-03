@@ -143,7 +143,10 @@ function AttemptHistory({
               >
                 <span>
                   第 {attempt.attempt_number} 次 ·{' '}
-                  {searchRunStatusLabel(attempt.run.status)}
+                  {searchRunStatusLabel(
+                    attempt.run.status,
+                    attempt.run.failure_reason,
+                  )}
                 </span>
                 <Link
                   className={buttonVariants({ variant: 'ghost', size: 'sm' })}
@@ -225,7 +228,8 @@ function BatchRail({
                       item.status !== 'running' &&
                       item.status !== 'queued' && (
                         <p className="mt-2 text-sm text-muted-foreground">
-                          最近一次尝试：{searchRunStatusLabel(run.status)}
+                          最近一次尝试：
+                          {searchRunStatusLabel(run.status, run.failure_reason)}
                         </p>
                       )}
                     {item.completion_basis === 'confirmed_terms' && (

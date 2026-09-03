@@ -15,9 +15,22 @@ export function isValidAnalysisProse(value: string) {
   )
 }
 export const ANALYSIS_ERROR_CONTRACTS = {
+  media_cache_policy_conflict: {
+    status: 409,
+    message: '媒体策略已改变，请刷新后重新确认。',
+  },
   ...AI_ERROR_CONTRACTS,
   result_not_found: { status: 404, message: '未找到采集内容。' },
   content_analysis_not_found: { status: 404, message: '未找到初步分析记录。' },
+  report_generation_not_found: { status: 404, message: '未找到报告生成任务。' },
+  report_generation_active: {
+    status: 409,
+    message: '已有报告正在生成，请等待当前任务结束后再提交。',
+  },
+  no_eligible_contents: {
+    status: 409,
+    message: '当前没有符合所选规则的待分析内容，请刷新后重新选择。',
+  },
   analysis_prompt_changed: {
     status: 409,
     message: '提示词已更新，请刷新后重试。',

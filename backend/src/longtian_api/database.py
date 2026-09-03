@@ -4,7 +4,7 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
-CURRENT_DATABASE_VERSION = 18
+CURRENT_DATABASE_VERSION = 25
 DEFAULT_RULE_NAME = "龙田街道及四个社区"
 DEFAULT_RULE_TERMS = (
     "龙田街道",
@@ -106,6 +106,25 @@ class Database:
                 version = 17
             if version < 18:
                 _migrate_to_version_18(connection)
+                version = 18
+            if version < 19:
+                _migrate_to_version_19(connection)
+                version = 19
+            if version < 20:
+                _migrate_to_version_20(connection)
+                version = 20
+            if version < 21:
+                _migrate_to_version_21(connection)
+                version = 21
+            if version < 22:
+                _migrate_to_version_22(connection)
+            if version < 23:
+                _migrate_to_version_23(connection)
+            if version < 24:
+                _migrate_to_version_24(connection)
+                version = 24
+            if version < 25:
+                _migrate_to_version_25(connection)
         finally:
             connection.close()
 
@@ -242,6 +261,183 @@ def _migrate_to_version_18(connection: sqlite3.Connection) -> None:
         if connection.in_transaction:
             connection.execute("ROLLBACK")
         raise
+
+
+def _migrate_to_version_19(connection: sqlite3.Connection) -> None:
+    """Add structured search failure diagnostics without rewriting runs."""
+    from longtian_api.migrations.search_runs_v19 import migrate
+
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        version = _read_user_version(connection)
+        if version >= 19:
+            connection.execute("COMMIT")
+            return
+        if version != 18:
+            raise DatabaseVersionError("Unsupported database migration source version.")
+        migrate(connection)
+        connection.execute("PRAGMA user_version = 19")
+        connection.execute("COMMIT")
+    except BaseException:
+        if connection.in_transaction:
+            connection.execute("ROLLBACK")
+        raise
+
+
+def _migrate_to_version_24(connection: sqlite3.Connection) -> None:
+    from longtian_api.migrations.media_cache_v24 import migrate
+
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        version = _read_user_version(connection)
+        if version < 24:
+            if version != 23:
+                raise DatabaseVersionError(
+                    "Unsupported database migration source version."
+                )
+            migrate(connection)
+            connection.execute("PRAGMA user_version = 24")
+        connection.execute("COMMIT")
+    except BaseException:
+        if connection.in_transaction:
+            connection.execute("ROLLBACK")
+        raise
+
+
+def _migrate_to_version_25(connection: sqlite3.Connection) -> None:
+    """Persist the user-facing name of a manual report generation."""
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        version = _read_user_version(connection)
+        if version < 25:
+            if version != 24:
+                raise DatabaseVersionError(
+                    "Unsupported database migration source version."
+                )
+            columns = {
+                row[1]
+                for row in connection.execute("PRAGMA table_info(report_generations)")
+            }
+            if "name" not in columns:
+                connection.execute(
+                    "ALTER TABLE report_generations ADD COLUMN name TEXT"
+                )
+            connection.execute(
+                "UPDATE report_generations SET name=? "
+                "WHERE name IS NULL OR trim(name)=''",
+                ("",),
+            )
+            connection.execute(
+                """CREATE TRIGGER IF NOT EXISTS report_generation_name_immutable
+                BEFORE UPDATE OF name ON report_generations
+                WHEN NEW.name IS NOT OLD.name
+                BEGIN SELECT RAISE(ABORT, 'immutable report generation name'); END"""
+            )
+            connection.execute("PRAGMA user_version = 25")
+        connection.execute("COMMIT")
+    except BaseException:
+        if connection.in_transaction:
+            connection.execute("ROLLBACK")
+        raise
+
+
+def _migrate_to_version_23(connection: sqlite3.Connection) -> None:
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        version = _read_user_version(connection)
+        if version < 23:
+            if version != 22:
+                raise DatabaseVersionError(
+                    "Unsupported database migration source version."
+                )
+            connection.execute("""
+                ALTER TABLE report_generations ADD COLUMN pause_reason TEXT
+                CHECK(pause_reason IS NULL OR pause_reason IN ('login_required',
+                'manual_challenge_required','platform_blocked_or_rate_limited'))""")
+            connection.execute("""
+                ALTER TABLE report_generations ADD COLUMN pause_attempt_id
+                INTEGER REFERENCES content_analysis_attempts(id)""")
+            connection.execute("""
+                ALTER TABLE report_generations ADD COLUMN control_revision
+                INTEGER NOT NULL DEFAULT 0 CHECK(control_revision>=0)""")
+            connection.execute("PRAGMA user_version = 23")
+        connection.execute("COMMIT")
+    except BaseException:
+        if connection.in_transaction:
+            connection.execute("ROLLBACK")
+        raise
+
+
+def _migrate_to_version_22(connection: sqlite3.Connection) -> None:
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        version = _read_user_version(connection)
+        if version < 22:
+            if version != 21:
+                raise DatabaseVersionError(
+                    "Unsupported database migration source version."
+                )
+            connection.execute("""
+                ALTER TABLE search_runs ADD COLUMN execution_limit TEXT
+                CHECK (execution_limit IS NULL OR (status = 'timed_out' AND
+                  execution_limit IN ('requests','pages','time')))""")
+            connection.execute("PRAGMA user_version = 22")
+        connection.execute("COMMIT")
+    except BaseException:
+        if connection.in_transaction:
+            connection.execute("ROLLBACK")
+        raise
+
+
+def _migrate_to_version_21(connection: sqlite3.Connection) -> None:
+    from longtian_api.migrations.report_generations_v21 import migrate
+
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        version = _read_user_version(connection)
+        if version < 21:
+            if version != 20:
+                raise DatabaseVersionError(
+                    "Unsupported database migration source version."
+                )
+            migrate(connection)
+            connection.execute("PRAGMA user_version = 21")
+        connection.execute("COMMIT")
+    except BaseException:
+        if connection.in_transaction:
+            connection.execute("ROLLBACK")
+        raise
+
+
+def _migrate_to_version_20(connection: sqlite3.Connection) -> None:
+    from longtian_api.migrations.manual_reports_v20 import migrate
+
+    foreign_keys = connection.execute("PRAGMA foreign_keys").fetchone()[0]
+    legacy_alter = connection.execute("PRAGMA legacy_alter_table").fetchone()[0]
+    try:
+        connection.execute("PRAGMA foreign_keys = OFF")
+        connection.execute("PRAGMA legacy_alter_table = ON")
+        connection.execute("BEGIN IMMEDIATE")
+        version = _read_user_version(connection)
+        if version < 20:
+            if version != 19:
+                raise DatabaseVersionError(
+                    "Unsupported database migration source version."
+                )
+            migrate(connection)
+            if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
+                raise sqlite3.DatabaseError(
+                    "Foreign key check failed after v20 migration"
+                )
+            connection.execute("PRAGMA user_version = 20")
+        connection.execute("COMMIT")
+    except BaseException:
+        if connection.in_transaction:
+            connection.execute("ROLLBACK")
+        raise
+    finally:
+        connection.execute(f"PRAGMA foreign_keys = {int(foreign_keys)}")
+        connection.execute(f"PRAGMA legacy_alter_table = {int(legacy_alter)}")
 
 
 def _migrate_to_version_13(connection: sqlite3.Connection) -> None:

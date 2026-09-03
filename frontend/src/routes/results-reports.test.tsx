@@ -169,7 +169,9 @@ describe('automatic second-stage report views', () => {
         : { reports: [reportFixture()], next_before_id: null },
     )
     const first = renderReports()
-    expect(await screen.findByText(/本任务还没有报告/)).toBeVisible()
+    expect(
+      await screen.findByText(/此历史单条处理任务没有关联报告/),
+    ).toBeVisible()
     assertNoMutation()
     empty = false
     expect(

@@ -43,6 +43,13 @@ const failureMessages = {
   source_active: '采集任务尚未结束，请结束后再试。',
   browser_operation_active: '谷歌浏览器正在执行其他操作，请结束后再试。',
   acquisition_failed: '未能获取完整内容，请检查平台登录状态后重试。',
+  source_content_unavailable: '原帖已删除或不可读取，未使用搜索摘要代替正文。',
+  platform_not_supported:
+    '该平台尚未接入正文和媒体补全；已有内容及成功总结仍可使用。',
+  source_structure_changed: '原文返回结构无法识别，未提交模型。',
+  acquisition_timed_out: '原文获取超过本次时限，未自动重试。',
+  stored_content_unavailable:
+    '已保存材料不足以分析，且此获取路径尚未接入；未访问平台账号。',
   invalid_enrichment: '获取的内容格式无法识别，本条未调用模型。',
   unsupported_model: '当前模型配置的媒体输入尚未支持，请检查 AI 配置。',
   request_too_large: '内容超出模型输入限制，未继续调用模型。',

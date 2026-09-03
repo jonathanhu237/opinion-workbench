@@ -2,8 +2,9 @@
 
 import asyncio
 from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Literal, Protocol, cast
 from uuid import UUID, uuid4
 
 from longtian_api.database import Database
@@ -30,17 +31,23 @@ from longtian_api.schemas.search_runs import (
     SearchRunListResponse,
     SearchRunSummary,
 )
+from longtian_api.search_failure_reasons import (
+    SEARCH_FAILURE_REASONS,
+    SearchFailureReason,
+    is_search_failure_reason,
+)
 from longtian_api.search_platforms import SearchPlatform
 from longtian_api.services.browser_operations import (
     BrowserOperationCoordinator,
     BrowserOperationOwner,
 )
-from longtian_api.services.media_crawler_auth_worker import (
+from longtian_api.services.collector_contracts import (
     AuthWorkerError,
     ManualPageAction,
     ManualPageWorkerResult,
-    PersistentAuthWorkerClient,
+    SearchCollector,
     SearchWorkerItem,
+    supports_platform,
 )
 from longtian_api.services.monitoring_rules import (
     MonitoringRuleError,
@@ -49,6 +56,21 @@ from longtian_api.services.monitoring_rules import (
 from longtian_api.services.settled_tasks import database_call
 
 MAX_SEARCH_TERMS = 20
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectedSearchTerminal:
+    """One safe projection of a worker outcome into durable run state."""
+
+    status: SearchRunStatus
+    failure_reason: SearchFailureReason | None = None
+
+    def __post_init__(self) -> None:
+        if self.failure_reason is not None and (
+            self.status != "structure_changed"
+            or not is_search_failure_reason(self.failure_reason)
+        ):
+            raise ValueError("failure_reason requires structure_changed status")
 
 
 class SearchRunRepositoryProtocol(Protocol):
@@ -76,7 +98,12 @@ class SearchRunRepositoryProtocol(Protocol):
         self, *, run_id: int, term_position: int, item: SearchContentInput
     ) -> None: ...
 
-    def finish(self, run_id: int, status: SearchRunStatus) -> SearchRunRecord: ...
+    def finish(
+        self,
+        run_id: int,
+        status: SearchRunStatus,
+        failure_reason: SearchFailureReason | None = None,
+    ) -> SearchRunRecord: ...
 
     def get(self, run_id: int) -> SearchRunRecord: ...
 
@@ -117,7 +144,7 @@ class SearchRunService:
         self,
         *,
         monitoring_rules: MonitoringRuleService,
-        worker: PersistentAuthWorkerClient,
+        worker: SearchCollector,
         browser_operations: BrowserOperationCoordinator,
         repository: SearchRunRepositoryProtocol | None = None,
         database: Database | None = None,
@@ -165,7 +192,16 @@ class SearchRunService:
         """No-I/O conservative session evidence; never launch a worker to probe."""
         return getattr(self._worker, "browser_session_available", False) is True
 
+    def supports_platform(self, platform):
+        return supports_platform(self._worker, platform)
+
     async def start_run(self, payload: SearchRunCreate) -> SearchRunDetail:
+        if not self.supports_platform(payload.platform):
+            raise SearchRunError(
+                status_code=409,
+                code="search_platform_not_available",
+                message="该平台尚未接入当前采集器，历史内容仍可查看。",
+            )
         rule = await self.load_rule(payload.monitoring_rule_id)
         if len(rule.terms) > MAX_SEARCH_TERMS:
             raise SearchRunError(
@@ -267,7 +303,7 @@ class SearchRunService:
             raise _result_not_found() from None
         except SearchRunRepositoryUnavailableError:
             raise _storage_unavailable() from None
-        if target.platform != "xhs":
+        if target.platform != "xhs" or not self.supports_platform(target.platform):
             raise _open_not_supported()
 
         request_id = uuid4()
@@ -446,6 +482,8 @@ class SearchRunService:
         cancellation_status: Callable[[], SearchRunStatus] | None = None,
     ) -> tuple[SearchRunStatus, bool]:
         terminal: SearchRunStatus = "internal_error"
+        failure_reason: SearchFailureReason | None = None
+        execution_limit = None
         cancelled = False
         try:
             await database_call(self._repository.mark_running, record.id)
@@ -490,7 +528,10 @@ class SearchRunService:
                     on_item=on_item,
                     on_term_completed=on_term_completed,
                 )
-            terminal = _project_worker_outcome(result.outcome)
+            projected = project_worker_outcome(result.outcome)
+            terminal = projected.status
+            failure_reason = projected.failure_reason
+            execution_limit = result.execution_limit
         except TimeoutError:
             terminal = "timed_out"
         except asyncio.CancelledError:
@@ -501,16 +542,46 @@ class SearchRunService:
         except Exception:
             terminal = "internal_error"
         try:
-            await database_call(self._repository.finish, record.id, terminal)
+            if execution_limit is not None:
+                await database_call(
+                    self._repository.finish,
+                    record.id,
+                    terminal,
+                    failure_reason,
+                    execution_limit,
+                )
+            elif failure_reason is None:
+                # Keep the old two-argument repository seam usable for
+                # callers/test doubles that predate structured diagnostics.
+                await database_call(self._repository.finish, record.id, terminal)
+            else:
+                await database_call(
+                    self._repository.finish,
+                    record.id,
+                    terminal,
+                    failure_reason,
+                )
         except (SearchRunNotActiveError, SearchRunRepositoryUnavailableError):
             pass
         return terminal, cancelled
 
 
-def _project_worker_outcome(outcome: str) -> SearchRunStatus:
+def project_worker_outcome(outcome: str) -> ProjectedSearchTerminal:
+    """Project one closed worker outcome into lifecycle state and its cause."""
+
     if outcome == "browser_disconnected":
-        return "browser_unavailable"
+        return ProjectedSearchTerminal("browser_unavailable")
+    if outcome in SEARCH_FAILURE_REASONS:
+        # The set is runtime data from the shared Literal.  The explicit
+        # predicate keeps the cast at this one boundary instead of leaking
+        # arbitrary worker strings into persistence or public schemas.
+        if not is_search_failure_reason(outcome):  # pragma: no cover - set is closed
+            return ProjectedSearchTerminal("internal_error")
+        return ProjectedSearchTerminal(
+            "structure_changed", cast(SearchFailureReason, outcome)
+        )
     if outcome in {
+        "timed_out",
         "completed_with_results",
         "completed_empty",
         "login_required",
@@ -521,8 +592,8 @@ def _project_worker_outcome(outcome: str) -> SearchRunStatus:
         "cancelled",
         "internal_error",
     }:
-        return outcome  # type: ignore[return-value]
-    return "internal_error"
+        return ProjectedSearchTerminal(outcome)  # type: ignore[arg-type]
+    return ProjectedSearchTerminal("internal_error")
 
 
 def _to_summary(record: SearchRunRecord) -> SearchRunSummary:
@@ -534,6 +605,8 @@ def _to_summary(record: SearchRunRecord) -> SearchRunSummary:
         term_count=len(record.terms),
         max_results_per_term=record.max_results_per_term,
         status=record.status,
+        failure_reason=record.failure_reason,
+        execution_limit=record.execution_limit,
         current_term_position=record.current_term_position,
         new_count=record.new_count,
         repeated_count=record.repeated_count,

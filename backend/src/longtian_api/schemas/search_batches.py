@@ -27,10 +27,12 @@ SearchBatchItemStatus = Literal[
     "cancelled",
 ]
 SearchBatchErrorCode = Literal[
+    "search_platform_not_available",
     "invalid_request",
     "monitoring_rule_not_found",
     "monitoring_rule_disabled",
     "too_many_search_terms",
+    "browser_unavailable",
     "browser_operation_active",
     "search_batch_not_found",
     "search_batch_not_active",

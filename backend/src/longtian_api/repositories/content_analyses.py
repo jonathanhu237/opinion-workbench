@@ -789,10 +789,24 @@ class ContentAnalysisRepository(AnalysisRepository):
     def next_job(self) -> AnalysisJob | None:
         with self.connection() as connection:
             row = connection.execute(
-                """SELECT id FROM content_analysis_jobs WHERE status IN
-                  ('queued','running') ORDER BY id LIMIT 1"""
+                """SELECT j.id FROM content_analysis_jobs j WHERE j.status IN
+                  ('queued','running') AND NOT EXISTS(SELECT 1 FROM report_generations g
+                  WHERE g.analysis_job_id=j.id
+                  AND (g.pause_reason IS NOT NULL OR g.status!='summarising'))
+                  ORDER BY COALESCE(j.queue_reason='browser_operation_active',0),j.id
+                  LIMIT 1"""
             ).fetchone()
             return self._read(connection, row[0]) if row else None
+
+    def is_report_generation(self, job_id: int) -> bool:
+        with self.connection() as connection:
+            return (
+                connection.execute(
+                    "SELECT 1 FROM report_generations WHERE analysis_job_id=?",
+                    (job_id,),
+                ).fetchone()
+                is not None
+            )
 
     def next_attempt(self, job_id) -> AnalysisAttempt | None:
         with self.connection() as connection:
@@ -805,6 +819,12 @@ class ContentAnalysisRepository(AnalysisRepository):
 
     def queue(self, job_id, reason) -> None:
         with self.connection(write=True) as connection:
+            if reason == "browser_operation_active":
+                connection.execute(
+                    """UPDATE content_analysis_attempts SET status='queued'
+                    WHERE job_id=? AND status='acquiring'""",
+                    (job_id,),
+                )
             connection.execute(
                 """UPDATE content_analysis_jobs SET queue_reason=? WHERE id=? AND
                   status IN ('queued','running')""",

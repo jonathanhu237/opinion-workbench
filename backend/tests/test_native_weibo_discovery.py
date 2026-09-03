@@ -1,0 +1,347 @@
+"""User collection requests with rendered-browser fixtures, no platform access."""
+
+import asyncio
+from collections import deque
+
+import pytest
+from fastapi.testclient import TestClient
+from test_search_batches import _control, _wait_for_batch
+from test_search_runs import _wait_for_terminal
+
+from longtian_api.main import create_app
+from longtian_api.services.ai_settings import AISettingsService
+from longtian_api.services.monitoring_rules import MonitoringRuleService
+from longtian_api.services.native_weibo import NativeWeiboCollector
+from longtian_api.services.platform_connections import PlatformConnectionService
+
+CARD = """<div class="card-wrap" action-type="feed_list_item" mid="3501756485200075">
+  <div class="content"><a class="name" href="//weibo.com/1234567890">样本发布者</a>
+  <p node-type="feed_list_content">龙田街道道路施工公告</p>
+  <p class="from"><a href="//weibo.com/1234567890/z0JH2lOMb">今天 12:00</a></p>
+  </div></div>"""
+EMPTY = '<div class="card-no-result">抱歉，未找到相关结果。</div>'
+
+
+class BrowserFixture:
+    """The external browser returns DOM, not pre-parsed collection results."""
+
+    available = True
+
+    def __init__(self, pages):
+        self.pages = deque(pages)
+        self.visits = []
+        self.html = ""
+        self.url = "about:blank"
+        self.frozen = True
+        self.closed = False
+        self.block_at = None
+        self.entered = asyncio.Event()
+        self.fronted = False
+
+    async def start(self, *, max_requests):
+        self.frozen = False
+
+    async def navigate(self, url):
+        assert not self.frozen
+        self.visits.append(url)
+        if len(self.visits) == self.block_at:
+            self.entered.set()
+            await asyncio.Event().wait()
+        self.url = url
+        self.html = self.pages.popleft()
+
+    async def bring_to_front(self):
+        self.fronted = True
+
+    async def snapshot(self):
+        return self.url, self.html, 200
+
+    async def freeze(self):
+        self.frozen = True
+
+    async def show(self):
+        self.frozen = False
+
+    async def close_page(self):
+        self.frozen = True
+
+    async def shutdown(self):
+        self.closed = True
+
+
+def environment(tmp_path, pages, *, model=None, **runtime_options):
+    browser = BrowserFixture(pages)
+    runtime = NativeWeiboCollector(
+        browser=browser, delay_seconds=0, ready_polls=2, **runtime_options
+    )
+    service = PlatformConnectionService(collector_factory=lambda **kwargs: runtime)
+    app = create_app(
+        platform_connection_service_factory=lambda: service,
+        monitoring_rule_service_factory=lambda: MonitoringRuleService(
+            database_path=tmp_path / "db.sqlite3"
+        ),
+        ai_settings_service_factory=(
+            (lambda db: AISettingsService(db, client=model)) if model else None
+        ),
+    )
+    return app, browser
+
+
+def collect(client, limit=1):
+    response = client.post(
+        "/api/v1/search-runs",
+        json={
+            "monitoring_rule_id": 1,
+            "platform": "wb",
+            "max_results_per_term": limit,
+        },
+    )
+    assert response.status_code == 202, response.text
+    return _wait_for_terminal(client, response.json()["id"])
+
+
+def test_native_discovery_saves_aliases_across_terms_and_runs_without_analysis(
+    tmp_path,
+):
+    alias = CARD.replace(
+        "//weibo.com/1234567890/z0JH2lOMb",
+        "https://m.weibo.cn/detail/3501756485200075?from=search",
+    )
+    app, browser = environment(
+        tmp_path, [CARD, alias, EMPTY, EMPTY, EMPTY, alias, EMPTY, EMPTY, EMPTY, EMPTY]
+    )
+    with TestClient(app) as client:
+        first = collect(client)
+        assert first["status"] == "completed_with_results"
+        assert (first["new_count"], first["repeated_count"]) == (1, 0)
+        rows = client.get(f"/api/v1/search-runs/{first['id']}/results").json()
+        assert rows["total"] == 1
+        row = rows["results"][0]
+        assert row["content_url"] == "https://m.weibo.cn/detail/3501756485200075"
+        assert row["snippet"] == "龙田街道道路施工公告"
+        assert len(row["matched_terms"]) == 2
+        assert row["publisher_name"] == "样***者"
+        second = collect(client)
+        assert (second["new_count"], second["repeated_count"]) == (0, 1)
+        assert client.get("/api/v1/report-generations").json()["items"] == []
+        assert client.get("/api/v1/content-analysis-jobs").json()["jobs"] == []
+        assert len(browser.visits) == 10
+        assert all(
+            url.startswith("https://s.weibo.com/weibo?") for url in browser.visits
+        )
+        assert browser.frozen
+    assert browser.closed
+
+
+def test_native_connection_check_brings_owned_browser_to_front(tmp_path):
+    logged_in = '<header><a href="/u/123456">已登录</a></header>'
+    app, browser = environment(tmp_path, [logged_in] * 5)
+    with TestClient(app) as client:
+        response = client.post("/api/v1/platform-connections/wb/attempts")
+        assert response.status_code == 202
+        for _ in range(30):
+            connection = client.get("/api/v1/platform-connections").json()[
+                "platforms"
+            ][0]
+            if connection["status"] != "checking":
+                break
+            client.portal.call(asyncio.sleep, 0.01)
+        assert connection["status"] == "connected"
+    assert browser.fronted
+
+
+def test_native_connection_accepts_user_marker_with_hidden_login_markup(tmp_path):
+    logged_in = (
+        '<div class="woo-avatar-hover"><a href="/u/123456">已登录</a></div>'
+        '<div style="display:none"><form><input type="password"></form></div>'
+    )
+    app, browser = environment(tmp_path, [logged_in] * 5)
+    with TestClient(app) as client:
+        response = client.post("/api/v1/platform-connections/wb/attempts")
+        assert response.status_code == 202
+        for _ in range(30):
+            connection = client.get("/api/v1/platform-connections").json()[
+                "platforms"
+            ][0]
+            if connection["status"] != "checking":
+                break
+            client.portal.call(asyncio.sleep, 0.01)
+        assert connection["status"] == "connected"
+    assert browser.fronted
+
+
+def test_search_budget_stops_instead_of_silently_reducing_configured_work(tmp_path):
+    app, browser = environment(tmp_path, [CARD, EMPTY], max_pages=1)
+    with TestClient(app) as client:
+        run = collect(client, limit=50)
+        assert run["status"] == "timed_out"
+        assert run["execution_limit"] == "pages"
+        assert run["max_results_per_term"] == 50
+        assert run["new_count"] == 1
+        assert len(browser.visits) == 1
+        assert browser.frozen
+        assert client.get(f"/api/v1/search-runs/{run['id']}").json() == run
+
+
+@pytest.mark.parametrize(
+    ("page", "status", "reason"),
+    [
+        (EMPTY, "completed_empty", None),
+        ('<form>请先登录<input type="password"></form>', "login_required", None),
+        (
+            "<title>微博安全验证</title><main>请完成验证</main>",
+            "manual_challenge_required",
+            None,
+        ),
+        (
+            '<div role="dialog">操作频繁，请稍后再试</div>',
+            "platform_blocked_or_rate_limited",
+            None,
+        ),
+        ("<main>正在加载</main>", "structure_changed", "page_state_unrecognized"),
+        (
+            CARD.replace('mid="3501756485200075"', 'mid="unknown"'),
+            "structure_changed",
+            "search_results_incompatible",
+        ),
+    ],
+)
+def test_native_page_states_are_not_mistaken_for_empty_results(
+    tmp_path, page, status, reason
+):
+    app, browser = environment(tmp_path, [page] * 5)
+    with TestClient(app) as client:
+        run = collect(client)
+        assert (run["status"], run["failure_reason"]) == (status, reason)
+        assert run["total_count"] == 0
+        assert len(browser.visits) == (5 if status == "completed_empty" else 1)
+        assert browser.frozen
+
+
+def test_security_pause_keeps_discoveries_and_requires_explicit_continue(tmp_path):
+    challenge = '<div role="dialog">请完成验证</div>'
+    app, browser = environment(tmp_path, [CARD, challenge] + [EMPTY] * 4)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/search-batches",
+            json={
+                "monitoring_rule_id": 1,
+                "platforms": ["wb"],
+                "max_results_per_term": 1,
+            },
+        )
+        assert response.status_code == 202
+        identity = response.json()["id"]
+        paused = _wait_for_batch(client, identity, {"paused_for_manual_action"})
+        assert paused["items"][0]["completed_term_count"] == 1
+        assert paused["items"][0]["new_count"] == 1
+        assert browser.frozen
+        control = _control(client, identity)
+        shown = client.post(
+            f"/api/v1/search-batches/{identity}/manual-page", json=control
+        )
+        assert shown.json() == {"outcome": "opened_existing"}
+        # Completing the challenge and polling the product never resumes collection.
+        browser.html = EMPTY
+        for _ in range(3):
+            assert (
+                client.get(f"/api/v1/search-batches/{identity}").json()["status"]
+                == "paused_for_manual_action"
+            )
+        assert len(browser.visits) == 2
+        resumed = client.post(
+            f"/api/v1/search-batches/{identity}/continue", json=control
+        )
+        assert resumed.status_code == 202
+        finished = _wait_for_batch(client, identity, {"completed"})
+        assert finished["items"][0]["new_count"] == 1
+        assert len(browser.visits) == 6
+
+
+def test_mismatched_permalink_is_not_saved_as_another_posts_identity(tmp_path):
+    bad = CARD.replace(
+        "//weibo.com/1234567890/z0JH2lOMb", "https://m.weibo.cn/detail/3600375418559878"
+    )
+    app, browser = environment(tmp_path, [bad])
+    with TestClient(app) as client:
+        run = collect(client)
+        assert (run["status"], run["failure_reason"]) == (
+            "structure_changed",
+            "search_results_incompatible",
+        )
+        assert run["total_count"] == 0
+
+
+def test_cancel_stops_browser_work_and_keeps_saved_discoveries(tmp_path):
+    app, browser = environment(tmp_path, [CARD])
+    browser.block_at = 2
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/v1/search-runs",
+            json={
+                "monitoring_rule_id": 1,
+                "platform": "wb",
+                "max_results_per_term": 1,
+            },
+        )
+        identity = created.json()["id"]
+        client.portal.call(browser.entered.wait)
+        cancelled = client.post(f"/api/v1/search-runs/{identity}/cancel")
+        assert cancelled.status_code == 202
+        run = _wait_for_terminal(client, identity)
+        assert (run["status"], run["new_count"]) == ("cancelled", 1)
+        assert browser.frozen
+        assert len(browser.visits) == 2
+        assert (
+            client.get(f"/api/v1/search-runs/{identity}/results").json()["total"] == 1
+        )
+
+
+def test_rediscovery_of_a_failed_summary_is_repeated_and_does_not_retry_analysis(
+    tmp_path,
+):
+    from test_content_analysis_api import saved
+    from test_report_generations import generation_request, save_body
+    from topic_report_fixtures import TextPipelineClient, finish
+
+    model = TextPipelineClient()
+    model.answers["initial"] = ["invalid"]
+    app, browser = environment(
+        tmp_path, [CARD] + [EMPTY] * 4 + [CARD] + [EMPTY] * 4, model=model
+    )
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        first = collect(client)
+        assert first["new_count"] == 1
+        save_body(app.state.search_run_service.database)
+        saved(client)
+        started = client.post(
+            "/api/v1/report-generations", json=generation_request([1])
+        )
+        assert started.status_code == 202
+        client.portal.call(finish, app.state.report_generation_service)
+        generation = client.get(
+            f"/api/v1/report-generations/{started.json()['id']}"
+        ).json()
+        assert generation["analysis"]["counts"]["failed"] == 1
+        second = collect(client)
+        assert (second["new_count"], second["repeated_count"]) == (0, 1)
+        assert model.counts["initial"] == 1
+        assert len(browser.visits) == 10
+
+
+def test_batch_keeps_the_browser_budget_cause_for_manual_recovery(tmp_path):
+    app, _ = environment(tmp_path, [CARD], max_pages=1)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/v1/search-batches",
+            json={
+                "monitoring_rule_id": 1,
+                "platforms": ["wb"],
+                "max_results_per_term": 1,
+            },
+        )
+        paused = _wait_for_batch(
+            client, created.json()["id"], {"paused_for_manual_action"}
+        )
+        run = paused["items"][0]["latest_attempt"]["run"]
+        assert (run["status"], run["execution_limit"]) == ("timed_out", "pages")

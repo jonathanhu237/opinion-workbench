@@ -97,6 +97,18 @@ class JobSelection(StrictModel):
     job_id: PositiveId
 
 
+class ExplicitSelection(StrictModel):
+    kind: Literal["explicit"]
+    result_ids: list[PositiveId] = Field(min_length=1)
+
+    @field_validator("result_ids")
+    @classmethod
+    def unique_ids(cls, values):
+        if len(values) != len(set(values)):
+            raise ValueError("duplicate source")
+        return values
+
+
 class WorkflowSelection(StrictModel):
     kind: Literal["workflow_run"]
     run_id: PositiveId
@@ -120,7 +132,9 @@ class ReportCreate(RequestIntent):
     report_prompt: PromptChoice | None = None
     # Legacy report overrides remain accepted for replay/history compatibility.
     instructions_override: str | None = None
-    selection: IntervalSelection
+    selection: Annotated[
+        IntervalSelection | ExplicitSelection, Field(discriminator="kind")
+    ]
 
 
 class ReportRetry(RequestIntent):
@@ -136,7 +150,9 @@ class ReportCreateRequest(RequestIntent):
 
     configuration_revision: PositiveId
     report_prompt: PromptChoice
-    selection: IntervalSelection
+    selection: Annotated[
+        IntervalSelection | ExplicitSelection, Field(discriminator="kind")
+    ]
 
 
 class ReportRetryRequest(RequestIntent):
@@ -254,12 +270,12 @@ class ReportUsage(StrictModel):
 class ReportRun(StrictModel):
     id: PositiveId
     request_id: str | None
-    trigger: Literal["automatic", "interval", "retry"]
+    trigger: Literal["automatic", "interval", "manual", "retry"]
     initial_job_id: PositiveId | None
     completion_event_id: PositiveId | None
     parent_report_id: PositiveId | None
     selection: Annotated[
-        JobSelection | WorkflowSelection | IntervalSelection,
+        JobSelection | WorkflowSelection | IntervalSelection | ExplicitSelection,
         Field(discriminator="kind"),
     ]
     status: ReportStatus
@@ -340,12 +356,18 @@ class ReportRun(StrictModel):
                 raise ValueError("invalid workflow selection")
         elif self.initial_job_id is not None:
             raise ValueError("invalid interval origin")
-        elif datetime.fromisoformat(
+        elif self.selection.kind == "first_seen_interval" and datetime.fromisoformat(
             self.selection.first_seen_from
         ) >= datetime.fromisoformat(self.selection.first_seen_to):
             raise ValueError("invalid stored interval")
         if self.trigger == "interval" and self.selection.kind != "first_seen_interval":
             raise ValueError("invalid interval selection")
+        if self.trigger == "manual" and self.selection.kind != "explicit":
+            raise ValueError("invalid manual selection")
+        if self.selection.kind == "explicit" and self.coverage.total != len(
+            self.selection.result_ids
+        ):
+            raise ValueError("invalid selected coverage")
         if self.finished_at and datetime.fromisoformat(
             self.finished_at
         ) < datetime.fromisoformat(self.created_at):

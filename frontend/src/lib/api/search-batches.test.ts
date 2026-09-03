@@ -25,6 +25,7 @@ const run = {
   term_count: 1,
   max_results_per_term: 10,
   status: 'completed_empty' as const,
+  failure_reason: null,
   current_term_position: 0,
   new_count: 0,
   repeated_count: 0,
@@ -169,6 +170,48 @@ describe('search batch API boundary', () => {
       expect.objectContaining({ signal: controller.signal }),
     )
   })
+
+  it.each([
+    'page_state_unrecognized',
+    'search_context_unavailable',
+    'search_response_incompatible',
+    'search_results_incompatible',
+    'search_pagination_incompatible',
+  ] as const)(
+    'preserves %s on a paused child attempt',
+    async (failure_reason) => {
+      const payload = {
+        ...batch,
+        status: 'paused_for_manual_action' as const,
+        terminal_item_count: 0,
+        current_item_position: 0,
+        finished_at: null,
+        items: [
+          {
+            ...batch.items[0],
+            status: 'paused_for_manual_action' as const,
+            pause_reason: 'attempt_failed' as const,
+            completion_basis: null,
+            finished_at: null,
+            latest_attempt: {
+              attempt_number: 1,
+              run: {
+                ...run,
+                status: 'structure_changed' as const,
+                failure_reason,
+              },
+            },
+          },
+        ],
+      }
+      fetchMock.mockResolvedValueOnce(
+        new Response(JSON.stringify(payload), { status: 200 }),
+      )
+      await expect(
+        fetchSearchBatch(4, new AbortController().signal),
+      ).resolves.toEqual(payload)
+    },
+  )
 
   it('rejects mismatched item platforms and inconsistent progress counts', async () => {
     fetchMock.mockResolvedValueOnce(

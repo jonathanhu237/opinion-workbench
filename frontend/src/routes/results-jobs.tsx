@@ -149,10 +149,10 @@ export function ResultsJobs({
             tabIndex={-1}
             className="font-display text-xl outline-none"
           >
-            初步分析任务
+            历史单条处理任务
           </h2>
           <p className="text-sm leading-6 text-muted-foreground">
-            提交时确定本次处理的内容。每条结果单独保存，失败项不会自动重试。
+            保留旧版及自动任务的处理记录。新的手动分析请在上方选材，系统会串联总结与报告。
           </p>
         </CardHeader>
         <CardContent className="space-y-5 pt-5">
@@ -241,7 +241,7 @@ export function ResultsJobs({
               )}
             </details>
           )}
-          {detail.isError && (
+          {detail.isError && !jobs.isError && (
             <p role="alert" className="text-sm text-destructive">
               {analysisErrorMessage(detail.error)}
             </p>
@@ -293,7 +293,7 @@ export function ResultsJobs({
               {job.queue_reason && (
                 <p className="rounded-lg bg-muted p-3 text-sm">
                   {job.queue_reason === 'browser_operation_active'
-                    ? '正在等待谷歌浏览器空闲，不会影响正在进行的采集或验证。'
+                    ? '正在等待应用专用的谷歌浏览器空闲，不会影响正在进行的采集或验证。'
                     : '正在等待其他 AI 操作结束，暂未新增模型调用。'}
                 </p>
               )}
@@ -307,7 +307,7 @@ export function ResultsJobs({
               </p>
               <p className="text-sm text-muted-foreground">
                 {job.completion_event_id !== null
-                  ? '本任务已完成，每条结果都已保存。手动初步分析不会自动生成报告。'
+                  ? '此为历史单条处理任务，结果均已保存。可重新选材生成报告。'
                   : job.status === 'cancelled' || job.status === 'interrupted'
                     ? '已完成的结果仍可查看；本任务不会自动生成报告。'
                     : '每条结果单独保存；取消只停止本次任务，不会生成自动报告。'}

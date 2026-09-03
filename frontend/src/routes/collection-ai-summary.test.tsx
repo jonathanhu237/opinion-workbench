@@ -75,6 +75,7 @@ const run: SearchRunDetail = {
   terms: ['测试街道 投诉'],
   max_results_per_term: 10,
   status: 'completed_with_results',
+  failure_reason: null,
   current_term_position: 0,
   new_count: 1,
   repeated_count: 0,
@@ -168,9 +169,10 @@ describe('manual collection summaries', () => {
       result.content_url,
     )
     expect(screen.queryByRole('button', { name: '生成汇总' })).toBeNull()
-    expect(
-      screen.getByRole('link', { name: '前往结果与分析' }),
-    ).toHaveAttribute('href', '/results')
+    expect(screen.getByRole('link', { name: '前往报告生成' })).toHaveAttribute(
+      'href',
+      '/results',
+    )
     expect(mockedStart).not.toHaveBeenCalled()
     first.unmount()
     renderRun()
@@ -246,7 +248,7 @@ describe('manual collection summaries', () => {
     mockedRun.mockResolvedValue(source)
     renderRun()
     expect(
-      await screen.findByRole('link', { name: '前往结果与分析' }),
+      await screen.findByRole('link', { name: '前往报告生成' }),
     ).toHaveAttribute('href', '/results')
     expect(screen.queryByRole('button', { name: '生成汇总' })).toBeNull()
     expect(mockedStart).not.toHaveBeenCalled()
@@ -262,7 +264,7 @@ describe('manual collection summaries', () => {
     })
     renderRun()
     expect(
-      await screen.findByRole('link', { name: '前往结果与分析' }),
+      await screen.findByRole('link', { name: '前往报告生成' }),
     ).toHaveAttribute('href', '/results')
     expect(screen.queryByRole('button', { name: '生成汇总' })).toBeNull()
     expect(mockedSettings).not.toHaveBeenCalled()

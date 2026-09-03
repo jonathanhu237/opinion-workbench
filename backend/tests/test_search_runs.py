@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi.testclient import TestClient
 
+import longtian_api.database as database_module
 from longtian_api.database import (
     CURRENT_DATABASE_VERSION,
     Database,
@@ -25,7 +26,7 @@ from longtian_api.repositories.search_runs import (
     SearchRunRepository,
     SearchRunRepositoryUnavailableError,
 )
-from longtian_api.schemas.search_runs import SearchRunCreate
+from longtian_api.schemas.search_runs import SearchRunCreate, SearchRunSummary
 from longtian_api.services.browser_operations import (
     BrowserOperationCoordinator,
     BrowserOperationOwner,
@@ -127,6 +128,147 @@ def test_repository_open_target_proves_relation_and_original_term_order(
     assert target.matched_terms == ("第一个词", "第二个词", "第三个词")
     with pytest.raises(SearchResultNotFoundError):
         repository.get_result_open_target(run_id=run.id + 1, result_id=results[0].id)
+
+
+def test_repository_finish_persists_failure_reason_with_terminal_state(
+    tmp_path: Path,
+) -> None:
+    database = Database(tmp_path / "failure-reason.sqlite3")
+    repository = SearchRunRepository(database)
+    repository.initialize()
+    run = repository.create_run(
+        monitoring_rule_id=1,
+        platform="toutiao",
+        rule_name="结构化失败任务",
+        terms=("龙田街道",),
+        max_results_per_term=10,
+    )
+    repository.mark_running(run.id)
+
+    finished = repository.finish(
+        run.id,
+        "structure_changed",
+        "search_results_incompatible",
+    )
+
+    assert finished.status == "structure_changed"
+    assert finished.failure_reason == "search_results_incompatible"
+    assert finished.finished_at is not None
+    with database.connect() as connection:
+        persisted = connection.execute(
+            "SELECT status, failure_reason, finished_at FROM search_runs WHERE id = ?",
+            (run.id,),
+        ).fetchone()
+    assert tuple(persisted) == (
+        "structure_changed",
+        "search_results_incompatible",
+        finished.finished_at,
+    )
+
+
+def test_repository_rejects_failure_reason_for_non_structure_status(
+    tmp_path: Path,
+) -> None:
+    database = Database(tmp_path / "invalid-failure-reason.sqlite3")
+    repository = SearchRunRepository(database)
+    repository.initialize()
+    run = repository.create_run(
+        monitoring_rule_id=1,
+        platform="toutiao",
+        rule_name="非法配对任务",
+        terms=("龙田街道",),
+        max_results_per_term=10,
+    )
+    repository.mark_running(run.id)
+
+    with pytest.raises(ValueError, match="failure reason"):
+        repository.finish(
+            run.id,
+            "completed_empty",
+            "search_results_incompatible",
+        )
+
+    active = repository.get(run.id)
+    assert active.status == "running"
+    assert active.failure_reason is None
+    assert active.finished_at is None
+
+
+def test_projected_terminal_rejects_failure_reason_for_non_structure_status() -> None:
+    from longtian_api.services.search_runs import ProjectedSearchTerminal
+
+    with pytest.raises(ValueError, match="failure_reason"):
+        ProjectedSearchTerminal(
+            status="completed_empty",
+            failure_reason="search_results_incompatible",
+        )
+
+
+def test_search_run_summary_rejects_failure_reason_for_non_structure_status() -> None:
+    payload = {
+        "id": 1,
+        "monitoring_rule_id": 1,
+        "platform": "toutiao",
+        "rule_name": "结构化失败任务",
+        "term_count": 1,
+        "max_results_per_term": 10,
+        "current_term_position": 0,
+        "new_count": 0,
+        "repeated_count": 0,
+        "total_count": 0,
+        "created_at": "2026-09-02T00:00:00+00:00",
+        "started_at": "2026-09-02T00:00:01+00:00",
+        "finished_at": "2026-09-02T00:00:02+00:00",
+    }
+
+    with pytest.raises(ValueError, match="failure_reason"):
+        SearchRunSummary(
+            **payload,
+            status="completed_empty",
+            failure_reason="search_results_incompatible",
+        )
+
+    legacy = SearchRunSummary(
+        **payload,
+        status="structure_changed",
+        failure_reason=None,
+    )
+    assert legacy.failure_reason is None
+
+
+@pytest.mark.parametrize(
+    ("status", "failure_reason"),
+    [
+        ("completed_empty", "search_results_incompatible"),
+        ("structure_changed", "not_a_search_failure_reason"),
+    ],
+)
+def test_sqlite_check_rejects_invalid_failure_reason_pair(
+    tmp_path: Path,
+    status: str,
+    failure_reason: str,
+) -> None:
+    database = Database(tmp_path / f"sqlite-check-{status}.sqlite3")
+    repository = SearchRunRepository(database)
+    repository.initialize()
+    run = repository.create_run(
+        monitoring_rule_id=1,
+        platform="toutiao",
+        rule_name="SQLite 约束任务",
+        terms=("龙田街道",),
+        max_results_per_term=10,
+    )
+
+    with database.connect() as connection:
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                "UPDATE search_runs SET status = ?, failure_reason = ? WHERE id = ?",
+                (status, failure_reason, run.id),
+            )
+
+    persisted = repository.get(run.id)
+    assert persisted.status == "queued"
+    assert persisted.failure_reason is None
 
 
 def test_repository_preserves_cross_term_and_cross_run_deduplication(
@@ -1067,24 +1209,49 @@ def test_open_storage_failure_is_a_sanitized_503() -> None:
 
 
 @pytest.mark.parametrize(
-    ("worker_outcome", "expected_status"),
+    ("worker_outcome", "expected_status", "expected_failure_reason"),
     [
-        ("completed_empty", "completed_empty"),
-        ("login_required", "login_required"),
-        ("manual_challenge_required", "manual_challenge_required"),
+        ("completed_empty", "completed_empty", None),
+        ("login_required", "login_required", None),
+        ("manual_challenge_required", "manual_challenge_required", None),
         (
             "platform_blocked_or_rate_limited",
             "platform_blocked_or_rate_limited",
+            None,
         ),
-        ("structure_changed", "structure_changed"),
-        ("browser_unavailable", "browser_unavailable"),
-        ("browser_disconnected", "browser_unavailable"),
-        ("cancelled", "cancelled"),
-        ("internal_error", "internal_error"),
+        ("structure_changed", "structure_changed", None),
+        ("page_state_unrecognized", "structure_changed", "page_state_unrecognized"),
+        (
+            "search_context_unavailable",
+            "structure_changed",
+            "search_context_unavailable",
+        ),
+        (
+            "search_response_incompatible",
+            "structure_changed",
+            "search_response_incompatible",
+        ),
+        (
+            "search_results_incompatible",
+            "structure_changed",
+            "search_results_incompatible",
+        ),
+        (
+            "search_pagination_incompatible",
+            "structure_changed",
+            "search_pagination_incompatible",
+        ),
+        ("browser_unavailable", "browser_unavailable", None),
+        ("browser_disconnected", "browser_unavailable", None),
+        ("cancelled", "cancelled", None),
+        ("internal_error", "internal_error", None),
     ],
 )
 def test_worker_terminal_outcomes_are_projected_without_losing_partial_items(
-    tmp_path: Path, worker_outcome: str, expected_status: str
+    tmp_path: Path,
+    worker_outcome: str,
+    expected_status: str,
+    expected_failure_reason: str | None,
 ) -> None:
     database_path = tmp_path / f"{worker_outcome}.sqlite3"
     has_partial_item = worker_outcome != "completed_empty"
@@ -1098,6 +1265,7 @@ def test_worker_terminal_outcomes_are_projected_without_losing_partial_items(
         results = client.get(f"/api/v1/search-runs/{terminal['id']}/results").json()
 
     assert terminal["status"] == expected_status
+    assert terminal["failure_reason"] == expected_failure_reason
     assert terminal["total_count"] == int(has_partial_item)
     assert results["total"] == int(has_partial_item)
 
@@ -1130,6 +1298,187 @@ def test_fresh_database_contains_all_search_tables_and_indexes(tmp_path: Path) -
         "ix_search_runs_rule_id",
         "ix_search_run_contents_kind_observed",
     }
+
+
+def test_version_eighteen_migration_preserves_history_relations_and_ids(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "version-eighteen.sqlite3"
+    connection = sqlite3.connect(database_path, isolation_level=None)
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON")
+    created_at = "2026-08-25T08:00:00+00:00"
+    started_at = "2026-08-25T08:00:01+00:00"
+    finished_at = "2026-08-25T08:00:02+00:00"
+    try:
+        for version in range(1, 19):
+            migration = getattr(database_module, f"_migrate_to_version_{version}")
+            migration(connection)
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 18
+        assert "failure_reason" not in {
+            row[1] for row in connection.execute("PRAGMA table_info(search_runs)")
+        }
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute(
+            """
+            INSERT INTO search_runs (
+              id, monitoring_rule_id, platform, rule_name, max_results_per_term,
+              status, current_term_position, created_at, started_at, finished_at,
+              execution_start_term_position, search_protocol_version
+            ) VALUES (41, 1, 'toutiao', '历史结构变化', 7, 'structure_changed',
+                      1, ?, ?, ?, 0, 2)
+            """,
+            (created_at, started_at, finished_at),
+        )
+        connection.execute(
+            "INSERT INTO search_run_terms (run_id, position, value) VALUES (?, ?, ?)",
+            (41, 0, "龙田街道"),
+        )
+        connection.execute(
+            "INSERT INTO search_run_terms (run_id, position, value) VALUES (?, ?, ?)",
+            (41, 1, "坪山大道"),
+        )
+        connection.execute(
+            """
+            INSERT INTO search_contents (
+              id, platform, platform_content_id, content_type, title, snippet,
+              creator_hash, publisher_name, published_at_text, content_url,
+              first_seen_at, last_seen_at
+            ) VALUES (
+              99, 'toutiao', 'legacy-100', 'article', '历史标题', '历史摘要',
+              '0123456789abcdef', '本***察', '刚刚',
+              'https://www.toutiao.com/article/legacy-100/', ?, ?
+            )
+            """,
+            (started_at, started_at),
+        )
+        connection.execute(
+            """
+            INSERT INTO search_run_contents (
+              run_id, search_content_id, discovery_kind,
+              first_observed_at, last_observed_at
+            ) VALUES (41, 99, 'new', ?, ?)
+            """,
+            (started_at, started_at),
+        )
+        connection.execute(
+            """
+            INSERT INTO search_run_content_terms (
+              run_id, search_content_id, term_position, observed_at
+            ) VALUES (41, 99, 0, ?)
+            """,
+            (started_at,),
+        )
+        connection.execute(
+            """
+            INSERT INTO search_run_term_completions (
+              run_id, term_position, proof, result_count, completed_at, recorded_at
+            ) VALUES (41, 0, 'worker_term_completed', 1, ?, ?)
+            """,
+            (started_at, finished_at),
+        )
+        connection.execute("COMMIT")
+    finally:
+        connection.close()
+
+    database = Database(database_path)
+    database.initialize()
+    repository = SearchRunRepository(database)
+    migrated = repository.get(41)
+    results, total = repository.list_results(run_id=41, kind="all", limit=50, offset=0)
+
+    assert migrated.status == "structure_changed"
+    assert migrated.failure_reason is None
+    assert migrated.id == 41
+    assert migrated.monitoring_rule_id == 1
+    assert migrated.rule_name == "历史结构变化"
+    assert migrated.terms == ("龙田街道", "坪山大道")
+    assert migrated.current_term_position == 1
+    assert migrated.created_at == created_at
+    assert migrated.started_at == started_at
+    assert migrated.finished_at == finished_at
+    assert total == 1
+    assert results[0].id == 99
+    assert results[0].matched_terms == ("龙田街道",)
+
+    with database.connect() as connection:
+        assert (
+            connection.execute("PRAGMA user_version").fetchone()[0]
+            == CURRENT_DATABASE_VERSION
+        )
+        assert (
+            connection.execute(
+                "SELECT failure_reason FROM search_runs WHERE id = 41"
+            ).fetchone()[0]
+            is None
+        )
+        assert tuple(
+            connection.execute(
+                "SELECT run_id, search_content_id, term_position "
+                "FROM search_run_content_terms"
+            ).fetchone()
+        ) == (41, 99, 0)
+        assert tuple(
+            connection.execute(
+                "SELECT run_id, term_position, proof, result_count "
+                "FROM search_run_term_completions"
+            ).fetchone()
+        ) == (41, 0, "worker_term_completed", 1)
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+
+    database.initialize()
+    reopened = repository.get(41)
+    assert reopened.status == "structure_changed"
+    assert reopened.failure_reason is None
+
+
+def test_version_nineteen_migration_rolls_back_schema_rows_and_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    database_path = tmp_path / "version-nineteen-rollback.sqlite3"
+    connection = sqlite3.connect(database_path, isolation_level=None)
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON")
+    try:
+        for version in range(1, 19):
+            migration = getattr(database_module, f"_migrate_to_version_{version}")
+            migration(connection)
+        connection.execute(
+            """
+            INSERT INTO search_runs (
+              id, monitoring_rule_id, platform, rule_name, max_results_per_term,
+              status, current_term_position, created_at, started_at, finished_at,
+              execution_start_term_position, search_protocol_version
+            ) VALUES (41, NULL, 'dy', '迁移回滚', 7, 'structure_changed', 0,
+                      '2026-09-02T00:00:00+00:00',
+                      '2026-09-02T00:00:01+00:00',
+                      '2026-09-02T00:00:02+00:00', 0, 2)
+            """
+        )
+        before = tuple(connection.execute("SELECT * FROM search_runs").fetchone())
+
+        from longtian_api.migrations import search_runs_v19
+
+        migrate = search_runs_v19.migrate
+
+        def fail_after_alter(target: sqlite3.Connection) -> None:
+            migrate(target)
+            raise sqlite3.DatabaseError("injected migration failure")
+
+        monkeypatch.setattr(search_runs_v19, "migrate", fail_after_alter)
+        with pytest.raises(sqlite3.DatabaseError, match="injected migration failure"):
+            database_module._migrate_to_version_19(connection)
+
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 18
+        assert "failure_reason" not in {
+            row[1] for row in connection.execute("PRAGMA table_info(search_runs)")
+        }
+        assert (
+            tuple(connection.execute("SELECT * FROM search_runs").fetchone()) == before
+        )
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+    finally:
+        connection.close()
 
 
 def test_version_two_migration_preserves_toutiao_and_isolates_weibo_identity(
@@ -1371,8 +1720,11 @@ def test_version_three_migration_preserves_rows_relations_and_sequences(
         )
         assert migrated.execute("PRAGMA foreign_key_check").fetchall() == []
 
-    assert all(row[-2:] == (0, 1) for row in after["search_runs"])
-    after["search_runs"] = [row[:-2] for row in after["search_runs"]]
+    assert all(
+        row[-4:-2] == (0, 1) and row[-2:] == (None, None)
+        for row in after["search_runs"]
+    )
+    after["search_runs"] = [row[:-4] for row in after["search_runs"]]
     assert after == before
     assert sequences == {"search_contents": 150, "search_runs": 75}
 
@@ -1511,8 +1863,11 @@ def test_version_four_migration_preserves_rows_and_isolates_douyin_identity(
         )
         assert migrated.execute("PRAGMA foreign_key_check").fetchall() == []
 
-    assert all(row[-2:] == (0, 1) for row in after["search_runs"])
-    after["search_runs"] = [row[:-2] for row in after["search_runs"]]
+    assert all(
+        row[-4:-2] == (0, 1) and row[-2:] == (None, None)
+        for row in after["search_runs"]
+    )
+    after["search_runs"] = [row[:-4] for row in after["search_runs"]]
     assert after == before
     assert sequences == {"search_contents": 150, "search_runs": 75}
 
@@ -1653,8 +2008,11 @@ def test_version_five_migration_preserves_rows_sequences_and_adds_xhs(
         )
         assert migrated.execute("PRAGMA foreign_key_check").fetchall() == []
 
-    assert all(row[-2:] == (0, 1) for row in after["search_runs"])
-    after["search_runs"] = [row[:-2] for row in after["search_runs"]]
+    assert all(
+        row[-4:-2] == (0, 1) and row[-2:] == (None, None)
+        for row in after["search_runs"]
+    )
+    after["search_runs"] = [row[:-4] for row in after["search_runs"]]
     assert after == before
     assert sequences == {"search_contents": 150, "search_runs": 75}
 

@@ -1,6 +1,7 @@
 """Coordinate platform authentication through one persistent MediaCrawler worker."""
 
 import asyncio
+import os
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -19,11 +20,16 @@ from longtian_api.services.browser_operations import (
     BrowserOperationCoordinator,
     BrowserOperationOwner,
 )
-from longtian_api.services.media_crawler_auth_worker import (
+from longtian_api.services.collector_contracts import (
     AuthPlatformId,
     AuthProgressPhase,
     AuthWorkerError,
     AuthWorkerResult,
+    CollectorFactory,
+    CollectorRuntime,
+    supports_platform,
+)
+from longtian_api.services.media_crawler_auth_worker import (
     PersistentAuthWorkerClient,
     ProcessGroupTerminator,
     ProcessLauncher,
@@ -59,6 +65,7 @@ class PlatformConnectionService:
         self,
         *,
         media_crawler_dir: Path | None = None,
+        browser_profile_dir: Path | None = None,
         process_launcher: ProcessLauncher | None = None,
         process_group_terminator: ProcessGroupTerminator | None = None,
         attempt_timeout_seconds: float = 300.0,
@@ -68,8 +75,22 @@ class PlatformConnectionService:
         termination_grace_seconds: float = 3.0,
         clock: Clock | None = None,
         browser_operation_coordinator: BrowserOperationCoordinator | None = None,
+        collector_factory: CollectorFactory | None = None,
     ) -> None:
+        if collector_factory is None:
+            backend = os.environ.get("LONGTIAN_COLLECTOR_BACKEND", "legacy")
+            if backend == "native-weibo":
+                from longtian_api.services.native_chrome import native_collector_factory
+
+                collector_factory = native_collector_factory
+            elif backend != "legacy":
+                raise ValueError(
+                    "Unsupported collector backend; no fallback was started."
+                )
         self._media_crawler_dir = media_crawler_dir or _default_media_crawler_dir()
+        self._browser_profile_dir = (
+            browser_profile_dir or _default_browser_profile_dir()
+        )
         self._attempt_timeout_seconds = attempt_timeout_seconds
         self._clock = clock or (lambda: datetime.now(UTC))
         self._browser_operations = (
@@ -80,20 +101,38 @@ class PlatformConnectionService:
         self._current_task: asyncio.Task[None] | None = None
         self._connections = _initial_catalog()
         self._shutdown_started = False
-        self._worker = PersistentAuthWorkerClient(
-            media_crawler_dir=self._media_crawler_dir,
-            on_progress=self._set_progress,
-            on_session_disconnected=self._invalidate_connected,
-            process_launcher=process_launcher,
-            process_group_terminator=process_group_terminator,
-            ready_timeout_seconds=worker_ready_timeout_seconds,
-            cancel_timeout_seconds=cancel_timeout_seconds,
-            shutdown_timeout_seconds=worker_shutdown_timeout_seconds,
-            termination_grace_seconds=termination_grace_seconds,
+        self._worker: CollectorRuntime = (
+            collector_factory(
+                browser_profile_dir=self._browser_profile_dir,
+                on_progress=self._set_progress,
+                on_session_disconnected=self._invalidate_connected,
+            )
+            if collector_factory is not None
+            else PersistentAuthWorkerClient(
+                media_crawler_dir=self._media_crawler_dir,
+                on_progress=self._set_progress,
+                on_session_disconnected=self._invalidate_connected,
+                process_launcher=process_launcher,
+                process_group_terminator=process_group_terminator,
+                ready_timeout_seconds=worker_ready_timeout_seconds,
+                cancel_timeout_seconds=cancel_timeout_seconds,
+                shutdown_timeout_seconds=worker_shutdown_timeout_seconds,
+                termination_grace_seconds=termination_grace_seconds,
+                browser_profile_dir=self._browser_profile_dir,
+            )
         )
 
+        self._connections = {
+            platform: connection
+            if supports_platform(self._worker, platform)
+            else connection.model_copy(
+                update={"availability": "coming_soon", "status": "coming_soon"}
+            )
+            for platform, connection in self._connections.items()
+        }
+
     @property
-    def worker(self) -> PersistentAuthWorkerClient:
+    def worker(self) -> CollectorRuntime:
         """Expose the one process boundary shared with product search."""
 
         return self._worker
@@ -219,6 +258,8 @@ class PlatformConnectionService:
                 "approve_connection",
             }:
                 terminal_guidance = "enable_remote_debugging"
+            elif current.guidance in {"starting_browser", "retry_browser"}:
+                terminal_guidance = "retry_browser"
         except asyncio.CancelledError:
             was_cancelled = True
         except AuthWorkerError:
@@ -255,7 +296,9 @@ class PlatformConnectionService:
                 "approve_connection",
             }:
                 return "failed", current.guidance
-            return "failed", "enable_remote_debugging"
+            return "failed", "retry_browser"
+        if result == AuthWorkerResult("failed", "browser_disconnected"):
+            return "failed", "retry_browser"
         return "failed", "retry"
 
     async def _set_progress(
@@ -267,7 +310,7 @@ class PlatformConnectionService:
         status: Literal["checking", "action_required"]
         guidance: PlatformConnectionGuidance
         if phase == "waiting_for_browser":
-            status, guidance = "action_required", "enable_remote_debugging"
+            status, guidance = "checking", "starting_browser"
         elif phase == "waiting_for_approval":
             status, guidance = "action_required", "approve_connection"
         elif phase == "waiting_for_login":
@@ -384,3 +427,10 @@ def _initial_catalog() -> dict[PlatformId, PlatformConnection]:
 
 def _default_media_crawler_dir() -> Path:
     return Path(__file__).resolve().parents[4] / "third_party" / "MediaCrawler"
+
+
+def _default_browser_profile_dir() -> Path:
+    """Return the fixed ignored profile root used by the product worker."""
+    return (
+        Path(__file__).resolve().parents[4] / "runtime" / "browser" / "managed-chrome"
+    )

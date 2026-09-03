@@ -20,12 +20,16 @@ from longtian_api.services.ai_analysis import (
     MODEL_DEADLINE_SECONDS,
     AIAnalysisError,
 )
-from longtian_api.services.ai_errors import AIError
+from longtian_api.services.ai_errors import MANUAL_SYSTEMIC_AI_FAILURES, AIError
 from longtian_api.services.analysis_errors import AnalysisError
 from longtian_api.services.content_enrichment import ContentEnrichmentError
 from longtian_api.services.content_understanding import (
     build_understanding_messages,
     parse_understanding,
+)
+from longtian_api.services.manual_content import (
+    ManualAcquisitionPause,
+    ManualContentSession,
 )
 from longtian_api.services.settled_tasks import database_call, settle
 from longtian_api.services.summary_errors import FAILURE_MESSAGES, failure
@@ -43,12 +47,22 @@ class ContentAnalysisService:
         self._active_id: int | None = None
         self._closed = False
         self.on_job_finished = None
+        self.on_manual_configuration_failure = None
+        self.on_manual_acquisition_pause = None
+        self.on_manual_job_cancel = None
 
     def initialize(self):
         self.repository.initialize()  # Storage reconciliation only, never launch.
 
     async def create(self, payload: AnalysisCreate):
         return await settle(self._create(payload))
+
+    async def start_pending(self):
+        """Run already committed jobs without admitting another intent."""
+        async with self._admission:
+            if self._closed:
+                raise AnalysisError("content_analysis_unavailable")
+            await self._launch()
 
     async def workflow_admit(self, *, result_ids, operation_key, snapshot):
         """Admit topic-neutral understanding for one workflow membership.
@@ -170,12 +184,19 @@ class ContentAnalysisService:
             await started.wait()
 
     async def cancel(self, job_id):
+        if self.on_manual_job_cancel is not None:
+            manual = await self.on_manual_job_cancel(job_id)
+            if manual is not None:
+                return manual
+        return await self.cancel_owned(job_id)
+
+    async def cancel_owned(self, job_id):
         return await settle(self._cancel(job_id))
 
     async def _cancel(self, job_id):
         async with self._admission:
             job = await database_call(self.repository.read, job_id)
-            if job.status not in ("queued", "running"):
+            if job.status not in ("queued", "running") and self._active_id != job_id:
                 return job
             if self._active_id == job_id and self._runner is not None:
                 self._runner.cancel()
@@ -213,6 +234,10 @@ class ContentAnalysisService:
                         job.configuration_revision
                     ) as configuration:
                         await self._execute(job, configuration)
+                except ManualAcquisitionPause:
+                    # The parent excludes this job until an explicit Continue.
+                    # Release the AI lease so stored-only work can proceed.
+                    pass
                 except AIError as error:
                     if error.code == "ai_operation_active":
                         await database_call(
@@ -220,6 +245,16 @@ class ContentAnalysisService:
                         )
                         await asyncio.sleep(0.25)
                         continue
+                    if (
+                        error.code in MANUAL_SYSTEMIC_AI_FAILURES
+                        and self.on_manual_configuration_failure is not None
+                        and await database_call(
+                            self.repository.is_report_generation, job.id
+                        )
+                    ):
+                        await self.on_manual_configuration_failure(
+                            job.configuration_revision, error
+                        )
                     await database_call(
                         self.repository.finish, job.id, "configuration_blocked"
                     )
@@ -254,6 +289,9 @@ class ContentAnalysisService:
             self._active_id = None
 
     async def _execute(self, job, configuration):
+        manual_generation = await database_call(
+            self.repository.is_report_generation, job.id
+        )
         while not self._closed:
             attempt = await database_call(self.repository.next_attempt, job.id)
             if attempt is None:
@@ -266,6 +304,23 @@ class ContentAnalysisService:
                         # failure cannot undo A settlement or strand A's queue.
                         pass
                 return
+            if manual_generation:
+                await database_call(self.repository.start, job.id)
+                await database_call(self.repository.begin, attempt.id)
+                await self._analyse(
+                    attempt,
+                    ManualContentSession(
+                        attempt,
+                        enrichment=self._enrichment,
+                        database=self.repository.database,
+                        on_pause=self.on_manual_acquisition_pause,
+                    ),
+                    configuration,
+                    job.initial_prompt,
+                    allow_preview=False,
+                    stop_on_systemic_error=True,
+                )
+                continue
             if not job.force_refresh and await database_call(
                 self.repository.reuse, attempt.id
             ):
@@ -280,7 +335,16 @@ class ContentAnalysisService:
             # Browser is released between individual records, before any future report.
             await asyncio.sleep(0)
 
-    async def _analyse(self, attempt, session, configuration, prompt):
+    async def _analyse(
+        self,
+        attempt,
+        session,
+        configuration,
+        prompt,
+        *,
+        allow_preview=True,
+        stop_on_systemic_error=False,
+    ):
         source = attempt.source
         expected = SearchResultSourceRecord(
             run_id=source.source_run_id,
@@ -305,7 +369,7 @@ class ContentAnalysisService:
                     candidate = acquired
                     saved_input = SavedInput.from_content(acquired.content)
                     input_fingerprint = acquired.input_fingerprint
-                elif acquired.preview_analysis_eligible:
+                elif allow_preview and acquired.preview_analysis_eligible:
                     # The stored search title/snippet is a safe, immutable
                     # fallback when detail acquisition cannot produce a
                     # document. It is explicitly labelled preview evidence
@@ -329,7 +393,7 @@ class ContentAnalysisService:
                         saved_input,
                         input_fingerprint,
                     )
-                if not candidate.analysis_eligible:
+                if saved_input is None or not candidate.analysis_eligible:
                     status = (
                         "unsupported"
                         if acquired.content and acquired.content.status == "unsupported"
@@ -343,7 +407,15 @@ class ContentAnalysisService:
                             "acquisition",
                             "input_incomplete"
                             if acquired.content
-                            else "acquisition_failed",
+                            else cast(
+                                FailureCode,
+                                {
+                                    "content_unavailable": "source_content_unavailable",
+                                    "lookup_miss": "source_content_unavailable",
+                                    "structure_changed": "source_structure_changed",
+                                    "timed_out": "acquisition_timed_out",
+                                }.get(acquired.outcome, "acquisition_failed"),
+                            ),
                         ),
                     )
                     return
@@ -395,24 +467,41 @@ class ContentAnalysisService:
                 error=failure("analysis", code),
                 usage=usage,
             )
+            if stop_on_systemic_error and error.code in MANUAL_SYSTEMIC_AI_FAILURES:
+                # Block peers before the provider lease is released, so a
+                # queued manual task cannot slip in another paid request.
+                if self.on_manual_configuration_failure is not None:
+                    await self.on_manual_configuration_failure(
+                        configuration.revision, error
+                    )
+                raise
         except ContentEnrichmentError as error:
             if error.code in (
                 "worker_unsettled",
                 "service_unavailable",
                 "staging_unavailable",
+                "browser_operation_active",
             ):
                 raise
             code = cast(
                 FailureCode,
                 error.code
                 if error.code
-                in ("source_active", "source_changed", "invalid_enrichment")
+                in (
+                    "source_active",
+                    "source_changed",
+                    "invalid_enrichment",
+                    "stored_content_unavailable",
+                    "platform_not_supported",
+                )
                 else "acquisition_failed",
             )
             await database_call(
                 self.repository.finish_attempt,
                 attempt.id,
-                "input_incomplete",
+                "unsupported"
+                if code == "platform_not_supported"
+                else "input_incomplete",
                 error=failure("acquisition", code),
             )
 

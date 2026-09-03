@@ -36,6 +36,7 @@ import {
 import { useMonitoringRules } from '@/hooks/use-monitoring-rules'
 import { useSearchBatches } from '@/hooks/use-search-batches'
 import { useSearchRuns } from '@/hooks/use-search-runs'
+import { usePlatformConnections } from '@/hooks/use-platform-connections'
 import {
   isActiveSearchBatch,
   SEARCH_BATCHES_QUERY_KEY,
@@ -216,7 +217,7 @@ function RunHistory({ runs }: { runs: SearchRunSummary[] }) {
             <TableRow key={run.id}>
               <TableCell>
                 <Badge variant={runBadgeVariant(run.status)}>
-                  {searchRunStatusLabel(run.status)}
+                  {searchRunStatusLabel(run.status, run.failure_reason)}
                 </Badge>
               </TableCell>
               <TableCell>
@@ -261,6 +262,11 @@ export function CollectionRuns() {
   const rulesQuery = useMonitoringRules()
   const batchesQuery = useSearchBatches()
   const runsQuery = useSearchRuns()
+  const platformsQuery = usePlatformConnections()
+  const availablePlatforms =
+    platformsQuery.data?.platforms
+      .filter((platform) => platform.availability === 'enabled')
+      .map((platform) => platform.platform) ?? []
   const enabledRules =
     rulesQuery.data?.rules.filter((rule) => rule.enabled) ?? []
   const ruleOptions = enabledRules.map((rule) => ({
@@ -308,9 +314,17 @@ export function CollectionRuns() {
       return
     }
     try {
-      const selected = searchPlatformOrder.filter((platform) =>
-        values.platforms.includes(platform),
+      const selected = searchPlatformOrder.filter(
+        (platform) =>
+          values.platforms.includes(platform) &&
+          availablePlatforms.includes(platform),
       )
+      if (!platformsQuery.isSuccess || selected.length === 0) {
+        form.setError('platforms', {
+          message: '请至少选择一个已经接入的平台。',
+        })
+        return
+      }
       const batch = await startMutation.mutateAsync({
         monitoring_rule_id: rule.id,
         platforms: selected,
@@ -331,6 +345,8 @@ export function CollectionRuns() {
   })
 
   const controlsDisabled =
+    !platformsQuery.isSuccess ||
+    availablePlatforms.length === 0 ||
     startMutation.isPending ||
     openBatch !== undefined ||
     activeStandaloneRun !== undefined
@@ -433,7 +449,9 @@ export function CollectionRuns() {
                     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
                       {searchPlatformOrder.map((platform) => {
                         const presenter = searchPlatformPresenters[platform]
-                        const checked = field.value.includes(platform)
+                        const available = availablePlatforms.includes(platform)
+                        const checked =
+                          available && field.value.includes(platform)
                         return (
                           <FieldLabel
                             key={platform}
@@ -442,7 +460,7 @@ export function CollectionRuns() {
                             <Field orientation="horizontal">
                               <Checkbox
                                 checked={checked}
-                                disabled={controlsDisabled}
+                                disabled={controlsDisabled || !available}
                                 aria-invalid={fieldState.invalid}
                                 onCheckedChange={(nextChecked) => {
                                   const next = nextChecked
@@ -460,6 +478,14 @@ export function CollectionRuns() {
                                   className="size-6"
                                 />
                                 {presenter.label}
+                                {platformsQuery.isSuccess && !available && (
+                                  <span
+                                    aria-hidden="true"
+                                    className="text-xs text-muted-foreground"
+                                  >
+                                    尚未接入
+                                  </span>
+                                )}
                               </span>
                             </Field>
                           </FieldLabel>
@@ -482,6 +508,25 @@ export function CollectionRuns() {
               {rulesQuery.isError && (
                 <p role="alert" className="text-sm text-destructive">
                   监控规则暂时无法读取，请稍后重试。
+                </p>
+              )}
+              {platformsQuery.isError && (
+                <div role="alert" className="text-sm">
+                  <p>平台能力暂时无法读取，没有开始采集。</p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => void platformsQuery.refetch()}
+                  >
+                    重试读取平台能力
+                  </Button>
+                </div>
+              )}
+              {platformsQuery.data?.platforms.some(
+                (platform) => platform.availability === 'coming_soon',
+              ) && (
+                <p className="text-sm text-muted-foreground">
+                  尚未接入的平台不能启动新采集；其历史内容和已有总结仍可用于报告。
                 </p>
               )}
               {!rulesQuery.isPending &&

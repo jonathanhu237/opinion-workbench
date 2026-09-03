@@ -30,6 +30,26 @@ import { CollectionBatchDetail } from '@/routes/collection-batch-detail'
 import { CollectionRunDetail } from '@/routes/collection-run-detail'
 import { CollectionRuns } from '@/routes/collection-runs'
 import { startAISummary } from '@/lib/api/ai-summaries'
+import { fetchPlatformConnections } from '@/lib/api/platform-connections'
+
+vi.mock('@/lib/api/platform-connections', async (original) => ({
+  ...(await original<typeof import('@/lib/api/platform-connections')>()),
+  fetchPlatformConnections: vi.fn(),
+}))
+
+const legacyCatalog = {
+  platforms: (['wb', 'dy', 'ks', 'xhs', 'toutiao'] as const).map(
+    (platform) => ({
+      platform,
+      display_name: platform,
+      availability: 'enabled' as const,
+      status: 'not_checked' as const,
+      guidance: 'none' as const,
+      last_checked_at: null,
+      active_attempt_id: null,
+    }),
+  ),
+}
 
 vi.mock('@/lib/api/monitoring-rules', async (importOriginal) => {
   const actual =
@@ -103,6 +123,7 @@ function standaloneRun(
     term_count: 2,
     max_results_per_term: 10,
     status: 'completed_empty',
+    failure_reason: null,
     current_term_position: 1,
     new_count: 0,
     repeated_count: 0,
@@ -241,6 +262,7 @@ function renderRoute(initialEntry = '/collection-runs') {
 describe('multi-platform collection routes', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.mocked(fetchPlatformConnections).mockResolvedValue(legacyCatalog)
     mockedFetchRules.mockResolvedValue({ rules: [rule] })
     mockedFetchBatches.mockResolvedValue({ batches: [], next_before_id: null })
     mockedFetchRuns.mockResolvedValue({ runs: [], next_before_id: null })
@@ -283,6 +305,37 @@ describe('multi-platform collection routes', () => {
     )
     await waitFor(() =>
       expect(router.state.location.pathname).toBe('/collection-batches/10'),
+    )
+  })
+
+  it('disables unadapted platforms and submits only the visibly available native selection', async () => {
+    vi.mocked(fetchPlatformConnections).mockResolvedValue({
+      platforms: legacyCatalog.platforms.map((value) =>
+        value.platform === 'wb'
+          ? value
+          : { ...value, availability: 'coming_soon', status: 'coming_soon' },
+      ),
+    })
+    const user = userEvent.setup()
+    renderRoute()
+    await user.click(await screen.findByRole('combobox', { name: '监控规则' }))
+    await user.click(await screen.findByRole('option', { name: /龙田街道/u }))
+    expect(screen.getByRole('checkbox', { name: '微博' })).toBeEnabled()
+    for (const name of ['小红书', '抖音', '快手', '今日头条']) {
+      expect(screen.getByRole('checkbox', { name })).toHaveAttribute(
+        'aria-disabled',
+        'true',
+      )
+      await user.click(screen.getByRole('checkbox', { name }))
+      expect(screen.getByRole('checkbox', { name })).not.toBeChecked()
+    }
+    await user.click(screen.getByRole('button', { name: '开始采集' }))
+    await waitFor(() =>
+      expect(mockedStartBatch).toHaveBeenCalledWith({
+        monitoring_rule_id: 1,
+        platforms: ['wb'],
+        max_results_per_term: 10,
+      }),
     )
   })
 
@@ -435,14 +488,46 @@ describe('multi-platform collection routes', () => {
     expect(mockedFetchRun).toHaveBeenCalledWith(70, expect.any(AbortSignal))
   })
 
+  it('shows the structured failure reason on a standalone run', async () => {
+    mockedFetchRun.mockResolvedValue({
+      ...standaloneRun({
+        status: 'structure_changed',
+        failure_reason: 'search_response_incompatible',
+      }),
+      terms: rule.terms,
+    })
+    renderRoute('/collection-runs/70')
+
+    expect(await screen.findByText('搜索响应格式不兼容')).toBeVisible()
+    expect(
+      screen.getByText(
+        /收到的今日头条搜索响应格式与采集器不兼容，需要更新采集器/u,
+      ),
+    ).toBeVisible()
+    expect(screen.queryByText(/页面结构已变化/u)).toBeNull()
+  })
+
+  it('shows a budget stop without calling it a completed collection', async () => {
+    mockedFetchRun.mockResolvedValue({
+      ...standaloneRun({ status: 'timed_out', execution_limit: 'requests' }),
+      terms: rule.terms,
+    })
+    renderRoute('/collection-runs/70')
+    expect(
+      await screen.findByText(/已达到本次浏览器请求次数预算，采集未全部完成/u),
+    ).toBeVisible()
+    expect(screen.queryByText('采集完成')).toBeNull()
+  })
+
   it('routes new analysis intent to shared results and never generates legacy summaries on entry or refresh', async () => {
     const view = renderRoute('/collection-runs/70')
     expect(
       await screen.findByRole('heading', { name: 'AI 汇总（旧版）' }),
     ).toBeVisible()
-    expect(
-      screen.getByRole('link', { name: '前往结果与分析' }),
-    ).toHaveAttribute('href', '/results')
+    expect(screen.getByRole('link', { name: '前往报告生成' })).toHaveAttribute(
+      'href',
+      '/results',
+    )
     expect(screen.queryByRole('button', { name: '生成汇总' })).toBeNull()
     expect(startAISummary).not.toHaveBeenCalled()
     await act(async () => {

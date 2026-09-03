@@ -86,19 +86,31 @@ function attemptButtonLabel(status: PlatformConnectionStatus) {
 
 function rowRecoveryMessage(connection: PlatformConnection) {
   if (
+    connection.status === 'checking' &&
+    connection.guidance === 'starting_browser'
+  ) {
+    return '正在启动应用专用的谷歌浏览器，请稍候。'
+  }
+  if (
     connection.status === 'action_required' &&
     connection.guidance === 'complete_login'
   ) {
-    return `请在当前打开的谷歌浏览器中登录${connection.display_name}。`
+    return `请在应用打开的专用谷歌浏览器中登录${connection.display_name}。`
   }
   if (connection.status === 'action_required') {
-    return `请在当前打开的谷歌浏览器中完成${connection.display_name}的操作。`
+    return `请在应用打开的专用谷歌浏览器中完成${connection.display_name}的操作。`
   }
   if (connection.status === 'disconnected') {
-    return `请在当前打开的谷歌浏览器中登录${connection.display_name}，然后重新检查。`
+    return `请在应用打开的专用谷歌浏览器中登录${connection.display_name}，然后重新检查。`
+  }
+  if (
+    connection.status === 'failed' &&
+    connection.guidance === 'retry_browser'
+  ) {
+    return '专用谷歌浏览器暂时不可用，请重新检查；应用会在需要时自动启动。'
   }
   if (connection.status === 'failed') {
-    return `检查失败。请确认已登录${connection.display_name}，然后重新检查。`
+    return '检查未能完成，请重新检查；应用会在需要时启动专用的谷歌浏览器。'
   }
   return null
 }
@@ -382,7 +394,7 @@ export function PlatformAccounts() {
           平台账号
         </h2>
         <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-          需要登录、扫码或安全验证时，请在打开的谷歌浏览器中完成。
+          需要登录、扫码或安全验证时，请在应用打开的专用谷歌浏览器中完成。首次使用需要在该窗口登录，登录状态会由浏览器保留。
         </p>
       </section>
 

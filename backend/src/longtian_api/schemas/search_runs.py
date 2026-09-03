@@ -5,10 +5,12 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from longtian_api.search_failure_reasons import SearchFailureReason
 from longtian_api.search_platforms import (
     SearchPlatform,
     is_valid_search_content_url,
 )
+from longtian_api.services.native_browser_contracts import ExecutionLimit
 
 SearchRunStatus = Literal[
     "queued",
@@ -37,6 +39,7 @@ SearchResultOpenOutcome = Literal[
     "internal_error",
 ]
 SearchRunErrorCode = Literal[
+    "search_platform_not_available",
     "invalid_request",
     "monitoring_rule_not_found",
     "monitoring_rule_disabled",
@@ -68,6 +71,8 @@ class SearchRunSummary(BaseModel):
     term_count: int
     max_results_per_term: int
     status: SearchRunStatus
+    failure_reason: SearchFailureReason | None
+    execution_limit: ExecutionLimit | None = None
     current_term_position: int | None
     new_count: int
     repeated_count: int
@@ -75,6 +80,14 @@ class SearchRunSummary(BaseModel):
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
+
+    @model_validator(mode="after")
+    def validate_failure_reason(self) -> "SearchRunSummary":
+        if self.execution_limit is not None and self.status != "timed_out":
+            raise ValueError("execution_limit requires timed_out status")
+        if self.failure_reason is not None and self.status != "structure_changed":
+            raise ValueError("failure_reason requires structure_changed status")
+        return self
 
 
 class SearchRunDetail(SearchRunSummary):

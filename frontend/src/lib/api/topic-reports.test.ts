@@ -4,6 +4,7 @@ import { AI_ERROR_CONTRACTS } from '@/lib/api/ai-settings'
 import { summaryFailureSchema } from '@/lib/api/ai-summaries'
 import {
   cancelTopicReport,
+  createSelectedReport,
   createTopicReport,
   fetchReportSection,
   fetchReportSections,
@@ -39,6 +40,52 @@ describe('strict saved-text report boundary', () => {
   beforeEach(() => {
     vi.stubGlobal('fetch', fetchMock)
     fetchMock.mockReset()
+  })
+  it('creates an exact manual selection and rejects a mismatched response', async () => {
+    const request = {
+      request_id: reportRequestId,
+      configuration_revision: 3,
+      report_prompt: { mode: 'default' as const },
+      selection: { kind: 'explicit' as const, result_ids: [1, 4] },
+    }
+    const report = reportFixture({
+      request_id: reportRequestId,
+      trigger: 'manual',
+      initial_job_id: null,
+      completion_event_id: null,
+      selection: request.selection,
+      coverage: {
+        ...reportFixture().coverage,
+        total: 2,
+        ready: 2,
+        unavailable: 0,
+        relevant: 2,
+      },
+      nodes: { judgments: reportNodes(2), composition: reportNodes(1) },
+      usage: {
+        judgment: reportUsage(2),
+        composition: reportUsage(1),
+        total: reportUsage(3),
+      },
+    })
+    fetchMock.mockResolvedValueOnce(json(report, 202))
+    expect(await createSelectedReport(request)).toEqual(report)
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual(
+      request,
+    )
+    fetchMock.mockResolvedValueOnce(
+      json(
+        { ...report, selection: { kind: 'explicit', result_ids: [1, 5] } },
+        202,
+      ),
+    )
+    await expect(createSelectedReport(request)).rejects.toThrow()
+    expect(
+      reportRunSchema.safeParse({
+        ...report,
+        selection: { kind: 'explicit', result_ids: [1] },
+      }).success,
+    ).toBe(false)
   })
   it('reads a normally settled 8/10 automatic report without admitting anything', async () => {
     const report = reportFixture()

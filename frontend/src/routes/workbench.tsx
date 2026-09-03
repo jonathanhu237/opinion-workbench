@@ -110,7 +110,8 @@ function reasonCopy(item: WorkbenchAttention) {
     Record<NonNullable<WorkbenchAttention['reason']>, string>
   > = {
     browser_operation_active: '浏览器正在使用中，本次任务未启动。',
-    browser_unavailable: '浏览器暂时不可用，请检查浏览器是否打开。',
+    browser_unavailable:
+      '应用专用的谷歌浏览器暂时不可用，请重试；应用会在需要时自动启动。',
     monitoring_rule_not_found: '监控规则已删除。',
     monitoring_rule_disabled: '监控规则已停用。',
     invalid_monitoring_rule: '监控规则有问题，请检查。',
@@ -141,7 +142,7 @@ function reasonCopy(item: WorkbenchAttention) {
 function platformAttentionCopy(status: PlatformConnectionStatus) {
   switch (status) {
     case 'action_required':
-      return '请在当前浏览器中登录或完成验证。'
+      return '请在应用专用的谷歌浏览器中登录或完成验证。'
     case 'disconnected':
       return '当前未登录，请重新连接。'
     case 'failed':
@@ -305,7 +306,7 @@ function ReportPanel({
           <div className="flex flex-1 flex-col justify-center py-8">
             <p className="font-display text-xl">还没有可阅读的舆情报告</p>
             <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
-              完成一次采集和分析后，报告会显示在这里。原始结果请到“结果与分析”查看。
+              完成一次采集和分析后，报告会显示在这里。原始结果请到“报告生成”查看。
             </p>
             <Link
               to="/results"
@@ -314,7 +315,7 @@ function ReportPanel({
                 'mt-5 w-fit',
               )}
             >
-              查看结果与分析
+              查看报告生成
               <ArrowUpRight aria-hidden />
             </Link>
           </div>

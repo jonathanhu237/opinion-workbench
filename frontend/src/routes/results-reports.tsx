@@ -128,7 +128,7 @@ export function ResultsReports({
           报告
         </h2>
         <p className="text-sm leading-6 text-muted-foreground">
-          自动任务完成采集后会生成报告；手动初步分析不会自动生成报告。这里也保留历史报告，并支持按时间范围生成报告。
+          这里保留历史报告和独立重试版本。新的手动分析请在内容库选材；下方按时间范围生成仅用于已有文字结果。
         </p>
       </CardHeader>
       <CardContent className="space-y-5 pt-5">
@@ -169,7 +169,7 @@ export function ResultsReports({
               </p>
             ) : automatic.data?.reports.length === 0 ? (
               <p className="text-sm">
-                本任务还没有报告；手动初步分析不会自动生成报告。
+                此历史单条处理任务没有关联报告，可以在内容库重新选材。
               </p>
             ) : (
               <div className="space-y-2">
@@ -335,7 +335,9 @@ export function ResultsReports({
                 ? `来自初步分析任务 #${report.selection.job_id}`
                 : report.selection.kind === 'workflow_run'
                   ? `来自自动任务 #${report.selection.run_id}，使用当时的任务目标`
-                  : `首次发现时间：${formatEvidenceDate(report.selection.first_seen_from)}（含）至 ${formatEvidenceDate(report.selection.first_seen_to)}（不含），北京时间`}
+                  : report.selection.kind === 'explicit'
+                    ? `手动选材：${report.selection.result_ids.length} 条；未选中的历史总结不会加入`
+                    : `首次发现时间：${formatEvidenceDate(report.selection.first_seen_from)}（含）至 ${formatEvidenceDate(report.selection.first_seen_to)}（不含），北京时间`}
               {report.parent_report_id !== null
                 ? ` · 基于报告 #${report.parent_report_id} 的新版本`
                 : ''}

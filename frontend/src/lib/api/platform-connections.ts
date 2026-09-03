@@ -15,6 +15,8 @@ const statusValues = [
 ] as const
 const guidanceValues = [
   'none',
+  'starting_browser',
+  'retry_browser',
   'enable_remote_debugging',
   'approve_connection',
   'complete_login',
@@ -133,7 +135,9 @@ function parsePlatformConnection(value: unknown): PlatformConnection | null {
   if (
     (value.availability === 'coming_soon' &&
       (value.status !== 'coming_soon' || value.guidance !== 'none')) ||
-    (value.availability === 'enabled' && value.status === 'coming_soon')
+    (value.availability === 'enabled' && value.status === 'coming_soon') ||
+    (value.guidance === 'starting_browser' && value.status !== 'checking') ||
+    (value.guidance === 'retry_browser' && value.status !== 'failed')
   ) {
     return null
   }

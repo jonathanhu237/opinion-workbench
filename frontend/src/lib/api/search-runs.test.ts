@@ -6,6 +6,8 @@ import {
   fetchSearchRuns,
   isActiveSearchRun,
   openSearchRunResult,
+  searchFailureReasonSchema,
+  searchRunSummarySchema,
   SearchRunApiError,
   startSearchRun,
   type SearchResult,
@@ -21,6 +23,7 @@ const run: SearchRunDetail = {
   terms: ['龙田街道', '竹坑社区'],
   max_results_per_term: 10,
   status: 'completed_with_results',
+  failure_reason: null,
   current_term_position: 1,
   new_count: 1,
   repeated_count: 0,
@@ -29,6 +32,23 @@ const run: SearchRunDetail = {
   started_at: '2026-08-26T08:00:01+00:00',
   finished_at: '2026-08-26T08:00:05+00:00',
 }
+
+it('accepts an explicit execution budget stop but never on a successful run', () => {
+  const { terms: _terms, ...summary } = run
+  expect(
+    searchRunSummarySchema.safeParse({
+      ...summary,
+      status: 'timed_out',
+      execution_limit: 'requests',
+    }).success,
+  ).toBe(true)
+  expect(
+    searchRunSummarySchema.safeParse({
+      ...summary,
+      execution_limit: 'requests',
+    }).success,
+  ).toBe(false)
+})
 
 const result: SearchResult = {
   id: 11,
@@ -97,6 +117,66 @@ describe('search runs API boundary', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals()
+  })
+
+  it.each([
+    'page_state_unrecognized',
+    'search_context_unavailable',
+    'search_response_incompatible',
+    'search_results_incompatible',
+    'search_pagination_incompatible',
+  ] as const)('accepts the structured failure reason %s', (failure_reason) => {
+    const summary = Object.fromEntries(
+      Object.entries(run).filter(([key]) => key !== 'terms'),
+    )
+    const payload = {
+      ...summary,
+      status: 'structure_changed' as const,
+      failure_reason,
+    }
+    expect(searchFailureReasonSchema.safeParse(failure_reason).success).toBe(
+      true,
+    )
+    expect(searchRunSummarySchema.safeParse(payload).success).toBe(true)
+  })
+
+  it('keeps historical null reasons and rejects unknown or contradictory reasons', () => {
+    const summary = Object.fromEntries(
+      Object.entries(run).filter(([key]) => key !== 'terms'),
+    )
+    expect(searchRunSummarySchema.safeParse(summary).success).toBe(true)
+    expect(
+      searchRunSummarySchema.safeParse({
+        ...summary,
+        failure_reason: 'unknown_reason',
+      }).success,
+    ).toBe(false)
+    expect(
+      searchRunSummarySchema.safeParse({
+        ...summary,
+        failure_reason: 'search_results_incompatible',
+      }).success,
+    ).toBe(false)
+  })
+
+  it('rejects a contradictory failure reason on the run detail boundary', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          ...run,
+          failure_reason: 'search_results_incompatible',
+        }),
+        { status: 202 },
+      ),
+    )
+
+    await expect(
+      startSearchRun({
+        monitoring_rule_id: 1,
+        platform: 'toutiao',
+        max_results_per_term: 10,
+      }),
+    ).rejects.toMatchObject({ code: 'invalid_response', status: 202 })
   })
 
   it('sends the exact start payload and requires an HTTP 202 detail', async () => {

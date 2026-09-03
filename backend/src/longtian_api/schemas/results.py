@@ -21,6 +21,16 @@ ResultState = (
 )
 
 
+class ResultMaterial(StrictModel):
+    """Small, truthful material inventory projection for the library table."""
+
+    text_available: bool
+    image_count: Count
+    video_count: Count
+    inventory_complete: bool
+    missing: bool
+
+
 class Result(StrictModel):
     id: PositiveId
     source: AnalysisSource
@@ -31,6 +41,7 @@ class Result(StrictModel):
     latest_attempt_id: PositiveId | None
     active_job_id: PositiveId | None
     legacy_count: Count
+    material: ResultMaterial | None = None
 
 
 class ResultList(StrictModel):

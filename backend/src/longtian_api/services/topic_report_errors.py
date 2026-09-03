@@ -16,6 +16,7 @@ ReportErrorCode = Literal[
     "topic_report_not_terminal",
     "topic_report_not_active",
     "invalid_report_interval",
+    "invalid_report_selection",
     "topic_report_storage_unavailable",
     "topic_report_unavailable",
 ]
@@ -44,6 +45,10 @@ ERRORS = {
     "topic_report_not_terminal": (409, "报告仍在处理中，请先等待或取消。"),
     "topic_report_not_active": (409, "报告已结束，无需取消。"),
     "invalid_report_interval": (422, "请选择有效的首次入库时间范围。"),
+    "invalid_report_selection": (
+        422,
+        "选中的内容已不存在或无法读取，请刷新后重新选择。",
+    ),
     "topic_report_storage_unavailable": (
         503,
         "文本报告数据暂时无法读取或保存，请稍后重试。",

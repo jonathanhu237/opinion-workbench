@@ -19,6 +19,11 @@ from longtian_api.services.browser_operations import (
     BrowserOperationCoordinator,
     BrowserOperationOwner,
 )
+from longtian_api.services.collector_contracts import (
+    AuthWorkerError,
+    EnrichmentWorkerResult,
+    EnrichmentWorkerUnsettledError,
+)
 from longtian_api.services.enrichment_models import (
     EnrichedContent,
     EnrichmentBudget,
@@ -35,14 +40,10 @@ from longtian_api.services.enrichment_staging import (
     MediaStagingError,
     ValidatedMedia,
 )
-from longtian_api.services.media_crawler_auth_worker import (
-    AuthWorkerError,
-    EnrichmentWorkerResult,
-    EnrichmentWorkerUnsettledError,
-)
 from longtian_api.services.settled_tasks import settle
 
 EnrichmentErrorCode = Literal[
+    "stored_content_unavailable",
     "source_not_found",
     "source_active",
     "source_changed",
@@ -164,6 +165,14 @@ class ContentEnrichmentService:
         # Configuration only; startup/GET must not create directories or processes.
         worker.configure_media_spool(spool.root)
 
+    @property
+    def native_acquisition(self):
+        return bool(getattr(self._worker, "supports_manual_acquisition", False))
+
+    def supports_platform(self, platform):
+        from longtian_api.services.collector_contracts import supports_platform
+        return supports_platform(self._worker, platform)
+
     @asynccontextmanager
     async def operation(self) -> AsyncIterator["EnrichmentSession"]:
         """Reserve Chrome across serial items; exit before text-only composition."""
@@ -190,6 +199,7 @@ class ContentEnrichmentService:
             active = self._active
         if active is not None:
             await settle(active.close())
+            await settle(active.release_hold())
 
 
 class EnrichmentSession:
@@ -207,6 +217,53 @@ class EnrichmentSession:
         self._cleanup_lock = asyncio.Lock()
         self._close_lock = asyncio.Lock()
         self._unsettled: EnrichmentWorkerUnsettledError | None = None
+        self._manual_hold = False
+        self._settled = asyncio.Event()
+
+    def hold_for_manual(self):
+        self._manual_hold = True
+
+    def discard_manual_hold(self):
+        self._manual_hold = False
+
+    async def show_manual(self, platform):
+        await self._settled.wait()
+        if (
+            not self._manual_hold
+            or not await self._service._browser_operations.is_owned_by(self.owner)
+        ):
+            raise ContentEnrichmentError("service_unavailable")
+        result = await self._service._worker.manual_page(
+            request_id=uuid4(), platform=platform, action="show"
+        )
+        if result.outcome not in ("opened_homepage", "opened_existing"):
+            raise ContentEnrichmentError("service_unavailable")
+
+    async def prepare_resume(self):
+        await self._settled.wait()
+        if self._unsettled is not None and not self._unsettled.quiescent():
+            raise ContentEnrichmentError("worker_unsettled")
+        # Stop the user-opened dedicated page before automated work is admitted.
+        # This closes only the project's tab, preserving the browser profile.
+        if self._manual_hold:
+            await self._service._worker.discard_session()
+
+    async def release_hold(self, *, abandon=False):
+        await self.prepare_resume()
+        if abandon:
+            discard = getattr(
+                self._service._worker, "discard_enrichment_checkpoint", None
+            )
+            if discard is not None:
+                discard()
+        self._manual_hold = False
+        await self._release()
+
+    async def _release(self):
+        await self._service._browser_operations.release(self.owner)
+        async with self._service._lock:
+            if self._service._active is self:
+                self._service._active = None
 
     @asynccontextmanager
     async def item(
@@ -216,6 +273,7 @@ class EnrichmentSession:
         result_id: int,
         budget: EnrichmentBudget | None = None,
         expected_source: SearchResultSourceRecord | None = None,
+        on_content=None,
     ) -> AsyncIterator[EnrichmentItem]:
         if self._closed or not await self._service._browser_operations.is_owned_by(
             self.owner
@@ -232,7 +290,11 @@ class EnrichmentSession:
         self._cancel_requested = False
         self._acquire_task = asyncio.create_task(
             self._acquire(
-                run_id, result_id, budget or EnrichmentBudget(), expected_source
+                run_id,
+                result_id,
+                budget or EnrichmentBudget(),
+                expected_source,
+                on_content,
             )
         )
         try:
@@ -257,6 +319,7 @@ class EnrichmentSession:
         result_id: int,
         budget: EnrichmentBudget,
         expected_source: SearchResultSourceRecord | None = None,
+        on_content=None,
     ) -> EnrichmentItem:
         try:
             source = await asyncio.to_thread(
@@ -290,6 +353,27 @@ class EnrichmentSession:
             )
             if self._cancel_requested or self._closed:
                 return EnrichmentItem(source, "cancelled")
+
+            async def observe_content(value):
+                if on_content is not None and not self._cancel_requested:
+                    checked = validate_content(
+                        value.model_dump(),
+                        platform=source.platform,
+                        content_id=source.platform_content_id,
+                        content_url=source.content_url,
+                        budget=budget,
+                    )
+                    # Only validated, owned files may accompany a text checkpoint.
+                    media = await asyncio.to_thread(
+                        self._operation.read_assets, checked, budget.max_total_bytes
+                    )
+                    await on_content(checked, media)
+
+            native_options = (
+                {"media_sink": self._operation, "on_content": observe_content}
+                if self._service.native_acquisition
+                else {}
+            )
             self._worker_task = asyncio.create_task(
                 self._service._worker.enrich(
                     request_id=request_id,
@@ -298,6 +382,7 @@ class EnrichmentSession:
                     content_url=source.content_url,
                     term=source.matched_terms[0],
                     budget=budget,
+                    **native_options,
                 )
             )
             try:
@@ -315,7 +400,17 @@ class EnrichmentSession:
                 return EnrichmentItem(source, "internal_error")
             if self._cancel_requested or self._closed:
                 return EnrichmentItem(source, "cancelled")
-            if result.outcome != "completed":
+            paused_with_material = (
+                result.outcome
+                in (
+                    "login_required",
+                    "manual_challenge_required",
+                    "platform_blocked_or_rate_limited",
+                )
+                and result.content is not None
+                and self._service.native_acquisition
+            )
+            if result.outcome != "completed" and not paused_with_material:
                 if result.content is not None or result.manifest is not None:
                     raise EnrichmentValidationError
                 return EnrichmentItem(source, result.outcome)
@@ -342,7 +437,7 @@ class EnrichmentSession:
             if self._cancel_requested or self._closed:
                 return EnrichmentItem(source, "cancelled")
             return EnrichmentItem(
-                source, "completed", content, evidence_fingerprint(content), media
+                source, result.outcome, content, evidence_fingerprint(content), media
             )
         except MediaStagingError:
             await self._service._worker.discard_session()
@@ -388,8 +483,8 @@ class EnrichmentSession:
                 await self._stop_current()
                 await self._cleanup()
             finally:
-                if self._unsettled is None or self._unsettled.quiescent():
-                    await self._service._browser_operations.release(self.owner)
-                    async with self._service._lock:
-                        if self._service._active is self:
-                            self._service._active = None
+                if not self._manual_hold and (
+                    self._unsettled is None or self._unsettled.quiescent()
+                ):
+                    await self._release()
+                self._settled.set()

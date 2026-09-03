@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as api from '@/lib/api/search-batches'
 import {
   openSearchRunResult,
+  type SearchFailureReason,
   type SearchRunStatus,
   type SearchRunSummary,
 } from '@/lib/api/search-runs'
@@ -32,6 +33,7 @@ vi.mock('@/lib/api/search-runs', async (importOriginal) => ({
 const stamp = '2026-08-27T08:00:00+00:00'
 function fixture(
   status: SearchRunStatus = 'login_required',
+  failure_reason: SearchFailureReason | null = null,
 ): api.SearchBatchDetail {
   const run: SearchRunSummary = {
     id: 31,
@@ -41,6 +43,7 @@ function fixture(
     term_count: 2,
     max_results_per_term: 10,
     status,
+    failure_reason,
     current_term_position: 1,
     new_count: 1,
     repeated_count: 0,
@@ -149,12 +152,12 @@ describe('manual batch recovery', () => {
   })
 
   it.each([
-    ['login_required', '请打开平台，在当前谷歌浏览器中登录后继续采集。'],
+    ['login_required', '请打开平台，在应用专用的谷歌浏览器中登录后继续采集。'],
     ['manual_challenge_required', '平台要求安全验证。'],
     ['platform_blocked_or_rate_limited', '平台暂时限制了访问。'],
-    ['structure_changed', '平台页面发生变化'],
+    ['structure_changed', '未能可靠识别微博的采集内容'],
     ['timed_out', '采集等待超时。'],
-    ['browser_unavailable', '无法连接谷歌浏览器。'],
+    ['browser_unavailable', '应用专用的谷歌浏览器暂时不可用。'],
     ['internal_error', '本次采集未能完成。'],
   ] as const)(
     'explains %s without inventing a login or captcha state',
@@ -169,6 +172,37 @@ describe('manual batch recovery', () => {
       )
       for (const name of ['打开平台', '继续采集', '跳过此平台', '取消采集'])
         expect(screen.getByRole('button', { name })).toBeEnabled()
+    },
+  )
+
+  it.each([
+    ['page_state_unrecognized', '当前未能识别微博页面的工作状态。'],
+    ['search_context_unavailable', '无法确认微博的搜索会话或必要登录信息。'],
+    [
+      'search_response_incompatible',
+      '收到的微博搜索响应格式与采集器不兼容，需要更新采集器后再试',
+    ],
+    [
+      'search_results_incompatible',
+      '收到的微博结果条目无法被当前采集器安全识别，需要更新采集器后再试',
+    ],
+    [
+      'search_pagination_incompatible',
+      '无法确认微博搜索结果的安全翻页信息，已停止以避免重复或漏采',
+    ],
+  ] as const)(
+    'explains structured failure reason %s without recommending a page refresh',
+    async (reason, message) => {
+      renderBatch(fixture('structure_changed', reason))
+      expect(await screen.findByText(new RegExp(message, 'u'))).toBeVisible()
+      if (
+        reason === 'search_response_incompatible' ||
+        reason === 'search_results_incompatible' ||
+        reason === 'search_pagination_incompatible'
+      ) {
+        expect(screen.getByText(/需要更新采集器/u)).toBeVisible()
+      }
+      expect(screen.queryByText(/页面发生变化/u)).toBeNull()
     },
   )
 
@@ -187,7 +221,8 @@ describe('manual batch recovery', () => {
         input,
       ),
     )
-    const message = await screen.findByText(/已在谷歌浏览器中打开平台页面/u)
+    const message =
+      await screen.findByText(/已在应用专用的谷歌浏览器中打开平台页面/u)
     expect(message).toHaveAttribute('role', 'status')
     expect(message.parentElement).toHaveAttribute('aria-live', 'polite')
     expect(message).not.toHaveTextContent('登录成功')
@@ -245,7 +280,9 @@ describe('manual batch recovery', () => {
       await screen.findByText('已取消采集，已有结果仍然保留。'),
     ).toBeVisible()
     await act(async () => finishOpen({ outcome: 'opened_existing' }))
-    expect(screen.queryByText(/已在谷歌浏览器中打开平台页面/u)).toBeNull()
+    expect(
+      screen.queryByText(/已在应用专用的谷歌浏览器中打开平台页面/u),
+    ).toBeNull()
     expect(screen.getByText('已取消采集，已有结果仍然保留。')).toBeVisible()
   })
 
