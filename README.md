@@ -27,7 +27,7 @@ third_party/MediaCrawler/ 平台采集引擎 submodule（独立依赖环境）
 ```bash
 cd backend
 uv sync --locked
-uv run fastapi dev --host 127.0.0.1 --port 8000
+LONGTIAN_COLLECTOR_BACKEND=native-weibo uv run fastapi dev --host 127.0.0.1 --port 8000
 ```
 
 验证接口：
@@ -54,6 +54,9 @@ mise x node@24 -- pnpm dev
 
 打开 <http://127.0.0.1:5173>。Vite 会把 `/api` 请求代理到本机的 FastAPI 服务；页面
 会显示“后端已连接”或可操作的不可用状态。
+
+当前产品采集运行时只开放微博。上述后端启动命令会启用项目自有的原生微博采集器；
+抖音、快手、小红书和今日头条会显示为“尚未接入”，不能启动新采集。
 
 如需覆盖 API 地址，复制 `frontend/.env.example` 为 `.env.local` 并修改
 `VITE_API_BASE_URL`。本地环境文件不会进入版本控制。
