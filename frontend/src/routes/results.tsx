@@ -495,6 +495,12 @@ export function Results({ mode }: { mode?: 'compose' | 'records' } = {}) {
                 const next = new URLSearchParams(current)
                 next.delete('generation')
                 next.set('report', String(id))
+                for (const key of [
+                  'report_section',
+                  'report_sources_offset',
+                  'report_sections_offset',
+                ])
+                  next.delete(key)
                 next.delete('view')
                 return next
               })

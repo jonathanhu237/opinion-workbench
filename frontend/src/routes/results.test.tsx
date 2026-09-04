@@ -399,4 +399,23 @@ describe('报告生成页面', () => {
       expect(fetchTopicReports).toHaveBeenCalledWith(expect.anything(), {}),
     )
   })
+
+  it('resets legacy report detail pagination when selecting another report', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchTopicReports).mockResolvedValue({
+      reports: [reportFixture({ id: 15 }), reportFixture({ id: 14 })],
+      next_before_id: null,
+    })
+    const { router } = renderResults(
+      '/results?view=records&report=15&report_section=501&report_sources_offset=20',
+    )
+    expect(
+      await screen.findByRole('button', { name: /报告 #14/u }),
+    ).toBeVisible()
+    await user.click(screen.getByRole('button', { name: /报告 #14/u }))
+    await waitFor(() =>
+      expect(router.state.location.search).not.toContain('report_section='),
+    )
+    expect(router.state.location.search).not.toContain('report_sources_offset=')
+  })
 })

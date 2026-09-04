@@ -22,4 +22,11 @@ describe('legacy results route compatibility', () => {
   ])('maps %s to the normalized destination', (search, destination) => {
     expect(legacyResultsDestination(search)).toEqual(destination)
   })
+
+  it.each(['?reports_before=15', '?report_section=501'])(
+    'treats legacy report state %s as report records',
+    (search) => {
+      expect(legacyResultsDestination(search).pathname).toBe('/reports/history')
+    },
+  )
 })
