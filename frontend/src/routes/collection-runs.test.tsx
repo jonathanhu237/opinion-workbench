@@ -524,7 +524,7 @@ describe('multi-platform collection routes', () => {
     expect(
       await screen.findByRole('heading', { name: 'AI 汇总（旧版）' }),
     ).toBeVisible()
-    expect(screen.getByRole('link', { name: '前往报告生成' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: '前往生成报告' })).toHaveAttribute(
       'href',
       '/reports/new',
     )

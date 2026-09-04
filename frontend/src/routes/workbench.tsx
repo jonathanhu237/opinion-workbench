@@ -306,7 +306,7 @@ function ReportPanel({
           <div className="flex flex-1 flex-col justify-center py-8">
             <p className="font-display text-xl">还没有可阅读的舆情报告</p>
             <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
-              完成一次采集和分析后，报告会显示在这里。原始结果请到“报告生成”查看。
+              完成一次采集和分析后，报告会显示在这里。原始结果请到“生成报告”查看。
             </p>
             <Link
               to="/reports/new"
@@ -315,7 +315,7 @@ function ReportPanel({
                 'mt-5 w-fit',
               )}
             >
-              查看报告生成
+              查看生成报告
               <ArrowUpRight aria-hidden />
             </Link>
           </div>

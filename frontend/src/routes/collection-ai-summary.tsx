@@ -438,7 +438,7 @@ export function CollectionAISummary({
             to="/reports/new"
             className={buttonVariants({ className: 'min-h-11 sm:min-h-8' })}
           >
-            前往报告生成
+            前往生成报告
           </Link>
         ) : (
           <Button
@@ -458,12 +458,12 @@ export function CollectionAISummary({
       <p className="text-sm leading-6 text-muted-foreground">
         旧版分析只针对本次采集，历史报告继续保留。
         <Link to="/reports/new" className="ml-1 underline underline-offset-4">
-          前往报告生成查看选材与报告
+          前往生成报告查看选材与报告
         </Link>
       </p>
       {historyOnly && (
         <p className="text-sm text-muted-foreground">
-          这里只显示旧版汇总和引用。新的选材与报告请前往报告生成；正在进行的旧版任务仍可取消。
+          这里只显示旧版汇总和引用。新的选材与报告请前往生成报告；正在进行的旧版任务仍可取消。
         </p>
       )}
       {!historyOnly && admissionMessage && (
