@@ -226,7 +226,9 @@ function ContentLibrary({
             <h2 className="font-display text-xl">舆情内容</h2>
           </CardTitle>
           <CardDescription className="mt-1 flex min-w-0 flex-col gap-1">
-            <span>内容库是报告选材来源，按最新入库优先展示；暂不提供筛选。</span>
+            <span>
+              内容库是报告选材来源，按最新入库优先展示；暂不提供筛选。
+            </span>
             <span className="text-xs sm:hidden">
               共 {results.data?.total ?? '—'} 条 · 每页 {RESULT_PAGE_SIZE} 条
             </span>
