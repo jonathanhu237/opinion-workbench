@@ -141,26 +141,24 @@ function SidebarExpandableGroup({
           aria-hidden
         />
       </SidebarMenuButton>
-      {open && (
-        <SidebarMenuSub id={`sidebar-${id}-submenu`}>
-          {items.map((item) => (
-            <SidebarMenuSubItem key={item.to}>
-              <SidebarMenuSubButton
-                render={
-                  <NavLink
-                    to={item.to}
-                    end
-                    onClick={() => setOpenMobile(false)}
-                  />
-                }
-                isActive={item.isActive}
-              >
-                <span>{item.label}</span>
-              </SidebarMenuSubButton>
-            </SidebarMenuSubItem>
-          ))}
-        </SidebarMenuSub>
-      )}
+      <SidebarMenuSub id={`sidebar-${id}-submenu`} hidden={!open}>
+        {items.map((item) => (
+          <SidebarMenuSubItem key={item.to}>
+            <SidebarMenuSubButton
+              render={
+                <NavLink
+                  to={item.to}
+                  end
+                  onClick={() => setOpenMobile(false)}
+                />
+              }
+              isActive={item.isActive}
+            >
+              <span>{item.label}</span>
+            </SidebarMenuSubButton>
+          </SidebarMenuSubItem>
+        ))}
+      </SidebarMenuSub>
     </SidebarMenuItem>
   )
 }

@@ -362,6 +362,7 @@ export function Results({ mode }: { mode?: 'compose' | 'records' } = {}) {
   const resultId = readId(params.get('result'))
   const legacyReportId = readId(params.get('report'))
   const requestedJobId = readId(params.get('job'))
+  const requestedLegacyReportList = params.has('reports_before')
   const resultControls = useResultSourceControls()
   const resultFocus = useRef<HTMLElement | null>(null)
   const [selectedIds, setSelectedIds] = useState<number[]>(readSelectionDraft)
@@ -479,7 +480,9 @@ export function Results({ mode }: { mode?: 'compose' | 'records' } = {}) {
           <ReportGenerations
             selectedId={readId(params.get('generation'))}
             autoSelectLatest={
-              legacyReportId === null && requestedJobId === null
+              legacyReportId === null &&
+              requestedJobId === null &&
+              !requestedLegacyReportList
             }
             onSelect={(id) => {
               setParams((current) => {

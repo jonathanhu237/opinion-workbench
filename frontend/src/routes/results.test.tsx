@@ -378,6 +378,18 @@ describe('报告生成页面', () => {
 
   it('keeps the legacy report list cursor in the report records route', async () => {
     const user = userEvent.setup()
+    vi.mocked(fetchReportGenerations).mockResolvedValue({
+      items: [
+        {
+          id: 9,
+          name: '新版任务',
+          status: 'completed',
+          created_at: '2026-09-04T00:00:00Z',
+          selection: { result_ids: [11] },
+        } as never,
+      ],
+      next_before_id: null,
+    })
     vi.mocked(fetchTopicReports).mockImplementation(
       async (_signal, options) => ({
         reports: [reportFixture({ id: options?.beforeId ? 14 : 15 })],
@@ -388,6 +400,9 @@ describe('报告生成页面', () => {
     expect(
       await screen.findByRole('button', { name: /报告 #14/u }),
     ).toBeVisible()
+    expect(screen.getByRole('button', { name: /新版任务/u })).toBeVisible()
+    expect(screen.queryByText(/阶段 [1-4]\/4/u)).toBeNull()
+    expect(router.state.location.search).toBe('?view=records&reports_before=27')
     expect(fetchTopicReports).toHaveBeenCalledWith(expect.anything(), {
       beforeId: 27,
     })

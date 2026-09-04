@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 
 import { Button } from '@/components/ui/button'
@@ -448,6 +448,7 @@ export function ReportGenerations({
   const [beforeId, setBeforeId] = useState<number | undefined>()
   const [params, setParams] = useSearchParams()
   const legacyBeforeId = readId(params.get('reports_before'))
+  const suppressInitialSelection = useRef(legacyBeforeId !== null)
   const history = useQuery({
     queryKey: [...GENERATIONS_QUERY_KEY, 'list', beforeId],
     queryFn: ({ signal }) => fetchReportGenerations(signal, beforeId),
@@ -479,7 +480,12 @@ export function ReportGenerations({
     })
   }
   useEffect(() => {
-    if (!autoSelectLatest || selectedId !== null || !history.data?.items.length)
+    if (
+      !autoSelectLatest ||
+      suppressInitialSelection.current ||
+      selectedId !== null ||
+      !history.data?.items.length
+    )
       return
     const preferred =
       history.data.items.find((value) => isActiveGeneration(value.status)) ??
