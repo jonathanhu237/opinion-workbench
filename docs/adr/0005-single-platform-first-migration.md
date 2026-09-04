@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0009
 ---
 
 # 先验证单平台完整流程，再逐个平台迁移
