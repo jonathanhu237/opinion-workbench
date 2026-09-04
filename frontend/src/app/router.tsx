@@ -6,6 +6,7 @@ import {
 } from 'react-router'
 
 import { AppShell } from '@/app/shell'
+import { isReportRecordContext } from '@/lib/report-route-state'
 import { PlatformAccounts } from '@/routes/platform-accounts'
 import { RouteErrorBoundary } from '@/routes/route-error-boundary'
 import { Workbench } from '@/routes/workbench'
@@ -178,11 +179,7 @@ export const appRoutes: RouteObject[] = [
 
 export function legacyResultsDestination(search: string) {
   const params = new URLSearchParams(search)
-  const records =
-    params.get('view') === 'records' ||
-    params.has('generation') ||
-    params.has('report') ||
-    params.has('job')
+  const records = isReportRecordContext(params)
   params.delete('view')
   const nextSearch = params.toString()
   return {

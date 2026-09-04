@@ -56,6 +56,8 @@ import {
   ReportGenerations,
 } from '@/routes/report-generations'
 import { ReportSelectionActions } from '@/routes/report-selection-actions'
+import { ResultsJobs } from '@/routes/results-jobs'
+import { isReportRecordContext } from '@/lib/report-route-state'
 import { searchPlatformPresenters } from '@/routes/search-run-presenters'
 
 const selectionDraftKey = 'longtian:report-selection-draft:v1'
@@ -359,16 +361,11 @@ export function Results({ mode }: { mode?: 'compose' | 'records' } = {}) {
   const [params, setParams] = useSearchParams()
   const resultId = readId(params.get('result'))
   const legacyReportId = readId(params.get('report'))
+  const requestedJobId = readId(params.get('job'))
   const resultControls = useResultSourceControls()
   const resultFocus = useRef<HTMLElement | null>(null)
   const [selectedIds, setSelectedIds] = useState<number[]>(readSelectionDraft)
-  const inferredMode =
-    params.get('view') === 'records' ||
-    params.has('generation') ||
-    params.has('report') ||
-    params.has('job')
-      ? 'records'
-      : 'compose'
+  const inferredMode = isReportRecordContext(params) ? 'records' : 'compose'
   const activeMode = mode ?? inferredMode
   const settings = useQuery({
     queryKey: ANALYSIS_SETTINGS_QUERY_KEY,
@@ -481,7 +478,9 @@ export function Results({ mode }: { mode?: 'compose' | 'records' } = {}) {
         <div>
           <ReportGenerations
             selectedId={readId(params.get('generation'))}
-            autoSelectLatest={legacyReportId === null}
+            autoSelectLatest={
+              legacyReportId === null && requestedJobId === null
+            }
             onSelect={(id) => {
               setParams((current) => {
                 const next = new URLSearchParams(current)
@@ -503,9 +502,19 @@ export function Results({ mode }: { mode?: 'compose' | 'records' } = {}) {
           />
           {legacyReportId !== null && (
             <div className="mt-5">
-              <LegacyReportRecord reportId={legacyReportId} />
+              <LegacyReportRecord
+                key={legacyReportId}
+                reportId={legacyReportId}
+              />
             </div>
           )}
+          <div className="mt-5">
+            <ResultsJobs
+              settings={settings.data}
+              provider={provider.data}
+              includeReports={false}
+            />
+          </div>
         </div>
       )}
       {resultId !== null && (

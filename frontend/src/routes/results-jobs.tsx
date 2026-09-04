@@ -37,9 +37,11 @@ import { REPORT_URL_KEYS, ResultsReports } from '@/routes/results-reports'
 export function ResultsJobs({
   settings,
   provider,
+  includeReports = true,
 }: {
   settings?: AnalysisSettings
   provider?: AISettings
+  includeReports?: boolean
 }) {
   const heading = useRef<HTMLHeadingElement>(null)
   const client = useQueryClient()
@@ -370,7 +372,9 @@ export function ResultsJobs({
           )}
         </CardContent>
       </Card>
-      <ResultsReports job={job} settings={settings} provider={provider} />
+      {includeReports && (
+        <ResultsReports job={job} settings={settings} provider={provider} />
+      )}
     </>
   )
 }

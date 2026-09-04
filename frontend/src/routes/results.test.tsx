@@ -7,6 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   analysisProvider,
   analysisSettingsFixture,
+  analysisJobFixture,
   resultFixture,
 } from '@/lib/api/analysis-fixtures'
 import { fetchAISettings } from '@/lib/api/ai-settings'
@@ -16,6 +17,7 @@ import {
   fetchAnalysisAttempt,
   fetchAnalysisJob,
   fetchAnalysisJobItems,
+  fetchAnalysisJobs,
 } from '@/lib/api/content-analyses'
 import {
   fetchResult,
@@ -30,6 +32,7 @@ import {
   previewReportSelection,
 } from '@/lib/api/report-generations'
 import { fetchTopicReports } from '@/lib/api/topic-reports'
+import { reportFixture } from '@/lib/api/topic-reports.fixtures'
 import { Results } from '@/routes/results'
 
 vi.mock('@/lib/api/ai-settings', async (original) => ({
@@ -46,6 +49,7 @@ vi.mock('@/lib/api/content-analyses', async (original) => ({
   fetchAnalysisAttempt: vi.fn(),
   fetchAnalysisJob: vi.fn(),
   fetchAnalysisJobItems: vi.fn(),
+  fetchAnalysisJobs: vi.fn(),
 }))
 vi.mock('@/lib/api/results', async (original) => ({
   ...(await original<typeof import('@/lib/api/results')>()),
@@ -138,6 +142,10 @@ describe('报告生成页面', () => {
     })
     vi.mocked(fetchAnalysisAttempt).mockResolvedValue(undefined as never)
     vi.mocked(fetchAnalysisJob).mockResolvedValue(undefined as never)
+    vi.mocked(fetchAnalysisJobs).mockResolvedValue({
+      jobs: [],
+      next_before_id: null,
+    })
     vi.mocked(fetchAnalysisJobItems).mockResolvedValue({
       items: [],
       total: 0,
@@ -352,5 +360,43 @@ describe('报告生成页面', () => {
     renderResults('/results?job=7')
     expect(await screen.findByText('报告列表')).toBeVisible()
     expect(screen.queryByRole('tab')).toBeNull()
+  })
+
+  it('keeps a legacy analysis job deep link inside report records', async () => {
+    const job = analysisJobFixture({ id: 7 })
+    vi.mocked(fetchAnalysisJobs).mockResolvedValue({
+      jobs: [job],
+      next_before_id: null,
+    })
+    vi.mocked(fetchAnalysisJob).mockResolvedValue(job)
+    renderResults('/results?job=7')
+    expect(
+      await screen.findByRole('region', { name: '分析任务 7' }),
+    ).toBeVisible()
+    expect(screen.getByText(/历史单条处理任务/u)).toBeVisible()
+  })
+
+  it('keeps the legacy report list cursor in the report records route', async () => {
+    const user = userEvent.setup()
+    vi.mocked(fetchTopicReports).mockImplementation(
+      async (_signal, options) => ({
+        reports: [reportFixture({ id: options?.beforeId ? 14 : 15 })],
+        next_before_id: options?.beforeId ? null : 15,
+      }),
+    )
+    const { router } = renderResults('/results?view=records&reports_before=27')
+    expect(
+      await screen.findByRole('button', { name: /报告 #14/u }),
+    ).toBeVisible()
+    expect(fetchTopicReports).toHaveBeenCalledWith(expect.anything(), {
+      beforeId: 27,
+    })
+    await user.click(screen.getByRole('button', { name: '最新报告' }))
+    await waitFor(() =>
+      expect(router.state.location.search).toBe('?view=records'),
+    )
+    await waitFor(() =>
+      expect(fetchTopicReports).toHaveBeenCalledWith(expect.anything(), {}),
+    )
   })
 })

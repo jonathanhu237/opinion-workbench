@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router'
+import { Link, useSearchParams } from 'react-router'
 
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
@@ -28,6 +28,7 @@ import {
   TOPIC_REPORTS_QUERY_KEY,
   type ReportRun,
 } from '@/lib/api/topic-reports'
+import { readId, readOffset } from '@/lib/api/results'
 import {
   formatEvidenceDate,
   resultStateLabels,
@@ -71,9 +72,20 @@ function reportStatusLabel(status: ReportRun['status']) {
 }
 
 export function LegacyReportRecord({ reportId }: { reportId: number }) {
-  const [sourceOffset, setSourceOffset] = useState(0)
-  const [sectionOffset, setSectionOffset] = useState(0)
-  const [sectionId, setSectionId] = useState<number | null>(null)
+  const [params, setParams] = useSearchParams()
+  const sourceOffset = readOffset(params.get('report_sources_offset'))
+  const sectionOffset = readOffset(params.get('report_sections_offset'))
+  const sectionId = readId(params.get('report_section'))
+  function change(values: Record<string, number | null>) {
+    setParams((current) => {
+      const next = new URLSearchParams(current)
+      for (const [key, value] of Object.entries(values)) {
+        if (value === null || value === 0) next.delete(key)
+        else next.set(key, String(value))
+      }
+      return next
+    })
+  }
   const report = useQuery({
     queryKey: [...TOPIC_REPORTS_QUERY_KEY, 'detail', reportId],
     queryFn: ({ signal }) => fetchTopicReport(reportId, signal),
@@ -111,9 +123,13 @@ export function LegacyReportRecord({ reportId }: { reportId: number }) {
               sourceOffset={sourceOffset}
               sectionOffset={sectionOffset}
               sectionId={sectionId}
-              onSourcePage={setSourceOffset}
-              onSectionPage={setSectionOffset}
-              onSection={setSectionId}
+              onSourcePage={(offset) =>
+                change({ report_sources_offset: offset })
+              }
+              onSectionPage={(offset) =>
+                change({ report_sections_offset: offset })
+              }
+              onSection={(id) => change({ report_section: id })}
             />
           </>
         )}
@@ -430,6 +446,8 @@ export function ReportGenerations({
   autoSelectLatest?: boolean
 }) {
   const [beforeId, setBeforeId] = useState<number | undefined>()
+  const [params, setParams] = useSearchParams()
+  const legacyBeforeId = readId(params.get('reports_before'))
   const history = useQuery({
     queryKey: [...GENERATIONS_QUERY_KEY, 'list', beforeId],
     queryFn: ({ signal }) => fetchReportGenerations(signal, beforeId),
@@ -440,14 +458,26 @@ export function ReportGenerations({
         : false,
   })
   const legacyHistory = useQuery({
-    queryKey: [...TOPIC_REPORTS_QUERY_KEY, 'records'],
-    queryFn: ({ signal }) => fetchTopicReports(signal),
+    queryKey: [...TOPIC_REPORTS_QUERY_KEY, 'records', legacyBeforeId],
+    queryFn: ({ signal }) =>
+      fetchTopicReports(
+        signal,
+        legacyBeforeId === null ? {} : { beforeId: legacyBeforeId },
+      ),
     retry: false,
     refetchInterval: (query) =>
       query.state.data?.reports.some((report) => isActiveReport(report.status))
         ? 1000
         : false,
   })
+  function changeLegacyPage(nextBeforeId: number | null) {
+    setParams((current) => {
+      const next = new URLSearchParams(current)
+      if (nextBeforeId === null) next.delete('reports_before')
+      else next.set('reports_before', String(nextBeforeId))
+      return next
+    })
+  }
   useEffect(() => {
     if (!autoSelectLatest || selectedId !== null || !history.data?.items.length)
       return
@@ -542,6 +572,35 @@ export function ReportGenerations({
                 历史报告暂时无法读取；已提交的报告任务仍可查看。
               </p>
             )}
+            {legacyHistory.data &&
+              (legacyBeforeId !== null ||
+                legacyHistory.data.next_before_id !== null) && (
+                <nav className="flex flex-wrap gap-2" aria-label="历史报告分页">
+                  <Button
+                    variant="outline"
+                    disabled={
+                      legacyBeforeId === null || legacyHistory.isFetching
+                    }
+                    onClick={() => changeLegacyPage(null)}
+                  >
+                    最新报告
+                  </Button>
+                  <Button
+                    variant="outline"
+                    disabled={
+                      legacyHistory.data?.next_before_id === null ||
+                      legacyHistory.isFetching
+                    }
+                    onClick={() =>
+                      changeLegacyPage(
+                        legacyHistory.data?.next_before_id ?? null,
+                      )
+                    }
+                  >
+                    更早报告
+                  </Button>
+                </nav>
+              )}
             {history.data?.next_before_id && (
               <Button
                 variant="outline"
