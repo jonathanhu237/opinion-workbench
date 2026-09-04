@@ -24,7 +24,7 @@ from longtian_api.repositories.search_runs import (
     SearchRunRepository,
     SearchRunRepositoryUnavailableError,
 )
-from longtian_api.services.media_crawler_auth_worker import (
+from longtian_api.services.collector_contracts import (
     ManualPageWorkerResult,
     SearchWorkerResult,
 )
@@ -166,20 +166,12 @@ def test_partial_results_union_keeps_earliest_kind_and_all_term_matches(tmp_path
     ],
 )
 def test_every_failure_pauses_and_skip_is_not_success(tmp_path, status):
-    _, batches, runs, batch_id, run_id = setup_batch(tmp_path, platforms=("wb", "ks"))
+    _, batches, runs, batch_id, run_id = setup_batch(tmp_path, platforms=("wb",))
     runs.finish(run_id, status)
     paused = batches.finish_item(batch_id, 0, status)
     assert paused.status == "paused_for_manual_action"
-    assert paused.items[1].attempt_count == 0
     skipped = batches.skip_item(batch_id, **control(paused))
     assert skipped.items[0].status == "skipped"
-    next_run = batches.create_attempt(batch_id, 1)
-    runs.mark_running(next_run.id)
-    for position in range(2):
-        runs.set_progress(next_run.id, position)
-        runs.complete_term(next_run.id, position, 0)
-    runs.finish(next_run.id, "completed_empty")
-    batches.finish_item(batch_id, 1, "completed_empty")
     assert batches.finalize(batch_id).status == "completed_with_failures"
 
 
@@ -474,10 +466,10 @@ def test_runner_fallback_settles_active_attempts_and_preserves_committed_success
     with TestClient(_app(path, worker)) as client:
         identity = client.post(
             "/api/v1/search-batches",
-            json={"monitoring_rule_id": 1, "platforms": ["wb", "ks"]},
+            json={"monitoring_rule_id": 1, "platforms": ["wb"]},
         ).json()["id"]
         failed = _wait_for_batch(client, identity, {"internal_error"})
-        first, later = failed["items"]
+        first = failed["items"][0]
         assert first["latest_attempt"]["run"]["status"] == (
             "internal_error" if failure == "before_result_commit" else "completed_empty"
         )
@@ -487,7 +479,6 @@ def test_runner_fallback_settles_active_attempts_and_preserves_committed_success
         assert first["completion_basis"] == (
             None if failure == "before_result_commit" else "attempt_success"
         )
-        assert later["status"] == "failed" and later["attempt_count"] == 0
         assert len(worker.calls) == 1
         database = Database(path)
         with database.connect() as connection:
@@ -690,7 +681,7 @@ def test_cancel_during_manual_show_drains_before_releasing_owner(tmp_path):
     with TestClient(_app(tmp_path / "show-cancel.sqlite3", worker)) as client:
         identity = client.post(
             "/api/v1/search-batches",
-            json={"monitoring_rule_id": 1, "platforms": ["wb", "ks"]},
+            json={"monitoring_rule_id": 1, "platforms": ["wb"]},
         ).json()["id"]
         paused = _wait_for_batch(client, identity, {"paused_for_manual_action"})
         body = public_control(paused)
@@ -717,11 +708,8 @@ def test_cancel_during_manual_show_drains_before_releasing_owner(tmp_path):
         )
 
 
-@pytest.mark.parametrize("platforms", [("wb",), ("wb", "ks")])
-def test_restart_after_terminal_run_success_projects_success_without_search(
-    tmp_path, platforms
-):
-    _, batches, runs, batch_id, run_id = setup_batch(tmp_path, platforms=platforms)
+def test_restart_after_terminal_run_success_projects_success_without_search(tmp_path):
+    _, batches, runs, batch_id, run_id = setup_batch(tmp_path, platforms=("wb",))
     for position in range(2):
         runs.set_progress(run_id, position)
         runs.complete_term(run_id, position, 0)
@@ -731,12 +719,7 @@ def test_restart_after_terminal_run_success_projects_success_without_search(
     assert after.items[0].status == "completed"
     assert after.items[0].finished_at == done.finished_at
     assert runs.get(run_id) == done
-    if len(platforms) == 1:
-        assert after.status == "completed"
-    else:
-        assert after.status == "paused_for_manual_action"
-        assert after.current_item_position == 1
-        assert after.items[1].latest_attempt is None
+    assert after.status == "completed"
 
 
 def test_two_continue_requests_create_at_most_one_retry(tmp_path):

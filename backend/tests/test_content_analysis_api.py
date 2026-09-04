@@ -33,10 +33,7 @@ def api_fixture(tmp_path, count=2, **app_options):
     seed_run(database, count)
     model, media = UnderstandingClient(), MediaWorker()
 
-    async def forbidden_launcher(*args, **kwargs):
-        raise AssertionError("isolated tests cannot start a real browser worker")
-
-    platform = PlatformConnectionService(process_launcher=forbidden_launcher)
+    platform = PlatformConnectionService()
 
     def enrichment_factory(db, owner):
         model.coordinator = owner.browser_operations
@@ -162,10 +159,13 @@ def test_prompts_are_read_only_and_authorization_keeps_revision_guards(tmp_path)
     with TestClient(app, base_url="http://127.0.0.1") as client:
         saved(client)
         old = client.get("/api/v1/analysis-settings").json()
-        assert client.put(
-            "/api/v1/analysis-settings/prompts/initial",
-            json={"expected_version_id": 1, "instructions": "已停用"},
-        ).status_code == 404
+        assert (
+            client.put(
+                "/api/v1/analysis-settings/prompts/initial",
+                json={"expected_version_id": 1, "instructions": "已停用"},
+            ).status_code
+            == 404
+        )
         assert client.get("/api/v1/analysis-settings").json() == old
         policy = client.put(
             "/api/v1/analysis-settings/automation",

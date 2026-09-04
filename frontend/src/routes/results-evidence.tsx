@@ -41,7 +41,6 @@ import {
   ResultSourceLink,
   ResultsPagination,
   formatEvidenceDate,
-  type ResultSourceControls,
 } from '@/routes/results-presenters'
 import {
   searchPlatformPresenters,
@@ -83,10 +82,8 @@ export function FrozenAnalysisPrompts({ job }: { job: AnalysisJob }) {
 
 export function SavedAnalysisEvidence({
   attempt,
-  controls,
 }: {
   attempt: AnalysisAttempt
-  controls: ResultSourceControls
 }) {
   const output = attempt.output
   return (
@@ -104,11 +101,7 @@ export function SavedAnalysisEvidence({
             {formatEvidenceDate(attempt.first_seen_at)}
           </p>
         </div>
-        <ResultSourceLink
-          source={attempt.source}
-          controls={controls}
-          disabled={isActiveAnalysisAttempt(attempt.status)}
-        />
+        <ResultSourceLink source={attempt.source} />
       </div>
       {attempt.error && (
         <p role="status" className="rounded-lg bg-muted p-3 text-sm leading-6">
@@ -326,14 +319,12 @@ export function SavedAnalysisEvidence({
 
 export function ResultEvidence({
   resultId,
-  controls,
   onSelect,
   selected,
   onClose,
   asSheet = false,
 }: {
   resultId: number
-  controls: ResultSourceControls
   onSelect: (result: SharedResult) => void
   selected: boolean
   onClose: () => void
@@ -468,11 +459,7 @@ export function ResultEvidence({
               </div>
             </dl>
             <div className="flex flex-wrap gap-3">
-              <ResultSourceLink
-                source={result.source}
-                controls={controls}
-                disabled={active}
-              />
+              <ResultSourceLink source={result.source} />
               <Button
                 variant="outline"
                 className="min-h-11"
@@ -545,9 +532,7 @@ export function ResultEvidence({
               这条分析不属于当前内容，无法显示。
             </p>
           )}
-          {validAttempt && (
-            <SavedAnalysisEvidence attempt={validAttempt} controls={controls} />
-          )}
+          {validAttempt && <SavedAnalysisEvidence attempt={validAttempt} />}
           {jobQuery.isError && (
             <p role="alert" className="text-sm text-destructive">
               无法读取本次分析使用的提示词。

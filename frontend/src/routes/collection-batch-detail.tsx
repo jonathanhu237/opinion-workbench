@@ -268,7 +268,7 @@ function BatchRail({
                         >
                           {recoveringPosition === item.position
                             ? '正在准备…'
-                            : '继续处理平台'}
+                            : '继续采集'}
                         </Button>
                       )}
                     {run && (
@@ -377,8 +377,8 @@ export function CollectionBatchDetail() {
       if (action.generation !== generation.current) return
       const messages = {
         continue: '已继续；完成过的搜索词不会重复采集。',
-        skip: '已跳过此平台，已有结果仍然保留。',
-        recover: '已准备好继续处理此平台，请检查页面后继续采集。',
+        skip: '已跳过本次采集，已有结果仍然保留。',
+        recover: '已准备好继续本次采集，请检查页面后继续采集。',
         cancel: '已取消采集，已有结果仍然保留。',
       }
       setFeedback({ message: messages[action.kind], error: false })
@@ -532,8 +532,8 @@ export function CollectionBatchDetail() {
             </Badge>
           </div>
           <p className="mt-2 text-sm text-muted-foreground">
-            已结束 {batch.terminal_item_count} / {batch.platform_count} 个平台 ·{' '}
-            {batch.term_count} 个搜索词 · 创建于{' '}
+            已结束 {batch.terminal_item_count} / {batch.platform_count} 个采集项
+            · {batch.term_count} 个搜索词 · 创建于{' '}
             {formatLocalDate(batch.created_at)}
           </p>
         </div>
@@ -576,7 +576,7 @@ export function CollectionBatchDetail() {
                 )}
                 {pausedItem.remaining_term_count === 0 &&
                   pausedItem.recovery_available && (
-                    <> 所有搜索词均已完成，继续后将直接处理后续平台。</>
+                    <> 所有搜索词均已完成，继续后将结束本次采集。</>
                   )}
               </p>
               {!pausedItem.recovery_available && (
@@ -584,7 +584,7 @@ export function CollectionBatchDetail() {
                   id="recovery-unavailable"
                   className="text-sm text-destructive"
                 >
-                  无法确认从哪里继续，请跳过此平台或取消采集。
+                  无法确认从哪里继续，请跳过本次采集或取消采集。
                 </p>
               )}
               <div className="flex flex-wrap gap-2">
@@ -618,7 +618,7 @@ export function CollectionBatchDetail() {
                   disabled={pending}
                   onClick={() => act('skip', pausedItem)}
                 >
-                  {skipping ? '正在跳过…' : '跳过此平台'}
+                  {skipping ? '正在跳过…' : '跳过本次采集'}
                 </Button>
                 <Button
                   type="button"
@@ -659,7 +659,7 @@ export function CollectionBatchDetail() {
           id="platform-progress-title"
           className="mb-3 font-display text-xl font-semibold"
         >
-          平台进度
+          采集进度
         </h2>
         <BatchRail
           batch={batch}
@@ -678,7 +678,6 @@ export function CollectionBatchDetail() {
           key={`${batch.id}-${selectedItem.position}`}
           batchId={batch.id}
           item={selectedItem}
-          browserBusy={canCancel || pending}
         />
       )}
     </div>

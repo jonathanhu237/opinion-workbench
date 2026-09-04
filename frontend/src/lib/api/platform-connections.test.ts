@@ -8,51 +8,15 @@ import {
 } from '@/lib/api/platform-connections'
 
 const attemptId = '2efb05b0-b1f7-4bbb-8b9f-9effa11cd355'
-
-const platforms: PlatformConnection[] = [
-  {
-    platform: 'wb',
-    display_name: '微博',
-    availability: 'enabled',
-    status: 'not_checked',
-    guidance: 'none',
-    last_checked_at: null,
-    active_attempt_id: null,
-  },
-  ...[
-    ['dy', '抖音'],
-    ['ks', '快手'],
-  ].map(
-    ([platform, display_name]) =>
-      ({
-        platform,
-        display_name,
-        availability: 'enabled',
-        status: 'not_checked',
-        guidance: 'none',
-        last_checked_at: null,
-        active_attempt_id: null,
-      }) as PlatformConnection,
-  ),
-  {
-    platform: 'xhs',
-    display_name: '小红书',
-    availability: 'enabled',
-    status: 'not_checked',
-    guidance: 'none',
-    last_checked_at: null,
-    active_attempt_id: null,
-  },
-  {
-    platform: 'toutiao',
-    display_name: '今日头条',
-    availability: 'enabled',
-    status: 'not_checked',
-    guidance: 'none',
-    last_checked_at: null,
-    active_attempt_id: null,
-  },
-]
+const weibo: PlatformConnection = {
+  platform: 'wb',
+  display_name: '微博',
+  availability: 'enabled',
+  status: 'not_checked',
+  guidance: 'none',
+  last_checked_at: null,
+  active_attempt_id: null,
+}
 
 describe('platform connections API boundary', () => {
   const fetchMock = vi.fn<typeof fetch>()
@@ -66,106 +30,60 @@ describe('platform connections API boundary', () => {
     vi.unstubAllGlobals()
   })
 
-  it('validates and projects the ordered platform catalog', async () => {
+  it('validates the single Weibo catalog', async () => {
     fetchMock.mockResolvedValue(
-      new Response(JSON.stringify({ platforms }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    )
-    const controller = new AbortController()
-
-    await expect(fetchPlatformConnections(controller.signal)).resolves.toEqual({
-      platforms,
-    })
-    expect(fetchMock).toHaveBeenCalledWith('/api/v1/platform-connections', {
-      headers: { Accept: 'application/json' },
-      signal: controller.signal,
-    })
-  })
-
-  it('accepts a future unavailable row in the coming-soon state', async () => {
-    const futureCatalog = platforms.map((platform) =>
-      platform.platform === 'xhs'
-        ? {
-            ...platform,
-            availability: 'coming_soon' as const,
-            status: 'coming_soon' as const,
-          }
-        : platform,
-    )
-    fetchMock.mockResolvedValue(
-      new Response(JSON.stringify({ platforms: futureCatalog }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
+      new Response(JSON.stringify({ platforms: [weibo] }), { status: 200 }),
     )
 
     await expect(
       fetchPlatformConnections(new AbortController().signal),
-    ).resolves.toEqual({ platforms: futureCatalog })
+    ).resolves.toEqual({ platforms: [weibo] })
+  })
+
+  it('rejects an unsupported platform row instead of exposing a future option', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({ platforms: [{ ...weibo, platform: 'xhs' }] }),
+        { status: 200 },
+      ),
+    )
+
+    await expect(
+      fetchPlatformConnections(new AbortController().signal),
+    ).rejects.toMatchObject({ code: 'invalid_response' })
   })
 
   it('rejects contract drift without retaining unexpected credential fields', async () => {
     fetchMock.mockResolvedValue(
       new Response(
         JSON.stringify({
-          platforms: [
-            { ...platforms[0], cookie: 'credential-sentinel' },
-            ...platforms.slice(1),
-          ],
+          platforms: [{ ...weibo, cookie: 'credential-sentinel' }],
         }),
         { status: 200 },
       ),
     )
 
     const result = fetchPlatformConnections(new AbortController().signal)
-
-    await expect(result).rejects.toMatchObject({
-      code: 'invalid_response',
-    })
+    await expect(result).rejects.toMatchObject({ code: 'invalid_response' })
     await expect(result).rejects.not.toThrow(/credential-sentinel/)
   })
 
-  it('maps a known conflict to safe product guidance', async () => {
-    fetchMock.mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          detail: {
-            code: 'connection_attempt_active',
-            message: 'raw backend text credential-sentinel',
-          },
-        }),
-        { status: 409 },
-      ),
-    )
-
-    await expect(startPlatformConnectionAttempt('wb')).rejects.toMatchObject({
-      code: 'connection_attempt_active',
-      message: '已有平台连接任务正在运行，请完成后再试。',
-      status: 409,
-    })
-  })
-
-  it('accepts only a matching 202 attempt projection', async () => {
-    const checkingPlatform: PlatformConnection = {
-      ...platforms[0],
+  it('accepts a matching 202 attempt projection', async () => {
+    const checking: PlatformConnection = {
+      ...weibo,
       status: 'checking',
       active_attempt_id: attemptId,
     }
     fetchMock.mockResolvedValue(
       new Response(
-        JSON.stringify({
-          attempt_id: attemptId,
-          platform: checkingPlatform,
-        }),
+        JSON.stringify({ attempt_id: attemptId, platform: checking }),
         { status: 202 },
       ),
     )
 
     await expect(startPlatformConnectionAttempt('wb')).resolves.toEqual({
       attempt_id: attemptId,
-      platform: checkingPlatform,
+      platform: checking,
     })
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/v1/platform-connections/wb/attempts',
@@ -174,68 +92,27 @@ describe('platform connections API boundary', () => {
   })
 
   it('accepts managed-browser progress and retry guidance', async () => {
-    const managedCatalog = {
-      platforms: platforms.map((platform) =>
-        platform.platform === 'wb'
-          ? {
-              ...platform,
-              status: 'checking' as const,
-              guidance: 'starting_browser' as const,
-            }
-          : platform,
-      ),
+    const checking = {
+      platforms: [
+        { ...weibo, status: 'checking', guidance: 'starting_browser' },
+      ],
     }
-    fetchMock.mockResolvedValue(
-      new Response(JSON.stringify(managedCatalog), { status: 200 }),
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify(checking), { status: 200 }),
     )
-
     await expect(
       fetchPlatformConnections(new AbortController().signal),
-    ).resolves.toEqual(managedCatalog)
+    ).resolves.toEqual(checking)
 
-    fetchMock.mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          platforms: managedCatalog.platforms.map((platform) =>
-            platform.platform === 'wb'
-              ? {
-                  ...platform,
-                  status: 'failed' as const,
-                  guidance: 'retry_browser' as const,
-                }
-              : platform,
-          ),
-        }),
-        { status: 200 },
-      ),
+    const failed = {
+      platforms: [{ ...weibo, status: 'failed', guidance: 'retry_browser' }],
+    }
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify(failed), { status: 200 }),
     )
-    const retryProjection = await fetchPlatformConnections(
-      new AbortController().signal,
-    )
-    expect(retryProjection.platforms[0]).toMatchObject({
-      platform: 'wb',
-      status: 'failed',
-      guidance: 'retry_browser',
-    })
-  })
-
-  it('rejects managed guidance paired with the wrong status', async () => {
-    fetchMock.mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          platforms: platforms.map((platform) =>
-            platform.platform === 'wb'
-              ? { ...platform, guidance: 'starting_browser' }
-              : platform,
-          ),
-        }),
-        { status: 200 },
-      ),
-    )
-
     await expect(
       fetchPlatformConnections(new AbortController().signal),
-    ).rejects.toMatchObject({ code: 'invalid_response' })
+    ).resolves.toEqual(failed)
   })
 
   it('turns malformed error payloads into a bounded error', async () => {
@@ -246,7 +123,6 @@ describe('platform connections API boundary', () => {
     )
 
     const result = startPlatformConnectionAttempt('wb')
-
     await expect(result).rejects.toBeInstanceOf(PlatformConnectionApiError)
     await expect(result).rejects.toMatchObject({
       code: 'request_failed',

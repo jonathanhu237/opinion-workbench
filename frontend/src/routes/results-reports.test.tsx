@@ -23,7 +23,6 @@ import {
   startContentAnalysis,
   type AnalysisJob,
 } from '@/lib/api/content-analyses'
-import { openSearchRunResult } from '@/lib/api/search-runs'
 import {
   cancelTopicReport,
   createTopicReport,
@@ -70,11 +69,6 @@ vi.mock('@/lib/api/ai-settings', async (original) => ({
   ...(await original<typeof import('@/lib/api/ai-settings')>()),
   fetchAISettings: vi.fn(),
 }))
-vi.mock('@/lib/api/search-runs', async (original) => ({
-  ...(await original<typeof import('@/lib/api/search-runs')>()),
-  openSearchRunResult: vi.fn(),
-}))
-
 function settledJob() {
   const job = analysisJobFixture({
     status: 'completed',
@@ -123,7 +117,6 @@ function assertNoMutation() {
     cancelTopicReport,
     startContentAnalysis,
     cancelAnalysisJob,
-    openSearchRunResult,
   ])
     expect(fn).not.toHaveBeenCalled()
 }
@@ -159,7 +152,6 @@ describe('automatic second-stage report views', () => {
     vi.mocked(fetchAnalysisSettings).mockResolvedValue(
       analysisSettingsFixture(),
     )
-    vi.mocked(openSearchRunResult).mockResolvedValue({ outcome: 'opened' })
   })
   it('automatically shows one report for settled 8/10, preserves coverage and performs only reads on mount/reload/poll', async () => {
     let empty = true
@@ -314,13 +306,13 @@ describe('automatic second-stage report views', () => {
     expect(screen.getByText(report.prompt.instructions)).toBeVisible()
     expect(screen.getByText(/历史共享提示词 · 版本 2/)).toBeVisible()
   })
-  it('keeps cross-page citations resolved from bounded frozen section sources and XHS origin proof', async () => {
+  it('keeps cross-page Weibo citations resolved from bounded frozen section sources', async () => {
     const user = userEvent.setup()
     const lateSource = reportSourceFixture(100).source
     lateSource.source_run_id = 88
-    lateSource.platform = 'xhs'
-    lateSource.platform_content_id = 'a'.repeat(24)
-    lateSource.content_url = `https://www.xiaohongshu.com/explore/${'a'.repeat(24)}`
+    lateSource.platform = 'wb'
+    lateSource.platform_content_id = '5012345678901234'
+    lateSource.content_url = 'https://m.weibo.cn/detail/5012345678901234'
     const late = reportSectionFixture({
       id: 513,
       position: 12,
@@ -347,8 +339,8 @@ describe('automatic second-stage report views', () => {
     const { router, container } = renderReports(
       '/results?job=7&report=31&report_sections_offset=10',
     )
-    const citation = await screen.findByRole('button', {
-      name: `原文 101 · 小红书：${lateSource.title}`,
+    const citation = await screen.findByRole('link', {
+      name: `原文 101 · 微博：${lateSource.title}`,
     })
     expect(screen.queryByRole('link', { name: /llm.example/ })).toBeNull()
     expect(container.querySelector('img')).toBeNull()
@@ -362,8 +354,7 @@ describe('automatic second-stage report views', () => {
       expect.anything(),
       100,
     )
-    await user.click(citation)
-    expect(openSearchRunResult).toHaveBeenCalledWith(88, 111)
+    expect(citation).toHaveAttribute('href', lateSource.content_url)
     await user.click(screen.getByRole('button', { name: '报告来源下一页' }))
     expect(router.state.location.search).toContain('report_sources_offset=20')
     expect(router.state.location.search).toContain('report_sections_offset=10')

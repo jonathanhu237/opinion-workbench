@@ -20,7 +20,7 @@ import {
 const run = {
   id: 21,
   monitoring_rule_id: 1,
-  platform: 'toutiao' as const,
+  platform: 'wb' as const,
   rule_name: '龙田街道及四个社区',
   term_count: 1,
   max_results_per_term: 10,
@@ -60,7 +60,7 @@ const batch: SearchBatchDetail = {
       repeated_count: 0,
       total_count: 0,
       position: 0,
-      platform: 'toutiao',
+      platform: 'wb',
       status: 'completed',
       attempt_count: 1,
       latest_attempt: { attempt_number: 1, run },
@@ -113,7 +113,7 @@ describe('search batch API boundary', () => {
     )
     const input = {
       monitoring_rule_id: 1,
-      platforms: ['toutiao', 'ks', 'xhs'] as const,
+      platforms: ['wb'] as const,
       max_results_per_term: 7,
     }
 
@@ -251,7 +251,7 @@ describe('search batch API boundary', () => {
         {
           ...batch.items[0],
           position: 1,
-          platform: 'toutiao' as const,
+          platform: 'wb' as const,
         },
       ],
     }
@@ -372,9 +372,9 @@ describe('search batch API boundary', () => {
     ['search_batch_state_changed', '采集任务状态已变化，请刷新后重试。'],
     [
       'search_batch_recovery_unavailable',
-      '无法确认可靠的续采位置，请跳过此平台或取消批次。',
+      '无法确认可靠的续采位置，请跳过本次采集或取消批次。',
     ],
-    ['search_batch_item_not_recoverable', '该平台当前不能重新处理。'],
+    ['search_batch_item_not_recoverable', '本次采集当前不能重新处理。'],
   ])(
     'uses exact conflict %s and rejects changed messages',
     async (code, message) => {
@@ -664,15 +664,15 @@ describe('search batch API boundary', () => {
     const result = {
       id: 3,
       source_run_id: 21,
-      platform: 'toutiao',
-      platform_content_id: '123',
-      content_type: 'article',
+      platform: 'wb',
+      platform_content_id: '5012345678901234',
+      content_type: 'post',
       title: '结果',
       snippet: '',
       creator_hash: '',
       publisher_name: '',
       published_at_text: '',
-      content_url: 'https://www.toutiao.com/article/123/',
+      content_url: 'https://m.weibo.cn/detail/5012345678901234',
       kind: 'new',
       matched_terms: ['龙田街道'],
       first_seen_at: run.created_at,

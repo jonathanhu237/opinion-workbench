@@ -1,11 +1,11 @@
-"""Coordinate platform authentication through one persistent MediaCrawler worker."""
+"""Coordinate the single native Weibo browser connection."""
 
 import asyncio
 import os
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, cast
+from typing import Literal
 from uuid import UUID, uuid4
 
 from longtian_api.schemas.platform_connections import (
@@ -27,21 +27,8 @@ from longtian_api.services.collector_contracts import (
     AuthWorkerResult,
     CollectorFactory,
     CollectorRuntime,
-    supports_platform,
 )
-from longtian_api.services.media_crawler_auth_worker import (
-    PersistentAuthWorkerClient,
-    ProcessGroupTerminator,
-    ProcessLauncher,
-)
-
-_AUTH_PLATFORM_BY_ID: dict[PlatformId, AuthPlatformId] = {
-    "wb": "wb",
-    "dy": "dy",
-    "ks": "ks",
-    "xhs": "xhs",
-    "toutiao": "toutiao",
-}
+from longtian_api.services.native_chrome import native_collector_factory
 
 Clock = Callable[[], datetime]
 
@@ -64,30 +51,17 @@ class PlatformConnectionService:
     def __init__(
         self,
         *,
-        media_crawler_dir: Path | None = None,
         browser_profile_dir: Path | None = None,
-        process_launcher: ProcessLauncher | None = None,
-        process_group_terminator: ProcessGroupTerminator | None = None,
         attempt_timeout_seconds: float = 300.0,
-        worker_ready_timeout_seconds: float = 30.0,
-        cancel_timeout_seconds: float = 3.0,
-        worker_shutdown_timeout_seconds: float = 5.0,
-        termination_grace_seconds: float = 3.0,
         clock: Clock | None = None,
         browser_operation_coordinator: BrowserOperationCoordinator | None = None,
         collector_factory: CollectorFactory | None = None,
     ) -> None:
         if collector_factory is None:
-            backend = os.environ.get("LONGTIAN_COLLECTOR_BACKEND", "legacy")
-            if backend == "native-weibo":
-                from longtian_api.services.native_chrome import native_collector_factory
-
-                collector_factory = native_collector_factory
-            elif backend != "legacy":
-                raise ValueError(
-                    "Unsupported collector backend; no fallback was started."
-                )
-        self._media_crawler_dir = media_crawler_dir or _default_media_crawler_dir()
+            backend = os.environ.get("LONGTIAN_COLLECTOR_BACKEND", "native-weibo")
+            if backend != "native-weibo":
+                raise ValueError("Only the native Weibo collector is supported.")
+            collector_factory = native_collector_factory
         self._browser_profile_dir = (
             browser_profile_dir or _default_browser_profile_dir()
         )
@@ -101,35 +75,11 @@ class PlatformConnectionService:
         self._current_task: asyncio.Task[None] | None = None
         self._connections = _initial_catalog()
         self._shutdown_started = False
-        self._worker: CollectorRuntime = (
-            collector_factory(
-                browser_profile_dir=self._browser_profile_dir,
-                on_progress=self._set_progress,
-                on_session_disconnected=self._invalidate_connected,
-            )
-            if collector_factory is not None
-            else PersistentAuthWorkerClient(
-                media_crawler_dir=self._media_crawler_dir,
-                on_progress=self._set_progress,
-                on_session_disconnected=self._invalidate_connected,
-                process_launcher=process_launcher,
-                process_group_terminator=process_group_terminator,
-                ready_timeout_seconds=worker_ready_timeout_seconds,
-                cancel_timeout_seconds=cancel_timeout_seconds,
-                shutdown_timeout_seconds=worker_shutdown_timeout_seconds,
-                termination_grace_seconds=termination_grace_seconds,
-                browser_profile_dir=self._browser_profile_dir,
-            )
+        self._worker: CollectorRuntime = collector_factory(
+            browser_profile_dir=self._browser_profile_dir,
+            on_progress=self._set_progress,
+            on_session_disconnected=self._invalidate_connected,
         )
-
-        self._connections = {
-            platform: connection
-            if supports_platform(self._worker, platform)
-            else connection.model_copy(
-                update={"availability": "coming_soon", "status": "coming_soon"}
-            )
-            for platform, connection in self._connections.items()
-        }
 
     @property
     def worker(self) -> CollectorRuntime:
@@ -155,7 +105,7 @@ class PlatformConnectionService:
     async def start_attempt(self, platform: str) -> PlatformConnectionAttemptResponse:
         """Accept one non-blocking authentication attempt."""
         async with self._lock:
-            connection = self._connections.get(cast(PlatformId, platform))
+            connection = self._connections.get(platform)
             if connection is None:
                 raise PlatformConnectionError(
                     status_code=404,
@@ -170,14 +120,6 @@ class PlatformConnectionService:
                     code="connection_attempt_active",
                     message="已有平台连接任务正在进行，请稍后重试。",
                 )
-            auth_platform = _AUTH_PLATFORM_BY_ID.get(connection.platform)
-            if connection.availability == "coming_soon" or auth_platform is None:
-                raise PlatformConnectionError(
-                    status_code=409,
-                    code="platform_not_available",
-                    message="该平台暂未接入。",
-                )
-
             attempt_id = uuid4()
             owner = BrowserOperationOwner("platform_connection", attempt_id)
             if not await self._browser_operations.try_claim(owner):
@@ -195,7 +137,7 @@ class PlatformConnectionService:
             )
             self._connections[connection.platform] = accepted
             self._current_task = asyncio.create_task(
-                self._run_attempt(auth_platform, attempt_id, owner),
+                self._run_attempt("wb", attempt_id, owner),
                 name=f"platform-connection-{connection.platform}-{attempt_id}",
             )
             return PlatformConnectionAttemptResponse(
@@ -386,47 +328,7 @@ def _initial_catalog() -> dict[PlatformId, PlatformConnection]:
             last_checked_at=None,
             active_attempt_id=None,
         ),
-        "dy": PlatformConnection(
-            platform="dy",
-            display_name="抖音",
-            availability="enabled",
-            status="not_checked",
-            guidance="none",
-            last_checked_at=None,
-            active_attempt_id=None,
-        ),
-        "ks": PlatformConnection(
-            platform="ks",
-            display_name="快手",
-            availability="enabled",
-            status="not_checked",
-            guidance="none",
-            last_checked_at=None,
-            active_attempt_id=None,
-        ),
-        "xhs": PlatformConnection(
-            platform="xhs",
-            display_name="小红书",
-            availability="enabled",
-            status="not_checked",
-            guidance="none",
-            last_checked_at=None,
-            active_attempt_id=None,
-        ),
-        "toutiao": PlatformConnection(
-            platform="toutiao",
-            display_name="今日头条",
-            availability="enabled",
-            status="not_checked",
-            guidance="none",
-            last_checked_at=None,
-            active_attempt_id=None,
-        ),
     }
-
-
-def _default_media_crawler_dir() -> Path:
-    return Path(__file__).resolve().parents[4] / "third_party" / "MediaCrawler"
 
 
 def _default_browser_profile_dir() -> Path:

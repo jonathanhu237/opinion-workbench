@@ -376,7 +376,7 @@ def test_schedule_edit_between_claim_and_link_skips_old_revision(tmp_path, monke
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("corruption", ["empty", "reversed"])
+@pytest.mark.parametrize("corruption", ["empty"])
 @pytest.mark.parametrize("boundary", ["before_claim", "before_link"])
 def test_damaged_platforms_never_admit_a_batch(
     tmp_path, monkeypatch, corruption, boundary
@@ -385,7 +385,7 @@ def test_damaged_platforms_never_admit_a_batch(
         database, service, clock, worker, _, batches, _, coordinator = environment(
             tmp_path
         )
-        schedule = enabled(service, platforms=["wb", "xhs"])
+        schedule = enabled(service)
 
         def corrupt():
             with database.connect() as connection:
@@ -534,7 +534,7 @@ def test_scheduled_batch_uses_a_single_post_release_handoff(tmp_path):
             monotonic=clock.monotonic,
             available=True,
         )
-        schedule = enabled(service, platforms=["wb", "toutiao"])
+        schedule = enabled(service)
         clock.advance(60)
         await service.tick()
         await drain(batches)
@@ -542,15 +542,14 @@ def test_scheduled_batch_uses_a_single_post_release_handoff(tmp_path):
         batch_id = service.get(schedule.id).latest_occurrence.batch_id
         assert callbacks == [("batch", batch_id)]
         jobs = analyses.repository.list().jobs
-        assert (
-            len(jobs) == 1 and jobs[0].counts.completed == 2 and len(model.calls) == 2
-        )
+        assert len(jobs) == 1 and jobs[0].counts.completed == 1
+        assert len(model.calls) == 1
         clock.advance(60)
         await service.tick()
         await drain(batches)
         await finish(analyses)
         assert len(analyses.repository.list().jobs) == 1
-        assert len(model.calls) == 2
+        assert len(model.calls) == 1
         await service.shutdown()
         await analyses.shutdown()
         await batches.shutdown()

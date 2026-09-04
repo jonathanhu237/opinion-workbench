@@ -1,4 +1,4 @@
-"""Orchestrate durable serial multi-platform search batches."""
+"""Orchestrate durable serial Weibo search batches."""
 
 import asyncio
 from collections.abc import Callable, Sequence
@@ -331,13 +331,13 @@ class SearchBatchService:
         return _to_detail(record)
 
     def _require_platforms(self, platforms):
-        if any(
+        if (platforms and tuple(platforms) != ("wb",)) or any(
             not self._search_runs.supports_platform(platform) for platform in platforms
         ):
             raise SearchBatchError(
                 status_code=409,
                 code="search_platform_not_available",
-                message="该平台尚未接入当前采集器，历史内容仍可查看。",
+                message="当前版本仅支持微博采集。",
             )
 
     async def _load_rule(self, rule_id: int) -> MonitoringRule:
@@ -944,12 +944,12 @@ def _repository_error(error: SearchBatchRepositoryError) -> SearchBatchError:
         return SearchBatchError(
             status_code=409,
             code="search_batch_recovery_unavailable",
-            message="无法确认可靠的续采位置，请跳过此平台或取消批次。",
+            message="无法确认可靠的续采位置，请跳过本次采集或取消批次。",
         )
     if isinstance(error, SearchBatchItemNotRecoverableError):
         return SearchBatchError(
             status_code=409,
             code="search_batch_item_not_recoverable",
-            message="该平台当前不能重新处理。",
+            message="当前采集项不能重新处理。",
         )
     return _storage_unavailable()

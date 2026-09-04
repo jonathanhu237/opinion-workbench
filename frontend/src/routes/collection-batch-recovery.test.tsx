@@ -6,11 +6,10 @@ import { RouterProvider } from 'react-router/dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import * as api from '@/lib/api/search-batches'
-import {
-  openSearchRunResult,
-  type SearchFailureReason,
-  type SearchRunStatus,
-  type SearchRunSummary,
+import type {
+  SearchFailureReason,
+  SearchRunStatus,
+  SearchRunSummary,
 } from '@/lib/api/search-runs'
 import { CollectionBatchDetail } from '@/routes/collection-batch-detail'
 
@@ -25,11 +24,6 @@ vi.mock('@/lib/api/search-batches', async (importOriginal) => ({
   recoverSearchBatchPlatform: vi.fn(),
   showSearchBatchManualPage: vi.fn(),
 }))
-vi.mock('@/lib/api/search-runs', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/lib/api/search-runs')>()),
-  openSearchRunResult: vi.fn(),
-}))
-
 const stamp = '2026-08-27T08:00:00+00:00'
 function fixture(
   status: SearchRunStatus = 'login_required',
@@ -148,13 +142,12 @@ describe('manual batch recovery', () => {
     vi.mocked(api.showSearchBatchManualPage).mockResolvedValue({
       outcome: 'opened_existing',
     })
-    vi.mocked(openSearchRunResult).mockResolvedValue({ outcome: 'opened' })
   })
 
   it.each([
     ['login_required', '请打开平台，在应用专用的谷歌浏览器中登录后继续采集。'],
     ['manual_challenge_required', '平台要求安全验证。'],
-    ['platform_blocked_or_rate_limited', '平台暂时限制了访问。'],
+    ['platform_blocked_or_rate_limited', '微博暂时限制了访问。'],
     ['structure_changed', '未能可靠识别微博的采集内容'],
     ['timed_out', '采集等待超时。'],
     ['browser_unavailable', '应用专用的谷歌浏览器暂时不可用。'],
@@ -170,7 +163,7 @@ describe('manual batch recovery', () => {
       expect(screen.getByText(/已确认完成 1 \/ 2 个搜索词/u)).toHaveTextContent(
         '继续时将从“竹坑社区”开始',
       )
-      for (const name of ['打开平台', '继续采集', '跳过此平台', '取消采集'])
+      for (const name of ['打开平台', '继续采集', '跳过本次采集', '取消采集'])
         expect(screen.getByRole('button', { name })).toBeEnabled()
     },
   )
@@ -269,7 +262,7 @@ describe('manual batch recovery', () => {
     await user.click(await screen.findByRole('button', { name: '打开平台' }))
     expect(screen.getByRole('button', { name: '正在打开…' })).toBeDisabled()
     expect(screen.getByRole('button', { name: '继续采集' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: '跳过此平台' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '跳过本次采集' })).toBeDisabled()
     await user.click(screen.getByRole('button', { name: '取消采集' }))
     await waitFor(() =>
       expect(api.cancelSearchBatch).toHaveBeenCalledExactlyOnceWith(8, {
@@ -322,7 +315,7 @@ describe('manual batch recovery', () => {
       'recovery-unavailable',
     )
     expect(screen.queryByText(/继续时将从/u)).toBeNull()
-    await user.click(screen.getByRole('button', { name: '跳过此平台' }))
+    await user.click(screen.getByRole('button', { name: '跳过本次采集' }))
     await waitFor(() =>
       expect(api.skipSearchBatchPlatform).toHaveBeenCalledExactlyOnceWith(
         8,
@@ -361,9 +354,7 @@ describe('manual batch recovery', () => {
       const batch = ended(fixture(status))
       batch.items[0].recovery_available = false
       renderBatch(batch)
-      await user.click(
-        await screen.findByRole('button', { name: '继续处理平台' }),
-      )
+      await user.click(await screen.findByRole('button', { name: '继续采集' }))
       await waitFor(() =>
         expect(api.recoverSearchBatchPlatform).toHaveBeenCalledExactlyOnceWith(
           8,
@@ -372,7 +363,7 @@ describe('manual batch recovery', () => {
         ),
       )
       expect(
-        screen.getByText('已准备好继续处理此平台，请检查页面后继续采集。'),
+        screen.getByText('已准备好继续本次采集，请检查页面后继续采集。'),
       ).toBeVisible()
     },
   )
@@ -395,27 +386,26 @@ describe('manual batch recovery', () => {
       '/collection-runs/31',
     )
     expect(screen.queryByRole('button', { name: '继续处理平台' })).toBeNull()
-    expect(screen.getByText(/已结束 1 \/ 1 个平台/u)).toBeVisible()
+    expect(screen.getByText(/已结束 1 \/ 1 个采集项/u)).toBeVisible()
   })
 
-  it('selects aggregate results by URL, resets paging with filters, and opens XHS through source_run_id', async () => {
+  it('selects aggregate results by URL, resets paging with filters, and opens Weibo through source_run_id', async () => {
     const user = userEvent.setup()
     const batch = ended(fixture())
     const item = batch.items[0]
-    item.platform = 'xhs'
-    if (item.latest_attempt) item.latest_attempt.run.platform = 'xhs'
+    item.platform = 'wb'
+    if (item.latest_attempt) item.latest_attempt.run.platform = 'wb'
     const result: api.SearchBatchResult = {
       id: 4,
       source_run_id: 20,
-      platform: 'xhs',
-      platform_content_id: '64f123456789abcdef012345',
-      content_type: 'note',
+      platform: 'wb',
+      platform_content_id: '5012345678901234',
+      content_type: 'post',
       title: '合并后的内容',
       snippet: '',
       creator_hash: '',
       publisher_name: '',
-      content_url:
-        'https://www.xiaohongshu.com/explore/64f123456789abcdef012345',
+      content_url: 'https://m.weibo.cn/detail/5012345678901234',
       kind: 'new',
       matched_terms: ['龙田街道', '竹坑社区'],
       published_at_text: '今天',
@@ -432,7 +422,7 @@ describe('manual batch recovery', () => {
     })
     const { router } = renderBatch(
       batch,
-      '/collection-batches/8?platform=xhs&kind=new&offset=50',
+      '/collection-batches/8?platform=wb&kind=new&offset=50',
     )
     expect(await screen.findByText('合并后的内容')).toBeVisible()
     expect(api.fetchSearchBatchResults).toHaveBeenCalledWith(
@@ -450,12 +440,12 @@ describe('manual batch recovery', () => {
       'href',
       '/collection-runs/31',
     )
-    await user.click(screen.getByRole('button', { name: '打开原文' }))
-    await waitFor(() =>
-      expect(openSearchRunResult).toHaveBeenCalledExactlyOnceWith(20, 4),
+    expect(screen.getByRole('link', { name: '打开原文' })).toHaveAttribute(
+      'href',
+      result.content_url,
     )
     await user.click(screen.getByRole('tab', { name: '再次命中 1' }))
-    expect(router.state.location.search).toBe('?platform=xhs&kind=repeated')
+    expect(router.state.location.search).toBe('?platform=wb&kind=repeated')
     await waitFor(() =>
       expect(api.fetchSearchBatchResults).toHaveBeenLastCalledWith(
         8,
@@ -471,22 +461,22 @@ describe('manual batch recovery', () => {
     expect(within(card!).getByText('竹坑社区')).toBeVisible()
   })
 
-  it('keeps aggregate XHS opening disabled while the paused batch owns the browser', async () => {
+  it('keeps aggregate Weibo source links stable while the paused batch owns the browser', async () => {
     const batch = fixture()
-    batch.items[0].platform = 'xhs'
+    batch.items[0].platform = 'wb'
     vi.mocked(api.fetchSearchBatchResults).mockResolvedValue({
       results: [
         {
           id: 4,
           source_run_id: 20,
-          platform: 'xhs',
-          platform_content_id: 'abc',
-          content_type: 'note',
+          platform: 'wb',
+          platform_content_id: '5012345678901234',
+          content_type: 'post',
           title: '已采集内容',
           snippet: '',
           creator_hash: '',
           publisher_name: '',
-          content_url: 'https://www.xiaohongshu.com/explore/abc',
+          content_url: 'https://m.weibo.cn/detail/5012345678901234',
           kind: 'new',
           matched_terms: ['龙田街道'],
           published_at_text: '',
@@ -500,11 +490,9 @@ describe('manual batch recovery', () => {
       limit: 50,
       offset: 0,
     })
-    renderBatch(batch, '/collection-batches/8?platform=xhs')
+    renderBatch(batch, '/collection-batches/8?platform=wb')
     expect(
-      await screen.findByRole('button', { name: '打开原文' }),
-    ).toBeDisabled()
-    expect(screen.getByText(/采集正在使用浏览器/u)).toBeVisible()
-    expect(openSearchRunResult).not.toHaveBeenCalled()
+      await screen.findByRole('link', { name: '打开原文' }),
+    ).toHaveAttribute('href', 'https://m.weibo.cn/detail/5012345678901234')
   })
 })

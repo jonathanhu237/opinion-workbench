@@ -99,19 +99,19 @@ def source(result_id=1, *, body="原文完整保存：来源反映积水，尚�
             "source": {
                 "source_run_id": 7,
                 "result_id": result_id,
-                "platform": "dy",
+                "platform": "wb",
                 "platform_content_id": content_id,
                 "content_type": "video" if media else "text",
                 "title": "搜索标题不是全文",
                 "snippet": "搜索摘要不是全文",
-                "content_url": f"https://www.douyin.com/video/{content_id}",
+                "content_url": f"https://m.weibo.cn/detail/{content_id}",
                 "published_at_text": "昨天（具体日期未确认）",
                 "matched_terms": ["龙田 投诉"],
             },
             "first_seen_at": NOW,
             "input": {
                 "schema_version": 1,
-                "extractor_version": "dy-enrichment-v1",
+                "extractor_version": "wb-enrichment-v1",
                 "acquired_at": 1_750_000_000_000,
                 "status": "ready",
                 "text": {"title": "完整标题", "body": body, "coverage": "complete"},
@@ -605,7 +605,7 @@ def test_nested_mutations_are_revalidated_not_trusted_frozen_models(mutation):
     "field,value",
     [
         ("acquired_at", 1),
-        ("extractor_version", "xhs-enrichment-v1"),
+        ("extractor_version", "other-enrichment-v1"),
     ],
 )
 def test_ready_saved_input_metadata_guard(field, value):

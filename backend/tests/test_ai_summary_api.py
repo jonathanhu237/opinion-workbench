@@ -28,10 +28,7 @@ def api_fixture(tmp_path):
     model = ModelClient()
     media = MediaWorker()
 
-    async def forbidden_launcher(*args, **kwargs):
-        raise AssertionError("API tests must not start a real worker")
-
-    platform = PlatformConnectionService(process_launcher=forbidden_launcher)
+    platform = PlatformConnectionService()
 
     def enrichment_factory(db, platform_service):
         model.coordinator = platform_service.browser_operations

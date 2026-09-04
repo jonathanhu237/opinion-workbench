@@ -89,7 +89,7 @@ function pausedSearchBatch(): SearchBatchDetail {
     items: [
       {
         position: 0,
-        platform: 'toutiao',
+        platform: 'wb',
         status: 'paused_for_manual_action',
         attempt_count: 1,
         latest_attempt: null,
@@ -525,7 +525,9 @@ describe('automation run routes', () => {
       screen.getByText(/完成后，本次自动任务会自动继续初步分析/u),
     ).toBeVisible()
     expect(
-      screen.getByText(/已完成 0 个平台 · 待处理 1 个平台 · 共 1 个平台/u),
+      screen.getByText(
+        /已完成 0 个采集项 · 待处理 1 个采集项 · 共 1 个采集项/u,
+      ),
     ).toBeVisible()
     expect(screen.getByText('等待处理')).toBeVisible()
     expect(screen.queryByRole('button', { name: /从失败阶段重试/u })).toBeNull()

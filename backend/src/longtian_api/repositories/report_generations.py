@@ -148,9 +148,7 @@ class ReportGenerationRepository(AnalysisRepository):
         """
         with self.connection() as connection:
             if payload.kind == "library":
-                selected_ids = select_library(
-                    connection, include_failed=payload.include_failed
-                )
+                selected_ids = select_library(connection)
             else:
                 selected_ids = list(payload.result_ids)
             if not selected_ids:
@@ -177,7 +175,9 @@ class ReportGenerationRepository(AnalysisRepository):
                     or row["status"] in ("queued", "acquiring", "analysing")
                 ):
                     active += 1
-                elif row["status"] in ("completed", "legacy_completed"):
+                elif row["status"] == "completed" or row["legacy_state"] == (
+                    "legacy_completed"
+                ):
                     summarized += 1
                 elif row["status"] in (
                     "failed",
@@ -207,9 +207,8 @@ class ReportGenerationRepository(AnalysisRepository):
             replay = self._replay_generation(connection, payload)
             if replay is not None:
                 return replay
-            # Named requests are emitted by the redesigned page and opt into
-            # the single-active-task product rule. Unnamed legacy requests are
-            # still replayable/queueable for backward compatibility.
+            # Named requests are emitted by the report page and opt into the
+            # single-active-task product rule.
             if payload.name is not None:
                 active = connection.execute(
                     """SELECT 1 FROM report_generations
@@ -227,9 +226,7 @@ class ReportGenerationRepository(AnalysisRepository):
             selected_ids = (
                 payload.selection.result_ids
                 if payload.selection.kind == "explicit"
-                else select_library(
-                    connection, include_failed=payload.selection.include_failed
-                )
+                else select_library(connection)
             )
             if not selected_ids:
                 raise AnalysisError("no_eligible_contents")

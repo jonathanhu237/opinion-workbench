@@ -122,9 +122,7 @@ def replace_task(
     payload: AutomationTaskReplaceRequest,
     service: Service,
 ) -> AutomationTask:
-    return service.replace_task(
-        task_id, AutomationTaskReplace(**payload.model_dump())
-    )
+    return service.replace_task(task_id, AutomationTaskReplace(**payload.model_dump()))
 
 
 @router.delete(

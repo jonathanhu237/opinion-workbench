@@ -51,7 +51,7 @@ def _task_payload(**changes):
     value = {
         "name": "重点舆情",
         "monitoring_rule_id": 1,
-        "platforms": ["toutiao"],
+        "platforms": ["wb"],
         "max_results_per_term": 10,
         "analysis_goal": "识别与龙田街道相关的舆情内容",
         "initial_prompt": {"mode": "default"},
@@ -82,7 +82,7 @@ def _snapshot(task, now):
         monitoring_rule_id=1,
         rule_name=task.rule_name,
         terms=["龙田街道"],
-        platforms=["toutiao"],
+        platforms=["wb"],
         max_results_per_term=10,
         analysis_goal=task.analysis_goal,
         analysis_goal_hash="0" * 64,
@@ -263,7 +263,7 @@ def test_schedule_validation_and_dst_gap(tmp_path: Path):
     assert task.enabled is False and task.next_due_at is None
     with pytest.raises(ValueError):
         AutomationTaskCreate.model_validate(
-            {**_task_payload().model_dump(mode="json"), "platforms": ["wb", "toutiao"]}
+            {**_task_payload().model_dump(mode="json"), "platforms": ["wb", "wb"]}
         )
 
 

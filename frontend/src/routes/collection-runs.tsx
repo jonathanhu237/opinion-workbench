@@ -8,14 +8,7 @@ import { z } from 'zod'
 import { Badge } from '@/components/ui/badge'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Checkbox } from '@/components/ui/checkbox'
-import {
-  Field,
-  FieldError,
-  FieldLabel,
-  FieldLegend,
-  FieldSet,
-} from '@/components/ui/field'
+import { Field, FieldError, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import {
   Select,
@@ -53,18 +46,12 @@ import {
 import {
   formatLocalDate,
   searchBatchStatusLabel,
-  searchPlatformOrder,
   searchPlatformPresenters,
   searchRunStatusLabel,
 } from '@/routes/search-run-presenters'
 
 const startSchema = z.object({
   ruleId: z.string().min(1, '请选择监控规则。'),
-  platforms: z
-    .array(z.enum(searchPlatformOrder))
-    .min(1, '请至少选择一个采集平台。')
-    .max(5)
-    .refine((platforms) => new Set(platforms).size === platforms.length),
   maxResultsPerTerm: z.coerce
     .number<number>()
     .int('请输入整数。')
@@ -120,7 +107,7 @@ function ActiveBatch({ batch }: { batch: SearchBatchSummary }) {
             </p>
           </div>
           <p className="mt-1 text-sm text-muted-foreground">
-            已结束 {batch.terminal_item_count} / {batch.platform_count} 个平台
+            已结束 {batch.terminal_item_count} / {batch.platform_count} 个采集项
           </p>
         </div>
         <Link
@@ -141,7 +128,7 @@ function BatchHistory({ batches }: { batches: SearchBatchSummary[] }) {
       <div className="rounded-lg border border-dashed p-8 text-center">
         <p className="font-medium">还没有采集任务</p>
         <p className="mt-1 text-sm text-muted-foreground">
-          选择监控规则和平台，开始第一次采集。
+          选择监控规则，开始第一次微博采集。
         </p>
       </div>
     )
@@ -153,7 +140,7 @@ function BatchHistory({ batches }: { batches: SearchBatchSummary[] }) {
         <TableRow>
           <TableHead>状态</TableHead>
           <TableHead>监控规则</TableHead>
-          <TableHead>平台进度</TableHead>
+          <TableHead>采集进度</TableHead>
           <TableHead>创建时间</TableHead>
           <TableHead className="text-right">操作</TableHead>
         </TableRow>
@@ -177,7 +164,7 @@ function BatchHistory({ batches }: { batches: SearchBatchSummary[] }) {
               <span className="font-medium text-foreground">
                 {batch.terminal_item_count} / {batch.platform_count}
               </span>
-              <span className="ml-1 text-muted-foreground">个平台</span>
+              <span className="ml-1 text-muted-foreground">个微博采集项</span>
             </TableCell>
             <TableCell className="text-muted-foreground">
               {formatLocalDate(batch.created_at)}
@@ -286,7 +273,6 @@ export function CollectionRuns() {
     mode: 'onBlur',
     defaultValues: {
       ruleId: '',
-      platforms: [...searchPlatformOrder],
       maxResultsPerTerm: 10,
     },
   })
@@ -314,20 +300,14 @@ export function CollectionRuns() {
       return
     }
     try {
-      const selected = searchPlatformOrder.filter(
-        (platform) =>
-          values.platforms.includes(platform) &&
-          availablePlatforms.includes(platform),
-      )
-      if (!platformsQuery.isSuccess || selected.length === 0) {
-        form.setError('platforms', {
-          message: '请至少选择一个已经接入的平台。',
+      if (!platformsQuery.isSuccess || !availablePlatforms.includes('wb')) {
+        form.setError('root.server', {
+          message: '微博采集能力暂时不可用，请稍后重试。',
         })
         return
       }
       const batch = await startMutation.mutateAsync({
         monitoring_rule_id: rule.id,
-        platforms: selected,
         max_results_per_term: values.maxResultsPerTerm,
       })
       await queryClient.invalidateQueries({
@@ -435,70 +415,17 @@ export function CollectionRuns() {
                 </Button>
               </div>
 
-              <Controller
-                name="platforms"
-                control={form.control}
-                render={({ field, fieldState }) => (
-                  <FieldSet
-                    data-invalid={fieldState.invalid}
-                    aria-describedby={
-                      fieldState.error ? 'collection-platform-error' : undefined
-                    }
-                  >
-                    <FieldLegend variant="label">采集平台</FieldLegend>
-                    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-                      {searchPlatformOrder.map((platform) => {
-                        const presenter = searchPlatformPresenters[platform]
-                        const available = availablePlatforms.includes(platform)
-                        const checked =
-                          available && field.value.includes(platform)
-                        return (
-                          <FieldLabel
-                            key={platform}
-                            className="min-h-14 cursor-pointer rounded-lg border border-border bg-card p-3 has-data-checked:border-primary/40 has-data-checked:bg-primary/5"
-                          >
-                            <Field orientation="horizontal">
-                              <Checkbox
-                                checked={checked}
-                                disabled={controlsDisabled || !available}
-                                aria-invalid={fieldState.invalid}
-                                onCheckedChange={(nextChecked) => {
-                                  const next = nextChecked
-                                    ? [...field.value, platform]
-                                    : field.value.filter(
-                                        (value) => value !== platform,
-                                      )
-                                  field.onChange(next)
-                                }}
-                              />
-                              <span className="flex items-center gap-2 font-medium">
-                                <img
-                                  src={presenter.logoSrc}
-                                  alt=""
-                                  className="size-6"
-                                />
-                                {presenter.label}
-                                {platformsQuery.isSuccess && !available && (
-                                  <span
-                                    aria-hidden="true"
-                                    className="text-xs text-muted-foreground"
-                                  >
-                                    尚未接入
-                                  </span>
-                                )}
-                              </span>
-                            </Field>
-                          </FieldLabel>
-                        )
-                      })}
-                    </div>
-                    <FieldError
-                      id="collection-platform-error"
-                      errors={[fieldState.error]}
-                    />
-                  </FieldSet>
-                )}
-              />
+              <div className="flex min-h-11 items-center gap-3 rounded-lg border border-border bg-card px-3 text-sm">
+                <img
+                  src={searchPlatformPresenters.wb.logoSrc}
+                  alt=""
+                  className="size-6"
+                />
+                <span className="font-medium">采集平台：微博</span>
+                <span className="text-muted-foreground">
+                  当前版本仅支持微博
+                </span>
+              </div>
 
               {form.formState.errors.root?.server?.message && (
                 <p role="alert" className="text-sm text-destructive">
@@ -521,13 +448,6 @@ export function CollectionRuns() {
                     重试读取平台能力
                   </Button>
                 </div>
-              )}
-              {platformsQuery.data?.platforms.some(
-                (platform) => platform.availability === 'coming_soon',
-              ) && (
-                <p className="text-sm text-muted-foreground">
-                  尚未接入的平台不能启动新采集；其历史内容和已有总结仍可用于报告。
-                </p>
               )}
               {!rulesQuery.isPending &&
                 !rulesQuery.isError &&
@@ -598,7 +518,7 @@ export function CollectionRuns() {
             id="standalone-history-title"
             className="mb-3 font-display text-lg font-semibold"
           >
-            之前的单平台任务
+            独立采集任务
           </h2>
           <Card>
             <CardContent className="p-0">
@@ -613,7 +533,7 @@ export function CollectionRuns() {
                   >
                     {runsQuery.isFetchingNextPage
                       ? '正在加载…'
-                      : '加载更多单平台任务'}
+                      : '加载更多独立采集任务'}
                   </Button>
                 </div>
               )}

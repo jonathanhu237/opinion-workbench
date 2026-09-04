@@ -1,21 +1,17 @@
-import copy
 import hashlib
 import json
 import os
-from pathlib import Path
 from uuid import uuid4
 
 import pytest
 from enrichment_fixtures import PNG, content_payload, image_asset, write_file
 
-from longtian_api.schemas.analysis_evidence import AnalysisSource
 from longtian_api.services.enrichment_models import (
     MAX_MANIFEST_BYTES,
     EnrichmentBudget,
     EnrichmentValidationError,
     ManifestDescriptor,
     evidence_fingerprint,
-    valid_source_url,
     validate_content,
 )
 from longtian_api.services.enrichment_staging import MediaSpool, MediaStagingError
@@ -215,52 +211,6 @@ def test_fingerprint_ignores_handles_and_time_but_not_source_evidence():
     assert evidence_fingerprint(decoded(payload)) == before
     payload["text"]["body"] += "新进展"
     assert evidence_fingerprint(decoded(payload)) != before
-
-
-def test_backend_and_fork_share_golden_normalized_contract():
-    path = (
-        Path(__file__).resolve().parents[2]
-        / "third_party/MediaCrawler/tests/fixtures/enrichment_contract_v1.json"
-    )
-    fixture = json.loads(path.read_text())
-    for case in fixture["cases"]:
-        payload = copy.deepcopy(fixture["base"])
-        payload.update(copy.deepcopy(case["overrides"]))
-        if case["name"].startswith("toutiao_"):
-            assert (
-                valid_source_url(
-                    payload["platform"], payload["content_id"], payload["content_url"]
-                )
-                is case["valid"]
-            )
-        if case["valid"]:
-            assert decoded(payload).content_url == payload["content_url"]
-        else:
-            with pytest.raises(EnrichmentValidationError, match="^$"):
-                decoded(payload)
-
-
-def test_toutiao_legacy_empty_channel_url_is_preserved_by_content_validation():
-    content_url = "http://www.toutiao.com/a123456789/?channel="
-    payload = content_payload("toutiao", "123456789", content_url)
-    assert decoded(payload).content_url == content_url
-
-
-def test_toutiao_legacy_empty_channel_url_is_accepted_by_analysis_source():
-    content_url = "http://www.toutiao.com/a123456789/?channel="
-    source = AnalysisSource(
-        source_run_id=1,
-        result_id=2,
-        platform="toutiao",
-        platform_content_id="123456789",
-        content_type="article",
-        title="历史标题",
-        snippet="历史摘要",
-        content_url=content_url,
-        published_at_text="刚刚",
-        matched_terms=["龙田街道"],
-    )
-    assert source.content_url == content_url
 
 
 @pytest.mark.parametrize("replace_operation", [False, True])

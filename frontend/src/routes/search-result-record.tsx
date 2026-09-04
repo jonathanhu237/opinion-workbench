@@ -1,26 +1,13 @@
 import { ExternalLink } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
-import { Button, buttonVariants } from '@/components/ui/button'
+import { buttonVariants } from '@/components/ui/button'
 import type { SearchResult } from '@/lib/api/search-runs'
 import { cn } from '@/lib/utils'
 import { formatLocalDate } from '@/routes/search-run-presenters'
 
-export function SearchResultRecord({
-  result,
-  openPending,
-  activeOpenResultId,
-  openFeedback,
-  onOpen,
-}: {
-  result: SearchResult
-  openPending: boolean
-  activeOpenResultId: number | null
-  openFeedback: string | null
-  onOpen: (resultId: number) => void
-}) {
+export function SearchResultRecord({ result }: { result: SearchResult }) {
   const isNew = result.kind === 'new'
-  const isActiveOpen = openPending && activeOpenResultId === result.id
 
   return (
     <article
@@ -40,40 +27,18 @@ export function SearchResultRecord({
             </p>
           )}
         </div>
-        {result.platform === 'xhs' ? (
-          <div className="shrink-0">
-            <Button
-              variant="outline"
-              size="sm"
-              className="min-h-11 w-full sm:min-h-8"
-              disabled={openPending}
-              aria-busy={isActiveOpen}
-              onClick={() => onOpen(result.id)}
-            >
-              {isActiveOpen ? '正在打开…' : '打开原文'}
-              <ExternalLink aria-hidden />
-            </Button>
-            <p
-              className="mt-1 max-w-64 text-sm text-muted-foreground"
-              aria-live="polite"
-            >
-              {openFeedback}
-            </p>
-          </div>
-        ) : (
-          <a
-            href={result.content_url}
-            target="_blank"
-            rel="noreferrer"
-            className={cn(
-              buttonVariants({ variant: 'outline', size: 'sm' }),
-              'min-h-11 shrink-0 sm:min-h-8',
-            )}
-          >
-            打开原文
-            <ExternalLink aria-hidden />
-          </a>
-        )}
+        <a
+          href={result.content_url}
+          target="_blank"
+          rel="noreferrer"
+          className={cn(
+            buttonVariants({ variant: 'outline', size: 'sm' }),
+            'min-h-11 shrink-0 sm:min-h-8',
+          )}
+        >
+          打开原文
+          <ExternalLink aria-hidden />
+        </a>
       </div>
 
       <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-3">

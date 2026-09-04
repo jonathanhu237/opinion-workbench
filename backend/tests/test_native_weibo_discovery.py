@@ -140,9 +140,9 @@ def test_native_connection_check_brings_owned_browser_to_front(tmp_path):
         response = client.post("/api/v1/platform-connections/wb/attempts")
         assert response.status_code == 202
         for _ in range(30):
-            connection = client.get("/api/v1/platform-connections").json()[
-                "platforms"
-            ][0]
+            connection = client.get("/api/v1/platform-connections").json()["platforms"][
+                0
+            ]
             if connection["status"] != "checking":
                 break
             client.portal.call(asyncio.sleep, 0.01)
@@ -160,9 +160,9 @@ def test_native_connection_accepts_user_marker_with_hidden_login_markup(tmp_path
         response = client.post("/api/v1/platform-connections/wb/attempts")
         assert response.status_code == 202
         for _ in range(30):
-            connection = client.get("/api/v1/platform-connections").json()[
-                "platforms"
-            ][0]
+            connection = client.get("/api/v1/platform-connections").json()["platforms"][
+                0
+            ]
             if connection["status"] != "checking":
                 break
             client.portal.call(asyncio.sleep, 0.01)

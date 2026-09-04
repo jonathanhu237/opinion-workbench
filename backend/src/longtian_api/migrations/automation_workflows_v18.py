@@ -272,8 +272,13 @@ def migrate(connection: sqlite3.Connection) -> None:
             """UPDATE automation_tasks SET
               initial_prompt_mode=?,initial_prompt_version_id=?,
               report_prompt_mode=?,report_prompt_version_id=? WHERE id=?""",
-            ("default" if initial_is_default else "custom", initial_id,
-             "custom", report_id, row["id"]),
+            (
+                "default" if initial_is_default else "custom",
+                initial_id,
+                "custom",
+                report_id,
+                row["id"],
+            ),
         )
 
     # A new writer must provide both references.  SQLite cannot add a NOT NULL

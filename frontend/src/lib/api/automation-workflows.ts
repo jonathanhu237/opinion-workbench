@@ -9,14 +9,13 @@ import { safeCount, safeId } from '@/lib/api/analysis-shared'
 import { getApiBaseUrl } from '@/lib/api/client'
 import {
   isoDateSchema,
-  SEARCH_PLATFORM_ORDER,
   searchPlatformSchema,
   type SearchPlatform,
 } from '@/lib/api/search-runs'
 
 export const AUTOMATION_TASKS_QUERY_KEY = ['automation-tasks'] as const
 export const AUTOMATION_RUNS_QUERY_KEY = ['automation-runs'] as const
-export const AUTOMATION_PLATFORM_ORDER = SEARCH_PLATFORM_ORDER
+export const AUTOMATION_PLATFORM_ORDER = ['wb'] as const
 export const MAX_AUTOMATION_INTERVAL_MINUTES = 43_200
 export const MAX_AUTOMATION_GOAL_LENGTH = 4_000
 
@@ -71,17 +70,9 @@ const runStatuses = [
 
 const platformListSchema = z
   .array(searchPlatformSchema)
-  .min(1)
-  .max(5)
-  .refine((platforms) => new Set(platforms).size === platforms.length)
-  .refine((platforms) =>
-    platforms.every(
-      (platform, index) =>
-        index === 0 ||
-        SEARCH_PLATFORM_ORDER.indexOf(platform) >
-          SEARCH_PLATFORM_ORDER.indexOf(platforms[index - 1]),
-    ),
-  )
+  .length(1)
+  .refine((platforms) => platforms[0] === 'wb', '当前版本仅支持微博采集。')
+const defaultPlatformListSchema = platformListSchema.default(['wb'])
 
 const intervalScheduleSchema = z.strictObject({
   kind: z.literal('interval'),
@@ -387,7 +378,7 @@ const runPageSchema = z.strictObject({
 const createSchema = z.strictObject({
   name: z.string().min(1).max(80).refine(proseIsValid),
   monitoring_rule_id: safeId,
-  platforms: platformListSchema,
+  platforms: defaultPlatformListSchema,
   max_results_per_term: safeId.max(50),
   initial_prompt: promptChoiceSchema,
   report_prompt: promptChoiceSchema,
@@ -412,8 +403,11 @@ export type AutomationTaskPage = z.infer<typeof taskPageSchema>
 export type AutomationOccurrencePage = z.infer<typeof occurrencePageSchema>
 export type AutomationRunPage = z.infer<typeof runPageSchema>
 export type AutomationPlatform = SearchPlatform
-export type AutomationTaskCreate = z.infer<typeof createSchema>
-export type AutomationTaskReplace = z.infer<typeof replaceSchema>
+// Callers do not need to repeat the fixed Weibo platform. The request schema
+// supplies it before the payload crosses the API boundary; response schemas
+// keep the stored provenance required.
+export type AutomationTaskCreate = z.input<typeof createSchema>
+export type AutomationTaskReplace = z.input<typeof replaceSchema>
 export type AutomationTaskDelete = { expectedRevision: number }
 
 export const AUTOMATION_ERROR_CONTRACTS = {
@@ -879,7 +873,6 @@ export function automationTaskUpdatePayload(
   return {
     name: task.name,
     monitoring_rule_id: task.monitoring_rule_id,
-    platforms: task.platforms,
     max_results_per_term: task.max_results_per_term,
     initial_prompt: promptChoiceFromSnapshot(task.initial_prompt),
     report_prompt: promptChoiceFromSnapshot(task.report_prompt),

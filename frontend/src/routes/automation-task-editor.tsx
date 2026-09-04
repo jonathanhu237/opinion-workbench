@@ -33,7 +33,6 @@ import {
 import { PromptChoiceField } from '@/components/prompt-choice-field'
 import { useMonitoringRules } from '@/hooks/use-monitoring-rules'
 import {
-  AUTOMATION_PLATFORM_ORDER,
   MAX_AUTOMATION_INTERVAL_MINUTES,
   AUTOMATION_TASKS_QUERY_KEY,
   AutomationApiError,
@@ -54,7 +53,6 @@ import {
   cacheSavedAutomationTask,
   automationTaskDetailKey,
 } from '@/hooks/use-automation-workflows'
-import { searchPlatformPresenters } from '@/routes/search-run-presenters'
 
 const defaultTimeZone =
   Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai'
@@ -63,14 +61,6 @@ const formSchema = z
   .object({
     name: z.string().max(80, '任务名称不能超过 80 个字符。'),
     ruleId: z.string(),
-    platforms: z
-      .array(z.enum(AUTOMATION_PLATFORM_ORDER))
-      .min(1, '请至少选择一个采集平台。')
-      .max(5)
-      .refine(
-        (value) => new Set(value).size === value.length,
-        '采集平台不能重复。',
-      ),
     maxResultsPerTerm: z.coerce
       .number<number>()
       .int('请输入整数。')
@@ -151,7 +141,6 @@ function initialValues(task: AutomationTask | null): FormValues {
       task?.monitoring_rule_id === null || task === null
         ? ''
         : String(task.monitoring_rule_id),
-    platforms: task?.platforms ?? [...AUTOMATION_PLATFORM_ORDER],
     maxResultsPerTerm: task?.max_results_per_term ?? 10,
     initialPrompt: choiceFromSnapshot(task?.initial_prompt),
     reportPrompt: choiceFromSnapshot(task?.report_prompt),
@@ -307,13 +296,9 @@ function previewLabel(date: Date | null, timeZone: string) {
 }
 
 function makePayload(values: FormValues): AutomationTaskCreate {
-  const platforms = AUTOMATION_PLATFORM_ORDER.filter((platform) =>
-    values.platforms.includes(platform),
-  )
   return {
     name: values.name.trim(),
     monitoring_rule_id: Number(values.ruleId),
-    platforms,
     max_results_per_term: values.maxResultsPerTerm,
     initial_prompt: values.initialPrompt,
     report_prompt: values.reportPrompt,
@@ -549,59 +534,10 @@ export function AutomationTaskEditor({
             />
           </div>
 
-          <Controller
-            name="platforms"
-            control={form.control}
-            render={({ field, fieldState }) => (
-              <FieldSet
-                data-invalid={fieldState.invalid}
-                aria-describedby={
-                  fieldState.error ? 'automation-platform-error' : undefined
-                }
-              >
-                <FieldLegend variant="label">采集平台</FieldLegend>
-                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-                  {AUTOMATION_PLATFORM_ORDER.map((platform) => {
-                    const presenter = searchPlatformPresenters[platform]
-                    const checked = field.value.includes(platform)
-                    return (
-                      <label
-                        key={platform}
-                        className="flex min-h-14 cursor-pointer items-center gap-3 rounded-lg border border-border bg-card p-3 transition-colors hover:bg-muted/50 has-[:checked]:border-primary/40 has-[:checked]:bg-primary/5 has-[:focus-visible]:border-ring has-[:focus-visible]:ring-3 has-[:focus-visible]:ring-ring/50"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          disabled={saveMutation.isPending}
-                          aria-label={presenter.label}
-                          onChange={(event) => {
-                            const next = event.target.checked
-                              ? [...field.value, platform]
-                              : field.value.filter(
-                                  (value) => value !== platform,
-                                )
-                            field.onChange(next)
-                          }}
-                        />
-                        <span className="flex min-w-0 items-center gap-2 font-medium">
-                          <img
-                            src={presenter.logoSrc}
-                            alt=""
-                            className="size-6 shrink-0"
-                          />
-                          <span className="truncate">{presenter.label}</span>
-                        </span>
-                      </label>
-                    )
-                  })}
-                </div>
-                <FieldError
-                  id="automation-platform-error"
-                  errors={[fieldState.error]}
-                />
-              </FieldSet>
-            )}
-          />
+          <div className="flex min-h-11 items-center gap-3 rounded-lg border border-border bg-card px-3 text-sm">
+            <span className="font-medium">采集平台：微博</span>
+            <span className="text-muted-foreground">当前版本仅支持微博</span>
+          </div>
 
           <div className="grid gap-5">
             <Controller

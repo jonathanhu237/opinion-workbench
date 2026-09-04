@@ -17,10 +17,10 @@ from longtian_api.services.ai_client import AICompletion, AIUsage
 from longtian_api.services.ai_settings import AISettingsService
 from longtian_api.services.ai_summaries import SummaryService
 from longtian_api.services.browser_operations import BrowserOperationCoordinator
+from longtian_api.services.collector_contracts import EnrichmentWorkerResult
 from longtian_api.services.content_enrichment import ContentEnrichmentService
 from longtian_api.services.enrichment_models import EnrichedContent
 from longtian_api.services.enrichment_staging import MediaSpool
-from longtian_api.services.media_crawler_auth_worker import EnrichmentWorkerResult
 
 KEY = "synthetic-summary-secret-never-public"
 BASE = "https://dashscope.aliyuncs.com/compatible-mode/v1"

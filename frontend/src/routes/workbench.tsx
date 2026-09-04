@@ -44,11 +44,7 @@ const dateFormatter = new Intl.DateTimeFormat('zh-CN', {
 })
 
 const platformLabels = {
-  toutiao: '今日头条',
   wb: '微博',
-  ks: '快手',
-  dy: '抖音',
-  xhs: '小红书',
 } as const
 
 function formatTimestamp(value: string, timeZone?: string) {

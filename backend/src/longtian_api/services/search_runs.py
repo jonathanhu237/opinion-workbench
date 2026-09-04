@@ -200,7 +200,7 @@ class SearchRunService:
             raise SearchRunError(
                 status_code=409,
                 code="search_platform_not_available",
-                message="该平台尚未接入当前采集器，历史内容仍可查看。",
+                message="当前版本仅支持微博采集。",
             )
         rule = await self.load_rule(payload.monitoring_rule_id)
         if len(rule.terms) > MAX_SEARCH_TERMS:
@@ -303,7 +303,7 @@ class SearchRunService:
             raise _result_not_found() from None
         except SearchRunRepositoryUnavailableError:
             raise _storage_unavailable() from None
-        if target.platform != "xhs" or not self.supports_platform(target.platform):
+        if target.platform != "wb" or not self.supports_platform(target.platform):
             raise _open_not_supported()
 
         request_id = uuid4()
@@ -687,7 +687,7 @@ def _open_not_supported() -> SearchRunError:
     return SearchRunError(
         status_code=409,
         code="search_result_open_not_supported",
-        message="该平台的结果不需要通过浏览器任务打开。",
+        message="该采集结果当前无法通过浏览器打开。",
     )
 
 

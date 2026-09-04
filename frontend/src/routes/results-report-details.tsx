@@ -21,8 +21,6 @@ import {
   formatEvidenceDate,
   ResultsPagination,
   ResultSourceLink,
-  useResultSourceControls,
-  type ResultSourceControls,
 } from '@/routes/results-presenters'
 
 export const reportStatusLabels: Record<ReportRun['status'], string> = {
@@ -206,12 +204,10 @@ export function ReportCoverage({ report }: { report: ReportRun }) {
 function SectionContent({
   section,
   draft,
-  controls,
   onSection,
 }: {
   section: ReportSection
   draft: boolean
-  controls: ResultSourceControls
   onSection: (id: number) => void
 }) {
   const document = section.document ?? section.overview_document
@@ -255,7 +251,6 @@ function SectionContent({
               <span key={id} className="ml-2 inline">
                 <ResultSourceLink
                   source={citation.source}
-                  controls={controls}
                   citationNumber={citation.position + 1}
                 />
               </span>
@@ -334,7 +329,6 @@ export function ReportDetails({
   onSection: (id: number | null) => void
 }) {
   const active = isActiveReport(report.status)
-  const controls = useResultSourceControls()
   const sources = useQuery({
     queryKey: [...TOPIC_REPORTS_QUERY_KEY, 'sources', report.id, sourceOffset],
     queryFn: ({ signal }) =>
@@ -395,7 +389,6 @@ export function ReportDetails({
             <SectionContent
               section={selectedSection.data}
               draft={draft}
-              controls={controls}
               onSection={onSection}
             />
           ) : null}
@@ -421,7 +414,6 @@ export function ReportDetails({
                 key={section.id}
                 section={section}
                 draft={draft}
-                controls={controls}
                 onSection={onSection}
               />
             ))}
@@ -501,10 +493,7 @@ export function ReportDetails({
                     </p>
                   )}
                   <div className="flex flex-wrap items-center gap-3">
-                    <ResultSourceLink
-                      source={item.source}
-                      controls={controls}
-                    />
+                    <ResultSourceLink source={item.source} />
                     <Link
                       className={buttonVariants({
                         variant: 'link',

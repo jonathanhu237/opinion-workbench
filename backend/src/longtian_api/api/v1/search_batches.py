@@ -1,4 +1,4 @@
-"""Versioned endpoints for durable multi-platform collection batches."""
+"""Versioned endpoints for durable Weibo collection batches."""
 
 from typing import Annotated, Literal, Never
 
@@ -23,7 +23,7 @@ from longtian_api.services.search_batches import SearchBatchError
 router = APIRouter(prefix="/search-batches", tags=["search-batches"])
 
 SearchBatchId = Annotated[int, Path(gt=0, le=9_223_372_036_854_775_807)]
-SearchBatchItemPosition = Annotated[int, Path(ge=0, le=4)]
+SearchBatchItemPosition = Annotated[int, Path(ge=0, le=0)]
 _ERROR_404 = {404: {"model": SearchBatchErrorResponse}}
 _ERROR_409 = {409: {"model": SearchBatchErrorResponse}}
 _ERROR_422 = {422: {"model": SearchBatchErrorResponse}}

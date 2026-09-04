@@ -20,16 +20,16 @@ from longtian_api.services.browser_operations import (
     BrowserOperationCoordinator,
     BrowserOperationOwner,
 )
+from longtian_api.services.collector_contracts import (
+    EnrichmentWorkerResult,
+    EnrichmentWorkerUnsettledError,
+)
 from longtian_api.services.content_enrichment import (
     ContentEnrichmentError,
     ContentEnrichmentService,
 )
 from longtian_api.services.enrichment_models import EnrichedContent
 from longtian_api.services.enrichment_staging import MediaSpool
-from longtian_api.services.media_crawler_auth_worker import (
-    EnrichmentWorkerResult,
-    EnrichmentWorkerUnsettledError,
-)
 
 
 def stored_source(tmp_path: Path, *, platform="wb", identity="12345"):
@@ -44,13 +44,7 @@ def stored_source(tmp_path: Path, *, platform="wb", identity="12345"):
         max_results_per_term=10,
     )
     repository.mark_running(run.id)
-    urls = {
-        "wb": f"https://m.weibo.cn/detail/{identity}",
-        "dy": f"https://www.douyin.com/video/{identity}",
-        "ks": f"https://www.kuaishou.com/short-video/{identity}",
-        "xhs": f"https://www.xiaohongshu.com/explore/{identity}",
-        "toutiao": f"https://www.toutiao.com/article/{identity}/",
-    }
+    url = f"https://m.weibo.cn/detail/{identity}"
     item = SearchContentInput(
         platform_content_id=identity,
         content_type="post",
@@ -59,7 +53,7 @@ def stored_source(tmp_path: Path, *, platform="wb", identity="12345"):
         creator_hash="",
         publisher_name="",
         published_at_text="",
-        content_url=urls[platform],
+        content_url=url,
         observed_at="2026-08-28T00:00:00+00:00",
     )
     for position in (0, 1):

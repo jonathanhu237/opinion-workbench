@@ -180,7 +180,7 @@ _UNEXPECTED_STAGE_FAILURES: dict[AutomationStageName, tuple[str, str]] = {
 _SETTLED_STAGE_FAILURES: dict[AutomationStageName, tuple[str, str]] = {
     "collection": (
         "collection_failed",
-        "采集批次异常结束。已完成平台的结果仍然保留；请查看采集批次中的平台状态，处理未完成的平台后再从采集阶段重试。",
+        "采集批次异常结束。已完成采集项的结果仍然保留；请查看采集批次状态，处理未完成的采集后再从采集阶段重试。",
     ),
     "initial_analysis": (
         "initial_analysis_failed",

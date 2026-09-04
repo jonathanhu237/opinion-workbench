@@ -21,7 +21,7 @@ from longtian_api.services.browser_operations import (
     BrowserOperationCoordinator,
     BrowserOperationOwner,
 )
-from longtian_api.services.media_crawler_auth_worker import (
+from longtian_api.services.collector_contracts import (
     ManualPageWorkerResult,
     OpenResultWorkerResult,
     SearchWorkerItem,
@@ -165,16 +165,16 @@ def test_version_seven_migration_and_batch_constraints(tmp_path: Path) -> None:
         monitoring_rule_id=1,
         rule_name="重点区域",
         terms=("龙田街道",),
-        platforms=("toutiao", "wb"),
+        platforms=("wb",),
         max_results_per_term=10,
     )
-    assert [item.platform for item in first.items] == ["toutiao", "wb"]
+    assert [item.platform for item in first.items] == ["wb"]
     try:
         repository.create_batch(
             monitoring_rule_id=1,
             rule_name="另一个批次",
             terms=("龙田街道",),
-            platforms=("ks",),
+            platforms=("wb",),
             max_results_per_term=10,
         )
     except SearchBatchRepositoryUnavailableError:
@@ -192,14 +192,14 @@ def test_version_six_upgrade_preserves_existing_runs_and_is_idempotent(
         connection.execute("""INSERT INTO search_runs
             (id, monitoring_rule_id, platform, rule_name, max_results_per_term,
              status, current_term_position, created_at, started_at, finished_at)
-            VALUES (1, 1, 'xhs', '迁移前任务', 5, 'completed_empty', 0,
+            VALUES (1, 1, 'wb', '迁移前任务', 5, 'completed_empty', 0,
                     '2026-08-01T00:00:00Z','2026-08-01T00:00:00Z','2026-08-01T00:00:01Z')""")
         connection.execute("INSERT INTO search_run_terms VALUES (1, 0, '龙田街道')")
 
     database.initialize()
     database.initialize()
 
-    assert SearchRunRepository(database).get(1).platform == "xhs"
+    assert SearchRunRepository(database).get(1).platform == "wb"
     with database.connect() as connection:
         assert (
             connection.execute("PRAGMA user_version").fetchone()[0]
@@ -244,7 +244,7 @@ def test_attempt_creation_rolls_back_run_terms_and_item_transition(
         monitoring_rule_id=1,
         rule_name="重点区域",
         terms=("龙田街道", "竹坑社区"),
-        platforms=("toutiao",),
+        platforms=("wb",),
         max_results_per_term=2,
     )
     repository.mark_running(batch.id)
@@ -277,30 +277,24 @@ def test_attempt_creation_rolls_back_run_terms_and_item_transition(
         )
 
 
-def test_http_batch_orders_platforms_and_hides_attempts_from_primary_history(
+def test_http_weibo_batch_hides_attempts_from_primary_history(
     tmp_path: Path,
 ) -> None:
     database_path = tmp_path / "ordered.sqlite3"
-    worker = PlannedSearchWorker(
-        {
-            "toutiao": ["completed_empty"],
-            "wb": ["login_required"],
-            "xhs": ["completed_empty"],
-        }
-    )
+    worker = PlannedSearchWorker({"wb": ["login_required"]})
     with TestClient(_app(database_path, worker)) as client:
         response = client.post(
             "/api/v1/search-batches",
             json={
                 "monitoring_rule_id": 1,
-                "platforms": ["xhs", "wb", "toutiao"],
+                "platforms": ["wb"],
                 "max_results_per_term": 3,
             },
         )
         assert response.status_code == 202
         batch_id = response.json()["id"]
         _wait_for_batch(client, batch_id, {"paused_for_manual_action"})
-        assert worker.calls == ["toutiao", "wb"]
+        assert worker.calls == ["wb"]
         assert (
             client.post(
                 f"/api/v1/search-batches/{batch_id}/skip",
@@ -309,20 +303,12 @@ def test_http_batch_orders_platforms_and_hides_attempts_from_primary_history(
             == 202
         )
         batch = _wait_for_batch(client, batch_id, {"completed_with_failures"})
-        assert worker.calls == ["toutiao", "wb", "xhs"]
-        assert [item["platform"] for item in batch["items"]] == [
-            "toutiao",
-            "wb",
-            "xhs",
-        ]
-        assert [item["status"] for item in batch["items"]] == [
-            "completed",
-            "skipped",
-            "completed",
-        ]
-        assert batch["terminal_item_count"] == 3
+        assert worker.calls == ["wb"]
+        assert [item["platform"] for item in batch["items"]] == ["wb"]
+        assert [item["status"] for item in batch["items"]] == ["skipped"]
+        assert batch["terminal_item_count"] == 1
         assert client.get("/api/v1/search-runs?scope=standalone").json()["runs"] == []
-        assert len(client.get("/api/v1/search-runs").json()["runs"]) == 3
+        assert len(client.get("/api/v1/search-runs").json()["runs"]) == 1
 
 
 def test_composed_batch_snapshot_survives_rule_edits_and_deletion(
@@ -344,7 +330,7 @@ def test_composed_batch_snapshot_survives_rule_edits_and_deletion(
             "/api/v1/search-batches",
             json={
                 "monitoring_rule_id": rule["id"],
-                "platforms": ["wb", "xhs"],
+                "platforms": ["wb"],
                 "max_results_per_term": 1,
             },
         )
@@ -372,10 +358,10 @@ def test_composed_batch_snapshot_survives_rule_edits_and_deletion(
         )
         completed = _wait_for_batch(client, batch_id, {"completed"})
         assert completed["terms"] == terms
-        assert worker.calls == ["wb", "wb", "xhs"]
-        assert worker.term_calls == [tuple(terms)] * 3
+        assert worker.calls == ["wb", "wb"]
+        assert worker.term_calls == [tuple(terms)] * 2
         runs = client.get("/api/v1/search-runs").json()["runs"]
-        assert len(runs) == 3
+        assert len(runs) == 2
         assert (
             client.delete(f"/api/v1/monitoring-rules/{rule['id']}").status_code == 204
         )
@@ -422,13 +408,11 @@ def test_manual_challenge_pauses_and_continue_creates_a_new_attempt(
 ) -> None:
     worker = PlannedSearchWorker(
         {
-            "toutiao": ["completed_empty"],
             "wb": [
                 "manual_challenge_required",
                 "manual_challenge_required",
                 "completed_empty",
             ],
-            "ks": ["completed_empty"],
         }
     )
     with TestClient(_app(tmp_path / "pause.sqlite3", worker)) as client:
@@ -436,14 +420,14 @@ def test_manual_challenge_pauses_and_continue_creates_a_new_attempt(
             "/api/v1/search-batches",
             json={
                 "monitoring_rule_id": 1,
-                "platforms": ["toutiao", "wb", "ks"],
+                "platforms": ["wb"],
                 "max_results_per_term": 2,
             },
         )
         batch_id = response.json()["id"]
         paused = _wait_for_batch(client, batch_id, {"paused_for_manual_action"})
-        assert worker.calls == ["toutiao", "wb"]
-        assert paused["items"][1]["attempt_count"] == 1
+        assert worker.calls == ["wb"]
+        assert paused["items"][0]["attempt_count"] == 1
 
         continued = client.post(
             f"/api/v1/search-batches/{batch_id}/continue",
@@ -451,8 +435,8 @@ def test_manual_challenge_pauses_and_continue_creates_a_new_attempt(
         )
         assert continued.status_code == 202
         paused_again = _wait_for_batch(client, batch_id, {"paused_for_manual_action"})
-        assert worker.calls == ["toutiao", "wb", "wb"]
-        assert paused_again["items"][1]["attempt_count"] == 2
+        assert worker.calls == ["wb", "wb"]
+        assert paused_again["items"][0]["attempt_count"] == 2
 
         continued_again = client.post(
             f"/api/v1/search-batches/{batch_id}/continue",
@@ -460,10 +444,10 @@ def test_manual_challenge_pauses_and_continue_creates_a_new_attempt(
         )
         assert continued_again.status_code == 202
         completed = _wait_for_batch(client, batch_id, {"completed"})
-        assert worker.calls == ["toutiao", "wb", "wb", "wb", "ks"]
-        assert completed["items"][1]["attempt_count"] == 3
+        assert worker.calls == ["wb", "wb", "wb"]
+        assert completed["items"][0]["attempt_count"] == 3
         attempts = client.get(
-            f"/api/v1/search-batches/{batch_id}/items/1/attempts"
+            f"/api/v1/search-batches/{batch_id}/items/0/attempts"
         ).json()["attempts"]
         assert [attempt["attempt_number"] for attempt in attempts] == [3, 2, 1]
         assert attempts[0]["run"]["status"] == "completed_empty"
@@ -480,7 +464,7 @@ def test_cancel_batch_stops_current_attempt_and_never_starts_later_platforms(
             "/api/v1/search-batches",
             json={
                 "monitoring_rule_id": 1,
-                "platforms": ["toutiao", "wb"],
+                "platforms": ["wb"],
                 "max_results_per_term": 2,
             },
         )
@@ -508,10 +492,9 @@ def test_cancel_batch_stops_current_attempt_and_never_starts_later_platforms(
         )
         assert cancel.status_code == 202
         assert cancel.json()["status"] == "cancelled"
-        assert worker.calls == ["toutiao"]
+        assert worker.calls == ["wb"]
         assert worker.cancelled == 1
         assert [item["status"] for item in cancel.json()["items"]] == [
-            "cancelled",
             "cancelled",
         ]
 
@@ -526,7 +509,7 @@ def test_cancel_releases_owner_when_runner_was_cancelled_before_start(
         monitoring_rule_id=1,
         rule_name="重点区域",
         terms=("龙田街道",),
-        platforms=("toutiao",),
+        platforms=("wb",),
         max_results_per_term=1,
     )
 
@@ -568,7 +551,7 @@ def test_restart_pauses_interrupted_attempt_without_continuing_queue(
             "/api/v1/search-batches",
             json={
                 "monitoring_rule_id": 1,
-                "platforms": ["toutiao", "wb"],
+                "platforms": ["wb"],
                 "max_results_per_term": 2,
             },
         )
@@ -587,7 +570,6 @@ def test_restart_pauses_interrupted_attempt_without_continuing_queue(
     assert resumed_worker.calls == []
     assert [item["status"] for item in recovered["items"]] == [
         "paused_for_manual_action",
-        "queued",
     ]
 
 

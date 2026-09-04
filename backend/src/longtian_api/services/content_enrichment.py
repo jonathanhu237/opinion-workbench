@@ -171,6 +171,7 @@ class ContentEnrichmentService:
 
     def supports_platform(self, platform):
         from longtian_api.services.collector_contracts import supports_platform
+
         return supports_platform(self._worker, platform)
 
     @asynccontextmanager

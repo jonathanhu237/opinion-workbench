@@ -169,28 +169,23 @@ def test_cancelled_initial_job_does_not_emit_report(tmp_path):
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("platform", ["wb", "xhs"])
 def test_current_source_edits_never_replace_frozen_report_or_retry_origins(
-    tmp_path, platform
+    tmp_path,
 ):
     async def run():
         db, initial, reports, ai, model, worker, _ = environment(tmp_path, count=0)
         repository = SearchRunRepository(db)
         collection = repository.create_run(
             monitoring_rule_id=1,
-            platform=platform,
+            platform="wb",
             rule_name="来源快照",
             terms=("历史词",),
             max_results_per_term=10,
         )
         repository.mark_running(collection.id)
         repository.set_progress(collection.id, 0)
-        identity = "1000" if platform == "wb" else "64f000000000000000000001"
-        url = (
-            f"https://m.weibo.cn/detail/{identity}"
-            if platform == "wb"
-            else f"https://www.xiaohongshu.com/explore/{identity}"
-        )
+        identity = "5012345678901234"
+        url = f"https://m.weibo.cn/detail/{identity}"
         repository.observe_item(
             run_id=collection.id,
             term_position=0,

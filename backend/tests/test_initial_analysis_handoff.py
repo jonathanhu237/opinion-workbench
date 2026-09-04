@@ -1,7 +1,6 @@
 """Existing collection owners publish once after release, never per batch child."""
 
 import asyncio
-from dataclasses import replace
 
 from initial_analysis_fixtures import environment, finish
 from test_search_runs import FakeSearchWorker
@@ -20,8 +19,6 @@ class IdentityConsistentWorker(FakeSearchWorker):
         on_item = kwargs["on_item"]
 
         async def publish(position, item):
-            if kwargs["platform"] == "toutiao":
-                item = replace(item, content_id="100")
             await on_item(position, item)
 
         return await super().search(**{**kwargs, "on_item": publish})
@@ -86,7 +83,7 @@ def test_batch_has_one_handoff_not_one_per_child(tmp_path):
         batch = await batches.start_batch(
             SearchBatchCreate(
                 monitoring_rule_id=1,
-                platforms=["toutiao", "wb"],
+                platforms=["wb"],
                 max_results_per_term=1,
             )
         )
@@ -95,8 +92,8 @@ def test_batch_has_one_handoff_not_one_per_child(tmp_path):
         await finish(analyses)
         assert callbacks == [("batch", batch.id)]
         jobs = analyses.repository.list().jobs
-        assert len(jobs) == 1 and jobs[0].counts.total == 2
-        assert jobs[0].counts.completed == 2 and len(model.calls) == 2
+        assert len(jobs) == 1 and jobs[0].counts.total == 1
+        assert jobs[0].counts.completed == 1 and len(model.calls) == 1
         await analyses.shutdown()
         await batches.shutdown()
         await runs.shutdown()

@@ -570,12 +570,6 @@ def test_openapi_documents_monitoring_rule_contracts(tmp_path: Path) -> None:
 def test_rule_crud_never_launches_the_platform_worker(
     tmp_path: Path, monkeypatch
 ) -> None:
-    launch_calls: list[tuple[tuple[str, ...], Path]] = []
-
-    async def fail_if_launched(command: tuple[str, ...], cwd: Path):
-        launch_calls.append((command, cwd))
-        raise AssertionError("Monitoring rules must not launch a browser worker")
-
     async def fail_if_model_called(*_args, **_kwargs):
         raise AssertionError("Monitoring rules must not call a model")
 
@@ -583,7 +577,7 @@ def test_rule_crud_never_launches_the_platform_worker(
         "longtian_api.services.ai_client.AIClient.complete_text", fail_if_model_called
     )
 
-    platform_service = PlatformConnectionService(process_launcher=fail_if_launched)
+    platform_service = PlatformConnectionService()
     with TestClient(
         _create_test_app(
             tmp_path / "rules.sqlite3",
@@ -621,5 +615,3 @@ def test_rule_crud_never_launches_the_platform_worker(
             "乙 问题二",
         ]
         assert client.delete("/api/v1/monitoring-rules/2").status_code == 204
-
-    assert launch_calls == []

@@ -26,14 +26,12 @@ const selectionPreviewRequest = z.discriminatedUnion('kind', [
   }),
   z.strictObject({
     kind: z.literal('library'),
-    include_failed: z.boolean().default(false),
   }),
 ])
 const selectionPolicy = z.discriminatedUnion('kind', [
   selection,
   z.strictObject({
     kind: z.literal('library_pending'),
-    include_failed: z.boolean(),
   }),
 ])
 const selectionPreviewSchema = z.strictObject({

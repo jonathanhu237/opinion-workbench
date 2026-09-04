@@ -11,7 +11,7 @@ from longtian_api.schemas.collection_schedules import (
 )
 from longtian_api.services.browser_operations import BrowserOperationCoordinator
 from longtian_api.services.collection_schedules import CollectionScheduleService
-from longtian_api.services.media_crawler_auth_worker import ManualPageWorkerResult
+from longtian_api.services.collector_contracts import ManualPageWorkerResult
 from longtian_api.services.monitoring_rules import MonitoringRuleService
 from longtian_api.services.search_batches import SearchBatchService
 from longtian_api.services.search_runs import SearchRunService

@@ -125,12 +125,12 @@ def test_interval_roundtrip_defaults_and_catalog_order(tmp_path, value, unit, mi
         CollectionScheduleCreate(
             **payload(
                 interval={"value": value, "unit": unit},
-                platforms=["xhs", "wb", "toutiao"],
+                platforms=["wb"],
             )
         )
     )
     assert schedule.interval_minutes == minutes
-    assert schedule.platforms == ["toutiao", "wb", "xhs"]
+    assert schedule.platforms == ["wb"]
     assert not schedule.enabled and schedule.anchor_at is schedule.next_due_at is None
     database.initialize()
     assert service.get(schedule.id) == schedule
@@ -173,8 +173,8 @@ def test_replace_rolls_back_parent_and_first_platform(tmp_path):
     database, service, *_ = environment(tmp_path)
     schedule = enabled(service)
     with database.connect() as connection:
-        connection.execute("""CREATE TRIGGER fail_second_schedule_platform
-            BEFORE INSERT ON collection_schedule_platforms WHEN NEW.position=1
+        connection.execute("""CREATE TRIGGER fail_schedule_platform
+            BEFORE INSERT ON collection_schedule_platforms WHEN NEW.position=0
             BEGIN SELECT RAISE(ABORT,'private-sentinel'); END""")
     with pytest.raises(
         CollectionScheduleError, match="collection_schedule_storage_unavailable"
@@ -182,7 +182,7 @@ def test_replace_rolls_back_parent_and_first_platform(tmp_path):
         service.replace(
             schedule.id,
             CollectionScheduleReplace(
-                **payload(platforms=["wb", "xhs"]), expected_revision=2, enabled=True
+                **payload(platforms=["wb"]), expected_revision=2, enabled=True
             ),
         )
     assert service.get(schedule.id) == schedule

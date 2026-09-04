@@ -51,7 +51,8 @@ def test_replaceable_runtime_search_persists_without_legacy_worker(tmp_path):
         results = client.get(f"/api/v1/search-runs/{run_id}/results").json()
         assert results["total"] == 1
         assert (
-            results["results"][0]["content_url"] == "https://m.weibo.cn/detail/news-100"
+            results["results"][0]["content_url"]
+            == "https://m.weibo.cn/detail/5012345678901234"
         )
         for _ in range(2):
             assert client.get(f"/api/v1/search-runs/{run_id}").status_code == 200

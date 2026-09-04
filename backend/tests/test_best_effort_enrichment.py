@@ -113,11 +113,11 @@ def test_partial_detail_text_survives_one_failed_media_asset():
     content = EnrichedContent.model_validate(
         {
             "schema_version": 1,
-            "platform": "dy",
+            "platform": "wb",
             "content_id": "123",
-            "content_url": "https://www.douyin.com/video/123",
+            "content_url": "https://m.weibo.cn/detail/123",
             "acquired_at": 1_750_000_000_000,
-            "extractor_version": "dy-enrichment-v1",
+            "extractor_version": "wb-enrichment-v1",
             "status": "partial",
             "text": {
                 "title": "详情标题",
@@ -152,7 +152,7 @@ def test_partial_detail_text_survives_one_failed_media_asset():
         SearchResultSourceRecord(
             run_id=3,
             result_id=4,
-            platform="dy",
+            platform="wb",
             platform_content_id="123",
             content_type="video",
             content_url=content.content_url,

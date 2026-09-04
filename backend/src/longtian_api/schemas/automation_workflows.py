@@ -22,7 +22,7 @@ from longtian_api.search_platforms import SearchPlatform
 MAX_SAFE_INTEGER = 9_007_199_254_740_991
 MAX_ANALYSIS_GOAL_LENGTH = 4_000
 MAX_INTERVAL_MINUTES = 43_200
-MAX_PLATFORMS = 5
+MAX_PLATFORMS = 1
 
 AutomationScheduleKind = Literal["interval", "daily"]
 AutomationTaskStatus = Literal[
@@ -83,10 +83,7 @@ def _valid_timezone(value: str) -> str:
 
 
 def _valid_platforms(value: list[SearchPlatform]) -> list[SearchPlatform]:
-    catalog = ("toutiao", "wb", "ks", "dy", "xhs")
-    if not 1 <= len(value) <= MAX_PLATFORMS or len(set(value)) != len(value):
-        raise ValueError("invalid platforms")
-    if tuple(value) != tuple(platform for platform in catalog if platform in value):
+    if value != ["wb"]:
         raise ValueError("platforms must use catalog order")
     return value
 
@@ -113,7 +110,13 @@ AutomationSchedule = Annotated[
 class AutomationTaskCreate(StrictModel):
     name: str = Field(min_length=1, max_length=80)
     monitoring_rule_id: int = Field(ge=1, le=MAX_SAFE_INTEGER)
-    platforms: list[SearchPlatform] = Field(min_length=1, max_length=MAX_PLATFORMS)
+    # Platform provenance remains in stored snapshots, while admission derives
+    # the only currently supported platform when the caller omits this field.
+    platforms: list[SearchPlatform] = Field(
+        default_factory=lambda: ["wb"],
+        min_length=1,
+        max_length=MAX_PLATFORMS,
+    )
     max_results_per_term: int = Field(default=10, ge=1, le=50)
     # ``analysis_goal`` is retained as a private compatibility mirror for
     # clients written before v18.  New callers submit one choice per stage.
@@ -129,10 +132,12 @@ class AutomationTaskCreate(StrictModel):
     schedule: AutomationSchedule
 
     _name = field_validator("name")(_prose)
+
     @field_validator("analysis_goal")
     @classmethod
     def optional_goal(cls, value):
         return None if value is None else _prose(value)
+
     _platforms = field_validator("platforms")(_valid_platforms)
 
     @model_validator(mode="before")
@@ -171,7 +176,9 @@ class AutomationTaskCreateRequest(StrictModel):
     name: str = Field(min_length=1, max_length=80)
     monitoring_rule_id: int = Field(ge=1, le=MAX_SAFE_INTEGER)
     platforms: list[SearchPlatform] = Field(
-        min_length=1, max_length=MAX_PLATFORMS
+        default_factory=lambda: ["wb"],
+        min_length=1,
+        max_length=MAX_PLATFORMS,
     )
     max_results_per_term: int = Field(default=10, ge=1, le=50)
     initial_prompt: PromptChoice

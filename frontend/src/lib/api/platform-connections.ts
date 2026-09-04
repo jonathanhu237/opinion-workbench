@@ -2,8 +2,8 @@ import { getApiBaseUrl } from '@/lib/api/client'
 
 export const PLATFORM_CONNECTIONS_QUERY_KEY = ['platform-connections'] as const
 
-const platformIds = ['wb', 'dy', 'ks', 'xhs', 'toutiao'] as const
-const availabilityValues = ['enabled', 'coming_soon'] as const
+const platformIds = ['wb'] as const
+const availabilityValues = ['enabled'] as const
 const statusValues = [
   'not_checked',
   'checking',
@@ -11,7 +11,6 @@ const statusValues = [
   'connected',
   'disconnected',
   'failed',
-  'coming_soon',
 ] as const
 const guidanceValues = [
   'none',
@@ -133,9 +132,6 @@ function parsePlatformConnection(value: unknown): PlatformConnection | null {
   }
 
   if (
-    (value.availability === 'coming_soon' &&
-      (value.status !== 'coming_soon' || value.guidance !== 'none')) ||
-    (value.availability === 'enabled' && value.status === 'coming_soon') ||
     (value.guidance === 'starting_browser' && value.status !== 'checking') ||
     (value.guidance === 'retry_browser' && value.status !== 'failed')
   ) {

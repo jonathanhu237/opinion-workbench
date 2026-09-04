@@ -282,9 +282,7 @@ function GenerationDetails({ value }: { value: ReportGeneration }) {
         选材方式：
         {value.selection_policy.kind === 'explicit'
           ? '手动勾选'
-          : value.selection_policy.include_failed
-            ? '全库待分析条目（含分析失败条目）'
-            : '全库待分析条目（不含分析失败条目）'}
+          : '全库未分析条目（含曾经失败的条目）'}
         ；以下是启动时的固定集合。
       </p>
       <progress

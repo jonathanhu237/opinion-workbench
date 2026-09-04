@@ -53,13 +53,7 @@ function catalog(
   > = {},
 ): PlatformConnectionsResponse {
   return {
-    platforms: [
-      platform('wb', '微博', statuses.wb),
-      platform('dy', '抖音', statuses.dy),
-      platform('ks', '快手', statuses.ks),
-      platform('xhs', '小红书', statuses.xhs),
-      platform('toutiao', '今日头条', statuses.toutiao),
-    ],
+    platforms: [platform('wb', '微博', statuses.wb)],
   }
 }
 
@@ -117,7 +111,7 @@ describe('homepage workbench', () => {
     ).toBeInTheDocument()
     expect(screen.getByText('还没有可阅读的舆情报告')).toBeInTheDocument()
     expect(screen.getByText('暂无可执行的自动任务。')).toBeInTheDocument()
-    expect(screen.getByText('5/5 已连接')).toBeInTheDocument()
+    expect(screen.getByText('1/1 已连接')).toBeInTheDocument()
     expect(screen.queryByText('需要查看')).toBeNull()
     expect(screen.queryByText('今日发现', { exact: true })).toBeNull()
     expect(screen.queryByText('待跟进', { exact: true })).toBeNull()
@@ -312,7 +306,7 @@ describe('homepage workbench', () => {
     renderWorkbench()
 
     expect(await screen.findByText('最新报告暂时无法读取')).toBeInTheDocument()
-    expect(screen.getByText('5/5 已连接')).toBeInTheDocument()
+    expect(screen.getByText('1/1 已连接')).toBeInTheDocument()
     expect(
       screen.getByRole('heading', { name: '当前状态尚未完全确认' }),
     ).toBeInTheDocument()

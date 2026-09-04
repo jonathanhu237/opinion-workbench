@@ -82,7 +82,7 @@ it('replays the same fixed intent after an ambiguous submission and remount', as
   expect(vi.mocked(createReportGeneration).mock.calls[1][0]).toEqual(intent)
 })
 
-it('uses the library preview for bulk selection and makes failure inclusion explicit', async () => {
+it('uses the library preview for bulk selection including previous failures', async () => {
   const user = userEvent.setup()
   const onStarted = vi.fn()
   render(
@@ -104,15 +104,75 @@ it('uses the library preview for bulk selection and makes failure inclusion expl
       />
     </QueryClientProvider>,
   )
-  await user.click(screen.getByText('更多选材'))
-  await user.click(screen.getByRole('button', { name: '同时加入分析失败内容' }))
+  await user.click(screen.getByRole('button', { name: '选中全部未分析内容' }))
   await waitFor(() => expect(screen.getByText('已选 3 条')).toBeVisible())
   expect(previewReportSelection).toHaveBeenCalledWith({
     kind: 'library',
-    include_failed: true,
   })
   expect(createReportGeneration).not.toHaveBeenCalled()
   expect(onStarted).not.toHaveBeenCalled()
+})
+
+it('shows the combined backlog and selected retry count before submission', async () => {
+  vi.mocked(previewReportSelection).mockResolvedValue({
+    selection: { kind: 'explicit', result_ids: [11, 12] },
+    counts: {
+      total: 2,
+      pending: 1,
+      already_summarized: 0,
+      failed: 1,
+      active: 0,
+    },
+  })
+  const user = userEvent.setup()
+  show([11, 12])
+
+  expect(
+    await screen.findByText(
+      (_, element) =>
+        element?.textContent?.replace(/\s+/g, ' ').trim() ===
+        '未分析共 29 · 其中曾失败 1',
+    ),
+  ).toBeVisible()
+  await user.click(screen.getByRole('button', { name: '生成报告' }))
+  const retryLabel = await screen.findByText('失败重试')
+  expect(retryLabel.parentElement).toHaveTextContent('失败重试1')
+})
+
+it('blocks submission until the selected preview can confirm retry counts', async () => {
+  vi.mocked(previewReportSelection)
+    .mockRejectedValueOnce(new AnalysisApiError('service_unavailable'))
+    .mockResolvedValueOnce({
+      selection: { kind: 'explicit', result_ids: [11, 12] },
+      counts: {
+        total: 2,
+        pending: 1,
+        already_summarized: 0,
+        failed: 1,
+        active: 0,
+      },
+    })
+  vi.mocked(createReportGeneration).mockResolvedValue({
+    id: 1,
+    request_id: 'request-1',
+  } as never)
+  const user = userEvent.setup()
+  show([11, 12])
+
+  await user.click(screen.getByRole('button', { name: '生成报告' }))
+  expect(
+    await screen.findByText(
+      '暂时无法确认选材状态，已暂停提交。请重新检查后再确认报告。',
+    ),
+  ).toBeVisible()
+  const confirm = screen.getByRole('button', { name: '确认生成报告' })
+  expect(confirm).toBeDisabled()
+  expect(createReportGeneration).not.toHaveBeenCalled()
+
+  await user.click(screen.getByRole('button', { name: '重新检查选材' }))
+  await waitFor(() => expect(confirm).toBeEnabled())
+  await user.click(confirm)
+  await waitFor(() => expect(createReportGeneration).toHaveBeenCalledTimes(1))
 })
 
 it('keeps the report action beside selection instead of fixing it to the viewport', () => {

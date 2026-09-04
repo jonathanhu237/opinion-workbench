@@ -1,8 +1,8 @@
 ## Local-First Application Runtime
 
 - This project is a local-first desktop application. By default, run the
-  frontend, backend API, SQLite runtime database, MediaCrawler processes, and
-  browser/CDP integration on the user's local machine.
+  frontend, backend API, SQLite runtime database, and browser/CDP integration
+  on the user's local machine.
 - Use the local machine for development previews, debugging, and application
   validation. Browser-dependent collection and platform-login flows must run on
   the same local machine as the user's browser.

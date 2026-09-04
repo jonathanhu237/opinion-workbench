@@ -54,7 +54,7 @@ function run(values: Record<string, unknown> = {}) {
       monitoring_rule_id: 9,
       rule_name: '公共事务',
       terms: ['街道', '社区'],
-      platforms: ['toutiao', 'wb'] as const,
+      platforms: ['wb'] as 'wb'[],
       max_results_per_term: 10,
       analysis_goal: '识别需要街道回应的公共事务内容。',
       analysis_goal_hash: 'a'.repeat(64),
@@ -98,7 +98,7 @@ function task(values: Record<string, unknown> = {}) {
     monitoring_rule_id: 9,
     rule_name: '公共事务',
     rule_state: 'enabled' as const,
-    platforms: ['toutiao', 'wb'] as const,
+    platforms: ['wb'] as const,
     max_results_per_term: 10,
     analysis_goal: '识别需要街道回应的公共事务内容。',
     schedule: { kind: 'interval' as const, interval_minutes: 120 },
@@ -144,7 +144,7 @@ describe('automation workflow HTTP boundary', () => {
     const input = {
       name: '每日街道值守',
       monitoring_rule_id: 9,
-      platforms: ['toutiao', 'wb'] as ('toutiao' | 'wb')[],
+      platforms: ['wb'] as 'wb'[],
       max_results_per_term: 12,
       initial_prompt: { mode: 'default' as const },
       report_prompt: {
@@ -176,7 +176,7 @@ describe('automation workflow HTTP boundary', () => {
       createAutomationTask({
         name: ' \t',
         monitoring_rule_id: 9,
-        platforms: ['toutiao'],
+        platforms: ['wb'],
         max_results_per_term: 12,
         initial_prompt: { mode: 'default' },
         report_prompt: { mode: 'default' },

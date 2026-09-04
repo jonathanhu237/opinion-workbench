@@ -6,8 +6,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
-PlatformId = Literal["wb", "dy", "ks", "xhs", "toutiao"]
-PlatformAvailability = Literal["enabled", "coming_soon"]
+PlatformId = Literal["wb"]
+PlatformAvailability = Literal["enabled"]
 PlatformConnectionStatus = Literal[
     "not_checked",
     "checking",
@@ -15,7 +15,6 @@ PlatformConnectionStatus = Literal[
     "connected",
     "disconnected",
     "failed",
-    "coming_soon",
 ]
 PlatformConnectionGuidance = Literal[
     "none",

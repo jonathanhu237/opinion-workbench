@@ -20,7 +20,7 @@ from longtian_api.services.ai_errors import AIError
 from longtian_api.services.ai_summaries import SummaryService
 from longtian_api.services.analysis_errors import AnalysisError
 from longtian_api.services.browser_operations import BrowserOperationOwner
-from longtian_api.services.media_crawler_auth_worker import EnrichmentWorkerResult
+from longtian_api.services.collector_contracts import EnrichmentWorkerResult
 from longtian_api.services.summary_errors import failure
 
 

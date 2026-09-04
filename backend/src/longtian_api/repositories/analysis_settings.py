@@ -192,10 +192,14 @@ def resolve_prompt_choice(
         else getattr(choice, "mode", None)
     )
     if isinstance(choice, Mapping):
-        expected_keys = {"mode"} if mode == "default" else {
-            "mode",
-            "instructions",
-        }
+        expected_keys = (
+            {"mode"}
+            if mode == "default"
+            else {
+                "mode",
+                "instructions",
+            }
+        )
         if set(choice) != expected_keys:
             raise AnalysisError("invalid_analysis_prompt")
     if mode == "default":

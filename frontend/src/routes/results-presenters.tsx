@@ -1,18 +1,11 @@
-import { useMutation } from '@tanstack/react-query'
 import { ExternalLink } from 'lucide-react'
-import { useState } from 'react'
 
 import { Button, buttonVariants } from '@/components/ui/button'
 import type { AISummarySource } from '@/lib/api/ai-summaries'
 import type { AnalysisJob, AnalysisUsage } from '@/lib/api/content-analyses'
 import type { ResultState } from '@/lib/api/results'
-import { openSearchRunResult } from '@/lib/api/search-runs'
 import { cn } from '@/lib/utils'
-import {
-  openErrorMessage,
-  openOutcomeMessages,
-  searchPlatformPresenters,
-} from '@/routes/search-run-presenters'
+import { searchPlatformPresenters } from '@/routes/search-run-presenters'
 
 export const resultStateLabels: Record<ResultState, string> = {
   never_started: '待分析',
@@ -52,44 +45,11 @@ export function formatEvidenceDate(value: string) {
     hour12: false,
   }).format(new Date(value))
 }
-function sourceKey(source: AISummarySource) {
-  return `${source.source_run_id}:${source.result_id}`
-}
-export function useResultSourceControls() {
-  const [feedback, setFeedback] = useState<{
-    key: string
-    message: string
-  } | null>(null)
-  const mutation = useMutation({
-    mutationFn: (source: AISummarySource) =>
-      openSearchRunResult(source.source_run_id, source.result_id),
-    retry: false,
-    onMutate: () => setFeedback(null),
-    onSuccess: (data, source) =>
-      setFeedback({
-        key: sourceKey(source),
-        message: openOutcomeMessages[data.outcome],
-      }),
-    onError: (error, source) =>
-      setFeedback({ key: sourceKey(source), message: openErrorMessage(error) }),
-  })
-  return {
-    pending: mutation.isPending,
-    activeKey: mutation.variables ? sourceKey(mutation.variables) : null,
-    feedback,
-    open: mutation.mutate,
-  }
-}
-export type ResultSourceControls = ReturnType<typeof useResultSourceControls>
 export function ResultSourceLink({
   source,
-  controls,
-  disabled = false,
   citationNumber,
 }: {
   source: AISummarySource
-  controls: ResultSourceControls
-  disabled?: boolean
   citationNumber?: number
 }) {
   const text =
@@ -103,45 +63,18 @@ export function ResultSourceLink({
     citationNumber !== undefined &&
       'h-auto min-h-8 px-0 align-baseline underline',
   )
-  if (source.platform !== 'xhs')
-    return (
-      <a
-        href={source.content_url}
-        target="_blank"
-        rel="noopener noreferrer"
-        aria-label={label}
-        title={citationNumber === undefined ? undefined : source.title}
-        className={cn(buttonVariants({ variant, size: 'sm' }), style)}
-      >
-        {text}
-        <ExternalLink aria-hidden />
-      </a>
-    )
-  const active = controls.pending && controls.activeKey === sourceKey(source)
   return (
-    <span className="inline-flex max-w-full flex-col items-start align-baseline">
-      <Button
-        variant={variant}
-        size="sm"
-        className={style}
-        disabled={disabled || controls.pending}
-        aria-busy={active}
-        aria-label={label}
-        title={citationNumber === undefined ? undefined : source.title}
-        onClick={() => controls.open(source)}
-      >
-        {active ? '正在打开…' : text}
-        <ExternalLink aria-hidden />
-      </Button>
-      {controls.feedback?.key === sourceKey(source) && (
-        <span
-          role="status"
-          className="mt-2 max-w-72 text-sm text-muted-foreground"
-        >
-          {controls.feedback.message}
-        </span>
-      )}
-    </span>
+    <a
+      href={source.content_url}
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-label={label}
+      title={citationNumber === undefined ? undefined : source.title}
+      className={cn(buttonVariants({ variant, size: 'sm' }), style)}
+    >
+      {text}
+      <ExternalLink aria-hidden />
+    </a>
   )
 }
 export function ResultsPagination({

@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from longtian_api.search_failure_reasons import SearchFailureReason
 from longtian_api.search_platforms import (
     SearchPlatform,
+    is_supported_search_platform,
     is_valid_search_content_url,
 )
 from longtian_api.services.native_browser_contracts import ExecutionLimit
@@ -57,8 +58,17 @@ class SearchRunCreate(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     monitoring_rule_id: int = Field(ge=1, le=9_223_372_036_854_775_807)
-    platform: SearchPlatform
+    # The current collection surface is fixed to Weibo.  Keep the provenance
+    # field in the payload for stored run snapshots, while allowing callers to
+    # omit a redundant platform choice.
+    platform: SearchPlatform = "wb"
     max_results_per_term: int = Field(default=10, ge=1, le=50)
+
+    @model_validator(mode="after")
+    def validate_current_platform(self) -> "SearchRunCreate":
+        if not is_supported_search_platform(self.platform):
+            raise ValueError("only Weibo is supported")
+        return self
 
 
 class SearchRunSummary(BaseModel):

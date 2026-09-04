@@ -58,7 +58,7 @@ const stageLabels: Record<AutomationStage['name'], string> = {
 }
 
 const stageDescriptions: Record<AutomationStage['name'], string> = {
-  collection: '按本次任务设置、平台和每个搜索词上限获取内容。',
+  collection: '按本次任务设置、微博和每个搜索词上限获取内容。',
   initial_analysis: '先理解正文、图片、视频等可用内容。',
   topic_report: '按本次任务的分析目标判断相关性，并生成报告。',
 }
@@ -201,7 +201,7 @@ function stageCounts(
     const completed = collectionBatch.items.filter(
       (item) => item.status === 'completed',
     ).length
-    return `已完成 ${completed} 个平台 · 待处理 ${collectionBatch.platform_count - completed} 个平台 · 共 ${collectionBatch.platform_count} 个平台`
+    return `已完成 ${completed} 个采集项 · 待处理 ${collectionBatch.platform_count - completed} 个采集项 · 共 ${collectionBatch.platform_count} 个采集项`
   }
   if (
     stage.input_count === 0 &&
@@ -248,7 +248,7 @@ function RunActionDialog({
           </AlertDialogTitle>
           <AlertDialogDescription>
             {retry
-              ? `将从“${failed ? stageLabels[failed.name] : '失败阶段'}”重新开始，已完成的阶段不会重复。任务设置、平台和两阶段提示词保持不变。`
+              ? `将从“${failed ? stageLabels[failed.name] : '失败阶段'}”重新开始，已完成的阶段不会重复。任务设置、微博和两阶段提示词保持不变。`
               : '取消会停止当前阶段并阻止后续阶段启动，已经保存的采集结果、初步分析和报告历史不会删除。'}
           </AlertDialogDescription>
         </AlertDialogHeader>
@@ -276,7 +276,7 @@ function SnapshotCard({ run }: { run: AutomationRun }) {
       <CardHeader className="border-b">
         <h2 className="font-display text-xl">本次任务设置</h2>
         <p className="text-sm leading-6 text-muted-foreground">
-          编辑自动任务不会改变本次运行。重试时仍使用原来的规则、平台、采集上限和两阶段提示词。
+          编辑自动任务不会改变本次运行。重试时仍使用原来的规则、微博、采集上限和两阶段提示词。
         </p>
       </CardHeader>
       <CardContent className="grid gap-4 pt-5 text-sm sm:grid-cols-2">
@@ -293,7 +293,7 @@ function SnapshotCard({ run }: { run: AutomationRun }) {
           </p>
         </div>
         <div>
-          <p className="text-muted-foreground">平台与采集上限</p>
+          <p className="text-muted-foreground">微博与采集上限</p>
           <p className="mt-1 font-medium">
             {platforms} · 每个搜索词最多 {run.snapshot.max_results_per_term} 条
           </p>
@@ -587,7 +587,7 @@ export function AutomationRunDetail() {
                   <div className="min-w-0">
                     <p className="font-medium">采集已暂停，需要处理</p>
                     <p className="mt-1 text-muted-foreground">
-                      已完成平台的采集结果和当前平台的续采位置都已保留。
+                      已完成采集项的结果和当前采集位置都已保留。
                       {active
                         ? '请进入采集批次处理当前平台；处理完成后，本次自动任务会自动继续初步分析。'
                         : '这条旧运行已被标记为失败。请先从失败阶段重试，系统会重新接管同一个采集批次；再处理当前平台，完成后会自动继续初步分析。'}

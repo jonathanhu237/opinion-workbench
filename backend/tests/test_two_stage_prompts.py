@@ -137,7 +137,7 @@ def test_automation_task_persists_both_prompt_choices(tmp_path: Path):
             {
                 "name": "双阶段提示词任务",
                 "monitoring_rule_id": 1,
-                "platforms": ["toutiao"],
+                "platforms": ["wb"],
                 "max_results_per_term": 10,
                 "initial_prompt": {
                     "mode": "custom",
@@ -178,7 +178,7 @@ def test_pre_v18_run_snapshot_is_adapted_without_rewriting_history(tmp_path: Pat
             {
                 "name": "历史运行任务",
                 "monitoring_rule_id": 1,
-                "platforms": ["toutiao"],
+                "platforms": ["wb"],
                 "analysis_goal": "历史任务报告目标",
                 "initial_prompt": {"mode": "default"},
                 "report_prompt": {
@@ -245,16 +245,18 @@ def test_pre_v18_run_snapshot_is_adapted_without_rewriting_history(tmp_path: Pat
     assert adapted.snapshot.initial_prompt is not None
     assert adapted.snapshot.initial_prompt.mode == "legacy"
     assert (
-        adapted.snapshot.initial_prompt.instructions
-        == task.initial_prompt.instructions
+        adapted.snapshot.initial_prompt.instructions == task.initial_prompt.instructions
     )
     assert adapted.snapshot.report_prompt is not None
     assert adapted.snapshot.report_prompt.mode == "legacy"
     assert adapted.snapshot.report_prompt.instructions == "历史任务报告目标"
     with database.connect() as connection:
-        assert connection.execute(
-            "SELECT snapshot_json FROM automation_runs WHERE id=?", (run.id,)
-        ).fetchone()[0] == serialized
+        assert (
+            connection.execute(
+                "SELECT snapshot_json FROM automation_runs WHERE id=?", (run.id,)
+            ).fetchone()[0]
+            == serialized
+        )
 
 
 def test_pre_v18_report_prompt_is_adapted_without_rewriting_history(tmp_path: Path):
@@ -288,9 +290,12 @@ def test_pre_v18_report_prompt_is_adapted_without_rewriting_history(tmp_path: Pa
     assert report.prompt.version_id is None
     assert report.prompt.instructions == "历史报告提示词"
     with database.connect() as connection:
-        assert connection.execute(
-            "SELECT prompt_json FROM topic_report_runs WHERE id=?", (report_id,)
-        ).fetchone()[0] == '{"instructions":"历史报告提示词"}'
+        assert (
+            connection.execute(
+                "SELECT prompt_json FROM topic_report_runs WHERE id=?", (report_id,)
+            ).fetchone()[0]
+            == '{"instructions":"历史报告提示词"}'
+        )
 
 
 def test_legacy_workflow_goal_preserves_report_version_reference(tmp_path: Path):
@@ -480,20 +485,26 @@ def test_v18_failure_rolls_back_prompt_columns_and_backfill(
 
     with database.connect() as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 17
-        assert tuple(
-            connection.execute(
-                "SELECT name,analysis_goal,schedule_kind,revision FROM automation_tasks"
-            ).fetchone()
-        ) == before_task
-        assert tuple(
-            connection.execute(
-                "SELECT initial_prompt_version_id,report_prompt_version_id "
-                "FROM analysis_settings WHERE id=1"
-            ).fetchone()
-        ) == before_settings
+        assert (
+            tuple(
+                connection.execute(
+                    "SELECT name,analysis_goal,schedule_kind,revision "
+                    "FROM automation_tasks"
+                ).fetchone()
+            )
+            == before_task
+        )
+        assert (
+            tuple(
+                connection.execute(
+                    "SELECT initial_prompt_version_id,report_prompt_version_id "
+                    "FROM analysis_settings WHERE id=1"
+                ).fetchone()
+            )
+            == before_settings
+        )
         columns = {
-            row[1]
-            for row in connection.execute("PRAGMA table_info(automation_tasks)")
+            row[1] for row in connection.execute("PRAGMA table_info(automation_tasks)")
         }
         assert "initial_prompt_mode" not in columns
         assert "report_prompt_version_id" not in columns

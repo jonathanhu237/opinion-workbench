@@ -80,24 +80,6 @@ function saveIntent(value: GenerationCreate) {
   }
 }
 
-function fallbackCounts(
-  selectedIds: number[],
-  eligibility?: { pending: number; failed: number },
-): SelectionPreview['counts'] {
-  const pending = Math.min(selectedIds.length, eligibility?.pending ?? 0)
-  const failed = Math.min(
-    Math.max(0, selectedIds.length - pending),
-    eligibility?.failed ?? 0,
-  )
-  return {
-    total: selectedIds.length,
-    pending,
-    already_summarized: selectedIds.length - pending - failed,
-    failed,
-    active: 0,
-  }
-}
-
 function previewMatchesSelection(
   preview: SelectionPreview | undefined,
   selectedIds: number[],
@@ -165,8 +147,7 @@ export function ReportSelectionActions({
     retry: false,
   })
   const bulk = useMutation({
-    mutationFn: (include_failed: boolean) =>
-      previewReportSelection({ kind: 'library', include_failed }),
+    mutationFn: () => previewReportSelection({ kind: 'library' }),
     retry: false,
     onSuccess: (value) => {
       changeSelection([...idsRef.current, ...value.selection.result_ids])
@@ -185,9 +166,8 @@ export function ReportSelectionActions({
       onStarted(report)
     },
   })
-  const counts = previewMatchesSelection(preview.data, effectiveIds)
-    ? preview.data!.counts
-    : fallbackCounts(effectiveIds, eligibility.data)
+  const previewReady = previewMatchesSelection(preview.data, effectiveIds)
+  const counts = previewReady ? preview.data!.counts : undefined
   const modelConfigured = Boolean(
     provider?.has_api_key && provider.model && provider.base_url,
   )
@@ -200,7 +180,9 @@ export function ReportSelectionActions({
     initialValid &&
     reportValid &&
     name.trim().length > 0 &&
-    !active
+    !active &&
+    previewReady &&
+    !preview.isPending
 
   function openDialog() {
     if (effectiveIds.length === 0 || active || !modelConfigured) return
@@ -248,36 +230,16 @@ export function ReportSelectionActions({
             variant="outline"
             className="min-h-10"
             disabled={bulk.isPending || Boolean(currentIntent)}
-            onClick={() => bulk.mutate(false)}
+            onClick={() => bulk.mutate()}
           >
-            {bulk.isPending ? '正在形成选材快照…' : '选中全部待分析内容'}
+            {bulk.isPending ? '正在形成选材快照…' : '选中全部未分析内容'}
           </Button>
-          <details className="relative">
-            <summary
-              className="flex min-h-10 cursor-pointer list-none items-center rounded-lg border px-3 text-sm [&::-webkit-details-marker]:hidden"
-              aria-label="更多选材方式"
-            >
-              更多选材
-            </summary>
-            <div className="absolute top-full left-0 z-20 mt-2 min-w-56 rounded-lg border bg-background p-1 shadow-lg">
-              <button
-                type="button"
-                className="w-full rounded-md px-3 py-2 text-left text-sm hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={bulk.isPending || Boolean(currentIntent)}
-                onClick={(event) => {
-                  event.currentTarget
-                    .closest('details')
-                    ?.removeAttribute('open')
-                  bulk.mutate(true)
-                }}
-              >
-                同时加入分析失败内容
-              </button>
-            </div>
-          </details>
           <span className="w-full shrink-0 text-sm whitespace-nowrap text-muted-foreground sm:w-auto">
-            待分析 {eligibility.data?.pending ?? '—'} · 失败{' '}
-            {eligibility.data?.failed ?? '—'}
+            未分析共{' '}
+            {eligibility.data
+              ? eligibility.data.pending + eligibility.data.failed
+              : '—'}{' '}
+            · 其中曾失败 {eligibility.data?.failed ?? '—'}
           </span>
         </div>
         <div className="flex w-full flex-wrap items-center justify-between gap-2 sm:w-auto sm:flex-nowrap sm:justify-start">
@@ -310,7 +272,7 @@ export function ReportSelectionActions({
         </div>
       </div>
       <p className="text-xs leading-5 text-muted-foreground">
-        批量选材会固定点击当时的条目；选材可跨页保留，提交前仍可移除。
+        批量选材会固定点击当时的条目；选材可跨页保留，提交前仍可移除。曾失败的条目会随未分析内容一并重试。
       </p>
       {bulk.isError && (
         <p role="alert" className="text-sm text-destructive">
@@ -397,24 +359,26 @@ export function ReportSelectionActions({
             <dl className="grid gap-3 rounded-lg border p-3 text-sm sm:grid-cols-4">
               <div>
                 <dt className="text-muted-foreground">选中总数</dt>
-                <dd className="text-lg font-medium">{counts.total}</dd>
+                <dd className="text-lg font-medium">{effectiveIds.length}</dd>
               </div>
               <div>
                 <dt className="text-muted-foreground">待分析</dt>
-                <dd className="text-lg font-medium">{counts.pending}</dd>
+                <dd className="text-lg font-medium">
+                  {counts?.pending ?? '—'}
+                </dd>
               </div>
               <div>
                 <dt className="text-muted-foreground">已有总结</dt>
                 <dd className="text-lg font-medium">
-                  {counts.already_summarized}
+                  {counts?.already_summarized ?? '—'}
                 </dd>
               </div>
               <div>
                 <dt className="text-muted-foreground">失败重试</dt>
-                <dd className="text-lg font-medium">{counts.failed}</dd>
+                <dd className="text-lg font-medium">{counts?.failed ?? '—'}</dd>
               </div>
             </dl>
-            {counts.active > 0 && (
+            {counts && counts.active > 0 && (
               <p className="text-sm text-destructive" role="alert">
                 有 {counts.active} 条内容正在处理中，请刷新内容库后再提交。
               </p>
@@ -425,10 +389,29 @@ export function ReportSelectionActions({
                 提交后会发送正文及必要媒体，可能产生模型调用和用量费用。模型设置和自动任务授权请到对应页面管理。
               </p>
             </div>
-            {preview.isError && (
+            {preview.isPending && (
               <p role="status" className="text-sm text-muted-foreground">
-                暂时无法刷新选材状态，仍将按当前固定集合提交；如果状态已变化，服务端会提示刷新。
+                正在核对当前选材状态，确认按钮将在核对完成后启用。
               </p>
+            )}
+            {preview.isError && (
+              <div className="flex flex-wrap items-center gap-2">
+                <p role="status" className="text-sm text-muted-foreground">
+                  暂时无法确认选材状态，已暂停提交。请重新检查后再确认报告。
+                </p>
+                <Button
+                  variant="outline"
+                  disabled={preview.isPending}
+                  onClick={() =>
+                    preview.mutate({
+                      kind: 'explicit',
+                      result_ids: [...effectiveIds],
+                    })
+                  }
+                >
+                  重新检查选材
+                </Button>
+              </div>
             )}
             {!modelConfigured && (
               <p role="alert" className="text-sm text-destructive">
@@ -478,7 +461,9 @@ export function ReportSelectionActions({
               返回选材
             </Button>
             <Button
-              disabled={!canSubmit || start.isPending || counts.active > 0}
+              disabled={
+                !canSubmit || start.isPending || Boolean(counts?.active)
+              }
               aria-busy={start.isPending}
               onClick={submit}
             >

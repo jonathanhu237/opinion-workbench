@@ -158,8 +158,10 @@ def create_app(
             )
             await run_in_threadpool(topic_report_service.initialize)
             report_generation_service = ReportGenerationService(
-                batch_database, analyses=content_analysis_service,
-                reports=topic_report_service, ai_settings=ai_settings_service,
+                batch_database,
+                analyses=content_analysis_service,
+                reports=topic_report_service,
+                ai_settings=ai_settings_service,
             )
             await run_in_threadpool(report_generation_service.initialize)
             # Automatic progression belongs exclusively to the fixed workflow

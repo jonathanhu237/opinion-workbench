@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
-import { expect, it, vi } from 'vitest'
+import { expect, it } from 'vitest'
 
 import { analysisAttemptFixture } from '@/lib/api/analysis-fixtures'
 import { SavedAnalysisEvidence } from '@/routes/results-evidence'
@@ -33,15 +33,7 @@ it('distinguishes a known inventory from downloaded files and explains missing m
   render(
     <QueryClientProvider client={new QueryClient()}>
       <MemoryRouter>
-        <SavedAnalysisEvidence
-          attempt={attempt}
-          controls={{
-            pending: false,
-            activeKey: null,
-            feedback: null,
-            open: vi.fn(),
-          }}
-        />
+        <SavedAnalysisEvidence attempt={attempt} />
       </MemoryRouter>
     </QueryClientProvider>,
   )

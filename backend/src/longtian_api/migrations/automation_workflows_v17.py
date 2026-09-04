@@ -15,13 +15,10 @@ def migrate(connection: sqlite3.Connection) -> None:
     history remain readable through their independent IDs.
     """
     columns = {
-        row[1]
-        for row in connection.execute("PRAGMA table_info(automation_tasks)")
+        row[1] for row in connection.execute("PRAGMA table_info(automation_tasks)")
     }
     if "deleted_at" not in columns:
-        connection.execute(
-            "ALTER TABLE automation_tasks ADD COLUMN deleted_at TEXT"
-        )
+        connection.execute("ALTER TABLE automation_tasks ADD COLUMN deleted_at TEXT")
 
     # Keep the invariant in SQLite as well as in the repository transaction.
     # The INSERT guard protects hand-written/repair SQL, while the UPDATE guard

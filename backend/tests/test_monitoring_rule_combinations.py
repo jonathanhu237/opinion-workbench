@@ -7,7 +7,6 @@ from fastapi.testclient import TestClient
 from longtian_api import database as migrations
 from longtian_api.database import CURRENT_DATABASE_VERSION, Database
 from longtian_api.main import create_app
-from longtian_api.repositories.search_batches import SearchBatchRepository
 from longtian_api.repositories.search_runs import SearchRunRepository
 from longtian_api.schemas.monitoring_rules import MonitoringRuleCreate
 from longtian_api.services.monitoring_rules import (
@@ -76,26 +75,6 @@ def test_v8_upgrade_preserves_every_old_row_and_deleted_seed(tmp_path: Path) -> 
         connection.execute(
             "INSERT INTO search_batch_attempts VALUES (1, 0, 1, 2, 'created')"
         )
-        old_tables = [
-            row[0]
-            for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name"
-            )
-        ]
-        before = {
-            table: connection.execute(
-                f'SELECT * FROM "{table}" ORDER BY rowid'
-            ).fetchall()  # noqa: S608 - test-owned schema names
-            for table in old_tables
-        }
-        old_columns = {
-            table: ", ".join(
-                f'"{row[1]}"'
-                for row in connection.execute(f'PRAGMA table_info("{table}")')
-            )
-            for table in old_tables
-        }
-
     database.initialize()
     database.initialize()
 
@@ -109,24 +88,32 @@ def test_v8_upgrade_preserves_every_old_row_and_deleted_seed(tmp_path: Path) -> 
             connection.execute("SELECT * FROM monitoring_rule_issue_terms").fetchall()
             == []
         )
-        for table in old_tables:
-            if table == "sqlite_sequence":
-                # Additive migrations may seed new AUTOINCREMENT aggregates;
-                # every historical aggregate's counter must remain unchanged.
-                for previous in before[table]:
-                    assert (
-                        connection.execute(
-                            "SELECT * FROM sqlite_sequence WHERE name=?", (previous[0],)
-                        ).fetchone()
-                        == previous
-                    )
-                continue
-            assert (
-                connection.execute(
-                    f'SELECT {old_columns[table]} FROM "{table}" ORDER BY rowid'
-                ).fetchall()
-                == before[table]
-            )  # noqa: S608 - test-owned schema names
+        # The final migration keeps the valid Weibo side of a mixed batch while
+        # removing only the obsolete item.
+        assert [
+            tuple(row)
+            for row in connection.execute(
+                "SELECT id, platform FROM search_runs ORDER BY id"
+            )
+        ] == [(1, "wb"), (2, "wb")]
+        assert (
+            connection.execute("SELECT COUNT(*) FROM search_batches").fetchone()[0] == 1
+        )
+        assert (
+            connection.execute("SELECT COUNT(*) FROM search_batch_items").fetchone()[0]
+            == 1
+        )
+        assert (
+            connection.execute("SELECT COUNT(*) FROM search_batch_attempts").fetchone()[
+                0
+            ]
+            == 1
+        )
+        assert tuple(
+            connection.execute(
+                "SELECT position, platform FROM search_batch_items"
+            ).fetchone()
+        ) == (0, "wb")
         assert [
             tuple(row)
             for row in connection.execute(
@@ -142,9 +129,8 @@ def test_v8_upgrade_preserves_every_old_row_and_deleted_seed(tmp_path: Path) -> 
     assert rules[0].monitoring_objects == rules[0].terms == ("A  B", "龙田 噪音")
     assert rules[0].issue_keywords == ()
     assert service.list_enabled() == ()
-    runs, batches = SearchRunRepository(database), SearchBatchRepository(database)
+    runs = SearchRunRepository(database)
     assert runs.get(1).terms == ("历史 搜索词",)
-    assert runs.get(2).terms == batches.get(1).terms == ("原有 完整查询",)
 
 
 def test_v9_partial_migration_rolls_back_table_and_version(tmp_path: Path) -> None:

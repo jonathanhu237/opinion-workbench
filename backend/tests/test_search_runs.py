@@ -13,10 +13,6 @@ from longtian_api.database import (
     CURRENT_DATABASE_VERSION,
     Database,
     _migrate_to_version_1,
-    _migrate_to_version_2,
-    _migrate_to_version_3,
-    _migrate_to_version_4,
-    _migrate_to_version_5,
 )
 from longtian_api.main import create_app
 from longtian_api.repositories.search_runs import (
@@ -31,7 +27,7 @@ from longtian_api.services.browser_operations import (
     BrowserOperationCoordinator,
     BrowserOperationOwner,
 )
-from longtian_api.services.media_crawler_auth_worker import (
+from longtian_api.services.collector_contracts import (
     OpenResultWorkerResult,
     SearchWorkerItem,
     SearchWorkerResult,
@@ -48,29 +44,29 @@ def _content(
     *, observed_at: str, title: str = "龙田街道现场情况"
 ) -> SearchContentInput:
     return SearchContentInput(
-        platform_content_id="news-100",
-        content_type="article",
+        platform_content_id="5012345678901234",
+        content_type="post",
         title=title,
         snippet="公开页面摘要",
         creator_hash="0123456789abcdef",
         publisher_name="本***察",
         published_at_text="刚刚",
-        content_url="https://www.toutiao.com/article/100/",
+        content_url="https://m.weibo.cn/detail/5012345678901234",
         observed_at=observed_at,
     )
 
 
-def _xhs_content(*, observed_at: str) -> SearchContentInput:
-    content_id = "0123456789abcdef01234567"
+def _weibo_content(*, observed_at: str) -> SearchContentInput:
+    content_id = "5012345678901234"
     return SearchContentInput(
         platform_content_id=content_id,
-        content_type="image",
+        content_type="post",
         title="龙田街道公开信息",
         snippet="公开页面摘要",
         creator_hash="0123456789abcdef",
         publisher_name="本***察",
-        published_at_text="",
-        content_url=f"https://www.xiaohongshu.com/explore/{content_id}",
+        published_at_text="刚刚",
+        content_url=f"https://m.weibo.cn/detail/{content_id}",
         observed_at=observed_at,
     )
 
@@ -103,7 +99,7 @@ def test_repository_open_target_proves_relation_and_original_term_order(
     repository.initialize()
     run = repository.create_run(
         monitoring_rule_id=1,
-        platform="xhs",
+        platform="wb",
         rule_name="重点区域",
         terms=("第一个词", "第二个词", "第三个词"),
         max_results_per_term=10,
@@ -114,7 +110,7 @@ def test_repository_open_target_proves_relation_and_original_term_order(
             repository,
             run_id=run.id,
             term_position=position,
-            item=_xhs_content(observed_at=f"2026-08-26T08:0{position}:00+00:00"),
+            item=_weibo_content(observed_at=f"2026-08-26T08:0{position}:00+00:00"),
         )
     repository.finish(run.id, "completed_with_results")
     results, _total = repository.list_results(
@@ -123,8 +119,8 @@ def test_repository_open_target_proves_relation_and_original_term_order(
 
     target = repository.get_result_open_target(run_id=run.id, result_id=results[0].id)
 
-    assert target.platform == "xhs"
-    assert target.platform_content_id == "0123456789abcdef01234567"
+    assert target.platform == "wb"
+    assert target.platform_content_id == "5012345678901234"
     assert target.matched_terms == ("第一个词", "第二个词", "第三个词")
     with pytest.raises(SearchResultNotFoundError):
         repository.get_result_open_target(run_id=run.id + 1, result_id=results[0].id)
@@ -138,7 +134,7 @@ def test_repository_finish_persists_failure_reason_with_terminal_state(
     repository.initialize()
     run = repository.create_run(
         monitoring_rule_id=1,
-        platform="toutiao",
+        platform="wb",
         rule_name="结构化失败任务",
         terms=("龙田街道",),
         max_results_per_term=10,
@@ -174,7 +170,7 @@ def test_repository_rejects_failure_reason_for_non_structure_status(
     repository.initialize()
     run = repository.create_run(
         monitoring_rule_id=1,
-        platform="toutiao",
+        platform="wb",
         rule_name="非法配对任务",
         terms=("龙田街道",),
         max_results_per_term=10,
@@ -208,7 +204,7 @@ def test_search_run_summary_rejects_failure_reason_for_non_structure_status() ->
     payload = {
         "id": 1,
         "monitoring_rule_id": 1,
-        "platform": "toutiao",
+        "platform": "wb",
         "rule_name": "结构化失败任务",
         "term_count": 1,
         "max_results_per_term": 10,
@@ -253,7 +249,7 @@ def test_sqlite_check_rejects_invalid_failure_reason_pair(
     repository.initialize()
     run = repository.create_run(
         monitoring_rule_id=1,
-        platform="toutiao",
+        platform="wb",
         rule_name="SQLite 约束任务",
         terms=("龙田街道",),
         max_results_per_term=10,
@@ -280,7 +276,7 @@ def test_repository_preserves_cross_term_and_cross_run_deduplication(
 
     first = repository.create_run(
         monitoring_rule_id=1,
-        platform="toutiao",
+        platform="wb",
         rule_name="重点区域",
         terms=("龙田街道", "坪山大道"),
         max_results_per_term=10,
@@ -326,7 +322,7 @@ def test_repository_preserves_cross_term_and_cross_run_deduplication(
 
     second = repository.create_run(
         monitoring_rule_id=1,
-        platform="toutiao",
+        platform="wb",
         rule_name="重点区域",
         terms=("龙田街道",),
         max_results_per_term=5,
@@ -364,7 +360,7 @@ def test_migration_reconciliation_rule_deletion_and_failed_item_rollback(
     repository.initialize()
     queued = repository.create_run(
         monitoring_rule_id=1,
-        platform="toutiao",
+        platform="wb",
         rule_name="快照名称",
         terms=("龙田街道",),
         max_results_per_term=10,
@@ -377,7 +373,7 @@ def test_migration_reconciliation_rule_deletion_and_failed_item_rollback(
 
     active = reopened.create_run(
         monitoring_rule_id=1,
-        platform="toutiao",
+        platform="wb",
         rule_name="新规则",
         terms=("竹坑社区",),
         max_results_per_term=10,
@@ -439,49 +435,17 @@ class FakeSearchWorker:
         self.calls.append((request_id, platform, tuple(terms), max_results_per_term))
         await on_progress(0, len(terms))
         if self.emit_item:
-            content_id = (
-                "7512345678901234567"
-                if platform == "dy"
-                else "0123456789abcdef01234567"
-                if platform == "xhs"
-                else "news-100"
-            )
             await on_item(
                 0,
                 SearchWorkerItem(
-                    content_id=content_id,
-                    content_type=(
-                        "article"
-                        if platform == "toutiao"
-                        else "video"
-                        if platform in {"ks", "dy"}
-                        else "image"
-                        if platform == "xhs"
-                        else "post"
-                    ),
+                    content_id="5012345678901234",
+                    content_type="post",
                     title="龙田街道公开信息",
                     snippet="来自公开搜索页面",
                     creator_hash="0123456789abcdef",
                     publisher_name="本***察",
                     published_at_text="刚刚",
-                    content_url=(
-                        "https://www.toutiao.com/article/100/"
-                        if platform == "toutiao"
-                        else (
-                            "https://www.kuaishou.com/short-video/news-100"
-                            if platform == "ks"
-                            else (
-                                "https://www.douyin.com/video/7512345678901234567"
-                                if platform == "dy"
-                                else (
-                                    "https://www.xiaohongshu.com/explore/"
-                                    "0123456789abcdef01234567"
-                                    if platform == "xhs"
-                                    else "https://m.weibo.cn/detail/news-100"
-                                )
-                            )
-                        )
-                    ),
+                    content_url="https://m.weibo.cn/detail/5012345678901234",
                     discovered_at=1_777_000_000_000,
                 ),
             )
@@ -530,12 +494,12 @@ class BlockingOpenWorker(FakeSearchWorker):
         raise AssertionError("blocking open unexpectedly resumed")
 
 
-def _seed_xhs_result(database_path: Path) -> tuple[int, int]:
+def _seed_weibo_result(database_path: Path) -> tuple[int, int]:
     repository = SearchRunRepository(Database(database_path))
     repository.initialize()
     run = repository.create_run(
         monitoring_rule_id=1,
-        platform="xhs",
+        platform="wb",
         rule_name="重点区域",
         terms=("龙田街道",),
         max_results_per_term=10,
@@ -545,7 +509,7 @@ def _seed_xhs_result(database_path: Path) -> tuple[int, int]:
         repository,
         run_id=run.id,
         term_position=0,
-        item=_xhs_content(observed_at="2026-08-26T08:00:00+00:00"),
+        item=_weibo_content(observed_at="2026-08-26T08:00:00+00:00"),
     )
     repository.finish(run.id, "completed_with_results")
     results, _total = repository.list_results(
@@ -660,7 +624,7 @@ def test_http_search_vertical_slice_is_non_blocking_durable_and_deduplicated(
             "/api/v1/search-runs",
             json={
                 "monitoring_rule_id": 1,
-                "platform": "toutiao",
+                "platform": "wb",
                 "max_results_per_term": 7,
             },
         )
@@ -686,7 +650,7 @@ def test_http_search_vertical_slice_is_non_blocking_durable_and_deduplicated(
 
         second_response = client.post(
             "/api/v1/search-runs",
-            json={"monitoring_rule_id": 1, "platform": "toutiao"},
+            json={"monitoring_rule_id": 1, "platform": "wb"},
         )
         second = _wait_for_terminal(client, second_response.json()["id"])
         assert (
@@ -704,7 +668,7 @@ def test_http_search_vertical_slice_is_non_blocking_durable_and_deduplicated(
         ).json()
         assert repeated["total"] == 1
         assert repeated["results"][0]["kind"] == "repeated"
-        assert [call[1] for call in worker.calls] == ["toutiao", "toutiao"]
+        assert [call[1] for call in worker.calls] == ["wb", "wb"]
 
     with sqlite3.connect(database_path) as connection:
         assert connection.execute(
@@ -732,7 +696,7 @@ def test_http_weibo_search_threads_platform_and_deduplicates_repeated_runs(
         assert first_results["results"][0]["platform"] == "wb"
         assert (
             first_results["results"][0]["content_url"]
-            == "https://m.weibo.cn/detail/news-100"
+            == "https://m.weibo.cn/detail/5012345678901234"
         )
 
         second_response = client.post(
@@ -745,152 +709,12 @@ def test_http_weibo_search_threads_platform_and_deduplicates_repeated_runs(
     assert [call[1] for call in worker.calls] == ["wb", "wb"]
 
 
-def test_http_kuaishou_search_threads_platform_and_deduplicates_repeated_runs(
-    tmp_path: Path,
-) -> None:
-    database_path = tmp_path / "kuaishou-http.sqlite3"
-    worker = FakeSearchWorker()
-    with TestClient(_search_app(database_path, worker)) as client:
-        first_response = client.post(
-            "/api/v1/search-runs",
-            json={"monitoring_rule_id": 1, "platform": "ks"},
-        )
-        assert first_response.status_code == 202
-        first = _wait_for_terminal(client, first_response.json()["id"])
-        first_results = client.get(f"/api/v1/search-runs/{first['id']}/results").json()
-
-        assert first["platform"] == "ks"
-        assert first["status"] == "completed_with_results"
-        assert first_results["results"][0]["platform"] == "ks"
-        assert (
-            first_results["results"][0]["content_url"]
-            == "https://www.kuaishou.com/short-video/news-100"
-        )
-
-        second_response = client.post(
-            "/api/v1/search-runs",
-            json={"monitoring_rule_id": 1, "platform": "ks"},
-        )
-        second = _wait_for_terminal(client, second_response.json()["id"])
-
-    assert (second["new_count"], second["repeated_count"]) == (0, 1)
-    assert [call[1] for call in worker.calls] == ["ks", "ks"]
-
-
-def test_http_douyin_search_threads_platform_and_deduplicates_repeated_runs(
-    tmp_path: Path,
-) -> None:
-    database_path = tmp_path / "douyin-http.sqlite3"
-    worker = FakeSearchWorker()
-    with TestClient(_search_app(database_path, worker)) as client:
-        first_response = client.post(
-            "/api/v1/search-runs",
-            json={"monitoring_rule_id": 1, "platform": "dy"},
-        )
-        assert first_response.status_code == 202
-        first = _wait_for_terminal(client, first_response.json()["id"])
-        first_results = client.get(f"/api/v1/search-runs/{first['id']}/results").json()
-
-        assert first["platform"] == "dy"
-        assert first["status"] == "completed_with_results"
-        assert first_results["results"][0]["platform"] == "dy"
-        assert first_results["results"][0]["content_url"] == (
-            "https://www.douyin.com/video/7512345678901234567"
-        )
-
-        second_response = client.post(
-            "/api/v1/search-runs",
-            json={"monitoring_rule_id": 1, "platform": "dy"},
-        )
-        second = _wait_for_terminal(client, second_response.json()["id"])
-
-    assert (second["new_count"], second["repeated_count"]) == (0, 1)
-    assert [call[1] for call in worker.calls] == ["dy", "dy"]
-
-
-def test_http_xhs_search_threads_platform_and_deduplicates_repeated_runs(
-    tmp_path: Path,
-) -> None:
-    database_path = tmp_path / "xhs-http.sqlite3"
-    worker = FakeSearchWorker()
-    with TestClient(_search_app(database_path, worker)) as client:
-        first_response = client.post(
-            "/api/v1/search-runs",
-            json={"monitoring_rule_id": 1, "platform": "xhs"},
-        )
-        assert first_response.status_code == 202
-        first = _wait_for_terminal(client, first_response.json()["id"])
-        first_results = client.get(f"/api/v1/search-runs/{first['id']}/results").json()
-
-        assert first["platform"] == "xhs"
-        assert first["status"] == "completed_with_results"
-        assert first_results["results"][0]["platform"] == "xhs"
-        assert first_results["results"][0]["content_url"] == (
-            "https://www.xiaohongshu.com/explore/0123456789abcdef01234567"
-        )
-
-        second_response = client.post(
-            "/api/v1/search-runs",
-            json={"monitoring_rule_id": 1, "platform": "xhs"},
-        )
-        second = _wait_for_terminal(client, second_response.json()["id"])
-
-    assert (second["new_count"], second["repeated_count"]) == (0, 1)
-    assert [call[1] for call in worker.calls] == ["xhs", "xhs"]
-
-
-@pytest.mark.parametrize(
-    "open_outcome",
-    [
-        "opened",
-        "content_not_found",
-        "content_unavailable",
-        "login_required",
-        "manual_challenge_required",
-        "platform_blocked_or_rate_limited",
-        "structure_changed",
-        "browser_unavailable",
-        "internal_error",
-    ],
-)
-def test_http_xhs_open_returns_only_fixed_outcome_and_first_stored_term(
-    tmp_path: Path, open_outcome: str
-) -> None:
-    worker = FakeSearchWorker(open_outcome=open_outcome)
-    with TestClient(
-        _search_app(tmp_path / f"open-{open_outcome}.sqlite3", worker)
-    ) as client:
-        started = client.post(
-            "/api/v1/search-runs",
-            json={"monitoring_rule_id": 1, "platform": "xhs"},
-        )
-        run = _wait_for_terminal(client, started.json()["id"])
-        result = client.get(f"/api/v1/search-runs/{run['id']}/results").json()[
-            "results"
-        ][0]
-
-        response = client.post(
-            f"/api/v1/search-runs/{run['id']}/results/{result['id']}/open"
-        )
-
-    assert response.status_code == 200
-    assert response.json() == {"outcome": open_outcome}
-    assert worker.open_calls[0][1:] == (
-        "龙田街道",
-        "0123456789abcdef01234567",
-    )
-    serialized = response.text
-    assert "龙田街道" not in serialized
-    assert "xsec" not in serialized
-    assert "xiaohongshu.com" not in serialized
-
-
-def test_http_open_rejects_unrelated_and_non_xhs_results(tmp_path: Path) -> None:
+def test_http_open_rejects_unrelated_and_opens_weibo_results(tmp_path: Path) -> None:
     worker = FakeSearchWorker()
     with TestClient(_search_app(tmp_path / "open-errors.sqlite3", worker)) as client:
         started = client.post(
             "/api/v1/search-runs",
-            json={"monitoring_rule_id": 1, "platform": "toutiao"},
+            json={"monitoring_rule_id": 1, "platform": "wb"},
         )
         run = _wait_for_terminal(client, started.json()["id"])
         result_id = client.get(f"/api/v1/search-runs/{run['id']}/results").json()[
@@ -900,7 +724,7 @@ def test_http_open_rejects_unrelated_and_non_xhs_results(tmp_path: Path) -> None
         unrelated = client.post(
             f"/api/v1/search-runs/{run['id'] + 1}/results/{result_id}/open"
         )
-        unsupported = client.post(
+        opened = client.post(
             f"/api/v1/search-runs/{run['id']}/results/{result_id}/open"
         )
         operation = client.get("/openapi.json").json()["paths"][
@@ -909,9 +733,9 @@ def test_http_open_rejects_unrelated_and_non_xhs_results(tmp_path: Path) -> None
 
     assert unrelated.status_code == 404
     assert unrelated.json()["detail"]["code"] == "search_result_not_found"
-    assert unsupported.status_code == 409
-    assert unsupported.json()["detail"]["code"] == ("search_result_open_not_supported")
-    assert worker.open_calls == []
+    assert opened.status_code == 200
+    assert opened.json() == {"outcome": "opened"}
+    assert worker.open_calls[0][1:] == ("龙田街道", "5012345678901234")
     assert "requestBody" not in operation
 
 
@@ -939,13 +763,13 @@ def test_http_search_validation_and_error_contracts(tmp_path: Path) -> None:
     with TestClient(_search_app(database_path, worker)) as client:
         assert client.post(
             "/api/v1/search-runs",
-            json={"monitoring_rule_id": "1", "platform": "toutiao"},
+            json={"monitoring_rule_id": "1", "platform": "wb"},
         ).json() == {
             "detail": {"code": "invalid_request", "message": "请求内容不正确。"}
         }
         missing = client.post(
             "/api/v1/search-runs",
-            json={"monitoring_rule_id": 999, "platform": "toutiao"},
+            json={"monitoring_rule_id": 999, "platform": "wb"},
         )
         assert (missing.status_code, missing.json()["detail"]["code"]) == (
             404,
@@ -962,7 +786,7 @@ def test_http_search_validation_and_error_contracts(tmp_path: Path) -> None:
         )
         disabled = client.post(
             "/api/v1/search-runs",
-            json={"monitoring_rule_id": 1, "platform": "toutiao"},
+            json={"monitoring_rule_id": 1, "platform": "wb"},
         )
         assert (disabled.status_code, disabled.json()["detail"]["code"]) == (
             409,
@@ -979,7 +803,7 @@ def test_http_search_validation_and_error_contracts(tmp_path: Path) -> None:
         )
         oversized = client.post(
             "/api/v1/search-runs",
-            json={"monitoring_rule_id": 1, "platform": "toutiao"},
+            json={"monitoring_rule_id": 1, "platform": "wb"},
         )
         assert (oversized.status_code, oversized.json()["detail"]["code"]) == (
             422,
@@ -1023,7 +847,7 @@ def test_search_and_account_checks_share_one_atomic_browser_admission(
         assert await coordinator.try_claim(platform_owner)
         with pytest.raises(SearchRunError) as search_conflict:
             await search_service.start_run(
-                SearchRunCreate(monitoring_rule_id=1, platform="toutiao")
+                SearchRunCreate(monitoring_rule_id=1, platform="wb")
             )
         assert search_conflict.value.code == "browser_operation_active"
         await coordinator.release(platform_owner)
@@ -1057,7 +881,7 @@ def test_cancellation_is_durable_and_releases_browser_admission(
         )
         service.initialize()
         started = await service.start_run(
-            SearchRunCreate(monitoring_rule_id=1, platform="toutiao")
+            SearchRunCreate(monitoring_rule_id=1, platform="wb")
         )
         await worker.started.wait()
 
@@ -1090,7 +914,7 @@ def test_timeout_is_durable_and_releases_browser_admission(tmp_path: Path) -> No
         )
         service.initialize()
         started = await service.start_run(
-            SearchRunCreate(monitoring_rule_id=1, platform="toutiao")
+            SearchRunCreate(monitoring_rule_id=1, platform="wb")
         )
         await worker.started.wait()
 
@@ -1118,7 +942,7 @@ def test_open_timeout_is_bounded_and_releases_browser_admission(
 ) -> None:
     async def scenario() -> None:
         database_path = tmp_path / "open-timeout.sqlite3"
-        run_id, result_id = _seed_xhs_result(database_path)
+        run_id, result_id = _seed_weibo_result(database_path)
         monitoring_rules = MonitoringRuleService(database_path=database_path)
         coordinator = BrowserOperationCoordinator()
         worker = BlockingOpenWorker()
@@ -1148,7 +972,7 @@ def test_open_obeys_global_contention_and_shutdown_cancels_no_orphan(
 ) -> None:
     async def scenario() -> None:
         database_path = tmp_path / "open-shutdown.sqlite3"
-        run_id, result_id = _seed_xhs_result(database_path)
+        run_id, result_id = _seed_weibo_result(database_path)
         monitoring_rules = MonitoringRuleService(database_path=database_path)
         coordinator = BrowserOperationCoordinator()
         worker = BlockingOpenWorker()
@@ -1259,7 +1083,7 @@ def test_worker_terminal_outcomes_are_projected_without_losing_partial_items(
     with TestClient(_search_app(database_path, worker)) as client:
         started = client.post(
             "/api/v1/search-runs",
-            json={"monitoring_rule_id": 1, "platform": "toutiao"},
+            json={"monitoring_rule_id": 1, "platform": "wb"},
         )
         terminal = _wait_for_terminal(client, started.json()["id"])
         results = client.get(f"/api/v1/search-runs/{terminal['id']}/results").json()
@@ -1325,7 +1149,7 @@ def test_version_eighteen_migration_preserves_history_relations_and_ids(
               id, monitoring_rule_id, platform, rule_name, max_results_per_term,
               status, current_term_position, created_at, started_at, finished_at,
               execution_start_term_position, search_protocol_version
-            ) VALUES (41, 1, 'toutiao', '历史结构变化', 7, 'structure_changed',
+            ) VALUES (41, 1, 'wb', '历史结构变化', 7, 'structure_changed',
                       1, ?, ?, ?, 0, 2)
             """,
             (created_at, started_at, finished_at),
@@ -1345,9 +1169,9 @@ def test_version_eighteen_migration_preserves_history_relations_and_ids(
               creator_hash, publisher_name, published_at_text, content_url,
               first_seen_at, last_seen_at
             ) VALUES (
-              99, 'toutiao', 'legacy-100', 'article', '历史标题', '历史摘要',
+              99, 'wb', '5012345678901234', 'post', '历史标题', '历史摘要',
               '0123456789abcdef', '本***察', '刚刚',
-              'https://www.toutiao.com/article/legacy-100/', ?, ?
+              'https://m.weibo.cn/detail/5012345678901234', ?, ?
             )
             """,
             (started_at, started_at),
@@ -1481,127 +1305,6 @@ def test_version_nineteen_migration_rolls_back_schema_rows_and_version(
         connection.close()
 
 
-def test_version_two_migration_preserves_toutiao_and_isolates_weibo_identity(
-    tmp_path: Path,
-) -> None:
-    database_path = tmp_path / "version-two.sqlite3"
-    connection = sqlite3.connect(database_path, isolation_level=None)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA foreign_keys = ON")
-    try:
-        _migrate_to_version_1(connection)
-        _migrate_to_version_2(connection)
-        connection.execute("BEGIN IMMEDIATE")
-        connection.execute(
-            """
-            INSERT INTO search_runs (
-              id, monitoring_rule_id, platform, rule_name, max_results_per_term,
-              status, current_term_position, created_at, started_at, finished_at
-            ) VALUES (41, 1, 'toutiao', '旧任务', 7, 'completed_with_results',
-                      0, '2026-08-25T08:00:00+00:00',
-                      '2026-08-25T08:00:01+00:00',
-                      '2026-08-25T08:00:02+00:00')
-            """
-        )
-        connection.execute(
-            """
-            INSERT INTO search_run_terms (run_id, position, value)
-            VALUES (41, 0, '龙田街道')
-            """
-        )
-        connection.execute(
-            """
-            INSERT INTO search_contents (
-              id, platform, platform_content_id, content_type, title, snippet,
-              creator_hash, publisher_name, published_at_text, content_url,
-              first_seen_at, last_seen_at
-            ) VALUES (
-              99, 'toutiao', 'shared-100', 'article', '旧标题', '旧摘要',
-              '0123456789abcdef', '本***察', '刚刚',
-              'https://www.toutiao.com/article/shared-100/',
-              '2026-08-25T08:00:01+00:00', '2026-08-25T08:00:01+00:00'
-            )
-            """
-        )
-        connection.execute(
-            """
-            INSERT INTO search_run_contents (
-              run_id, search_content_id, discovery_kind,
-              first_observed_at, last_observed_at
-            ) VALUES (41, 99, 'new', '2026-08-25T08:00:01+00:00',
-                      '2026-08-25T08:00:01+00:00')
-            """
-        )
-        connection.execute(
-            """
-            INSERT INTO search_run_content_terms (
-              run_id, search_content_id, term_position, observed_at
-            ) VALUES (41, 99, 0, '2026-08-25T08:00:01+00:00')
-            """
-        )
-        connection.execute("COMMIT")
-    finally:
-        connection.close()
-
-    database = Database(database_path)
-    database.initialize()
-    repository = SearchRunRepository(database)
-    preserved = repository.get(41)
-    preserved_results, preserved_total = repository.list_results(
-        run_id=41, kind="all", limit=50, offset=0
-    )
-
-    assert preserved.platform == "toutiao"
-    assert preserved.terms == ("龙田街道",)
-    assert preserved.created_at == "2026-08-25T08:00:00+00:00"
-    assert preserved_total == 1
-    assert preserved_results[0].id == 99
-    assert preserved_results[0].matched_terms == ("龙田街道",)
-    assert preserved_results[0].first_seen_at == "2026-08-25T08:00:01+00:00"
-
-    weibo = repository.create_run(
-        monitoring_rule_id=1,
-        platform="wb",
-        rule_name="微博任务",
-        terms=("龙田街道",),
-        max_results_per_term=7,
-    )
-    repository.mark_running(weibo.id)
-    _observe(
-        repository,
-        run_id=weibo.id,
-        term_position=0,
-        item=SearchContentInput(
-            platform_content_id="shared-100",
-            content_type="post",
-            title="微博标题",
-            snippet="微博正文",
-            creator_hash="0123456789abcdef",
-            publisher_name="微***户",
-            published_at_text="刚刚",
-            content_url="https://m.weibo.cn/detail/shared-100",
-            observed_at="2026-08-26T08:00:00+00:00",
-        ),
-    )
-    completed = repository.finish(weibo.id, "completed_with_results")
-
-    assert (completed.new_count, completed.repeated_count) == (1, 0)
-    with database.connect() as migrated:
-        assert migrated.execute("PRAGMA user_version").fetchone()[0] == (
-            CURRENT_DATABASE_VERSION
-        )
-        rows = migrated.execute(
-            """
-            SELECT platform, id FROM search_contents
-            WHERE platform_content_id = 'shared-100' ORDER BY platform
-            """
-        ).fetchall()
-    assert [(row["platform"], row["id"]) for row in rows] == [
-        ("toutiao", 99),
-        ("wb", 100),
-    ]
-
-
 def test_version_one_database_upgrades_without_reseeding_monitoring_rules(
     tmp_path: Path,
 ) -> None:
@@ -1625,437 +1328,3 @@ def test_version_one_database_upgrades_without_reseeding_monitoring_rules(
             == "保留的旧规则"
         )
         assert connection.execute("SELECT COUNT(*) FROM search_runs").fetchone()[0] == 0
-
-
-def test_version_three_migration_preserves_rows_relations_and_sequences(
-    tmp_path: Path,
-) -> None:
-    database_path = tmp_path / "version-three.sqlite3"
-    connection = sqlite3.connect(database_path, isolation_level=None)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA foreign_keys = ON")
-    try:
-        _migrate_to_version_1(connection)
-        _migrate_to_version_2(connection)
-        _migrate_to_version_3(connection)
-        connection.execute("BEGIN IMMEDIATE")
-        connection.execute(
-            """
-            INSERT INTO search_runs (
-              id, monitoring_rule_id, platform, rule_name, max_results_per_term,
-              status, current_term_position, created_at, started_at, finished_at
-            ) VALUES (41, 1, 'wb', '微博旧任务', 7, 'completed_with_results',
-                      0, '2026-08-25T08:00:00+00:00',
-                      '2026-08-25T08:00:01+00:00',
-                      '2026-08-25T08:00:02+00:00')
-            """
-        )
-        connection.execute("INSERT INTO search_run_terms VALUES (41, 0, '龙田街道')")
-        connection.execute(
-            """
-            INSERT INTO search_contents (
-              id, platform, platform_content_id, content_type, title, snippet,
-              creator_hash, publisher_name, published_at_text, content_url,
-              first_seen_at, last_seen_at
-            ) VALUES (
-              99, 'wb', 'shared-100', 'post', '旧标题', '旧摘要',
-              '0123456789abcdef', '微***户', '刚刚',
-              'https://m.weibo.cn/detail/shared-100',
-              '2026-08-25T08:00:01+00:00', '2026-08-25T08:00:01+00:00'
-            )
-            """
-        )
-        connection.execute(
-            """
-            INSERT INTO search_run_contents VALUES (
-              41, 99, 'new', '2026-08-25T08:00:01+00:00',
-              '2026-08-25T08:00:01+00:00'
-            )
-            """
-        )
-        connection.execute(
-            """
-            INSERT INTO search_run_content_terms VALUES (
-              41, 99, 0, '2026-08-25T08:00:01+00:00'
-            )
-            """
-        )
-        connection.execute(
-            "UPDATE sqlite_sequence SET seq = 75 WHERE name = 'search_runs'"
-        )
-        connection.execute(
-            "UPDATE sqlite_sequence SET seq = 150 WHERE name = 'search_contents'"
-        )
-        before = {
-            table: [tuple(row) for row in connection.execute(f"SELECT * FROM {table}")]
-            for table in (
-                "search_runs",
-                "search_run_terms",
-                "search_contents",
-                "search_run_contents",
-                "search_run_content_terms",
-            )
-        }
-        connection.execute("COMMIT")
-    finally:
-        connection.close()
-
-    database = Database(database_path)
-    database.initialize()
-    with database.connect() as migrated:
-        after = {
-            table: [tuple(row) for row in migrated.execute(f"SELECT * FROM {table}")]
-            for table in before
-        }
-        sequences = dict(
-            migrated.execute(
-                """
-                SELECT name, seq FROM sqlite_sequence
-                WHERE name IN ('search_runs', 'search_contents')
-                """
-            ).fetchall()
-        )
-        assert migrated.execute("PRAGMA user_version").fetchone()[0] == (
-            CURRENT_DATABASE_VERSION
-        )
-        assert migrated.execute("PRAGMA foreign_key_check").fetchall() == []
-
-    assert all(
-        row[-4:-2] == (0, 1) and row[-2:] == (None, None)
-        for row in after["search_runs"]
-    )
-    after["search_runs"] = [row[:-4] for row in after["search_runs"]]
-    assert after == before
-    assert sequences == {"search_contents": 150, "search_runs": 75}
-
-    repository = SearchRunRepository(database)
-    kuaishou = repository.create_run(
-        monitoring_rule_id=1,
-        platform="ks",
-        rule_name="快手任务",
-        terms=("龙田街道",),
-        max_results_per_term=7,
-    )
-    repository.mark_running(kuaishou.id)
-    _observe(
-        repository,
-        run_id=kuaishou.id,
-        term_position=0,
-        item=SearchContentInput(
-            platform_content_id="shared-100",
-            content_type="video",
-            title="快手标题",
-            snippet="快手正文",
-            creator_hash="0123456789abcdef",
-            publisher_name="快***户",
-            published_at_text="2026-08-26 08:00",
-            content_url="https://www.kuaishou.com/short-video/shared-100",
-            observed_at="2026-08-26T08:00:00+00:00",
-        ),
-    )
-    completed = repository.finish(kuaishou.id, "completed_with_results")
-    assert kuaishou.id == 76
-    assert (completed.new_count, completed.repeated_count) == (1, 0)
-    with database.connect() as migrated:
-        rows = migrated.execute(
-            """
-            SELECT platform, platform_content_id FROM search_contents
-            WHERE platform_content_id = 'shared-100' ORDER BY platform
-            """
-        ).fetchall()
-    assert [tuple(row) for row in rows] == [
-        ("ks", "shared-100"),
-        ("wb", "shared-100"),
-    ]
-
-
-def test_version_four_migration_preserves_rows_and_isolates_douyin_identity(
-    tmp_path: Path,
-) -> None:
-    database_path = tmp_path / "version-four.sqlite3"
-    connection = sqlite3.connect(database_path, isolation_level=None)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA foreign_keys = ON")
-    try:
-        _migrate_to_version_1(connection)
-        _migrate_to_version_2(connection)
-        _migrate_to_version_3(connection)
-        _migrate_to_version_4(connection)
-        connection.execute("BEGIN IMMEDIATE")
-        connection.execute(
-            """
-            INSERT INTO search_runs (
-              id, monitoring_rule_id, platform, rule_name, max_results_per_term,
-              status, current_term_position, created_at, started_at, finished_at
-            ) VALUES (41, 1, 'ks', '快手旧任务', 7, 'completed_with_results',
-                      0, '2026-08-25T08:00:00+00:00',
-                      '2026-08-25T08:00:01+00:00',
-                      '2026-08-25T08:00:02+00:00')
-            """
-        )
-        connection.execute("INSERT INTO search_run_terms VALUES (41, 0, '龙田街道')")
-        connection.execute(
-            """
-            INSERT INTO search_contents (
-              id, platform, platform_content_id, content_type, title, snippet,
-              creator_hash, publisher_name, published_at_text, content_url,
-              first_seen_at, last_seen_at
-            ) VALUES (
-              99, 'ks', '7512345678901234567', 'video', '旧标题', '旧摘要',
-              '0123456789abcdef', '快***户', '2026-08-25 16:00',
-              'https://www.kuaishou.com/short-video/7512345678901234567',
-              '2026-08-25T08:00:01+00:00', '2026-08-25T08:00:01+00:00'
-            )
-            """
-        )
-        connection.execute(
-            """
-            INSERT INTO search_run_contents VALUES (
-              41, 99, 'new', '2026-08-25T08:00:01+00:00',
-              '2026-08-25T08:00:01+00:00'
-            )
-            """
-        )
-        connection.execute(
-            """
-            INSERT INTO search_run_content_terms VALUES (
-              41, 99, 0, '2026-08-25T08:00:01+00:00'
-            )
-            """
-        )
-        connection.execute(
-            "UPDATE sqlite_sequence SET seq = 75 WHERE name = 'search_runs'"
-        )
-        connection.execute(
-            "UPDATE sqlite_sequence SET seq = 150 WHERE name = 'search_contents'"
-        )
-        before = {
-            table: [tuple(row) for row in connection.execute(f"SELECT * FROM {table}")]
-            for table in (
-                "search_runs",
-                "search_run_terms",
-                "search_contents",
-                "search_run_contents",
-                "search_run_content_terms",
-            )
-        }
-        connection.execute("COMMIT")
-    finally:
-        connection.close()
-
-    database = Database(database_path)
-    database.initialize()
-    with database.connect() as migrated:
-        after = {
-            table: [tuple(row) for row in migrated.execute(f"SELECT * FROM {table}")]
-            for table in before
-        }
-        sequences = dict(
-            migrated.execute(
-                """
-                SELECT name, seq FROM sqlite_sequence
-                WHERE name IN ('search_runs', 'search_contents')
-                """
-            ).fetchall()
-        )
-        assert migrated.execute("PRAGMA user_version").fetchone()[0] == (
-            CURRENT_DATABASE_VERSION
-        )
-        assert migrated.execute("PRAGMA foreign_key_check").fetchall() == []
-
-    assert all(
-        row[-4:-2] == (0, 1) and row[-2:] == (None, None)
-        for row in after["search_runs"]
-    )
-    after["search_runs"] = [row[:-4] for row in after["search_runs"]]
-    assert after == before
-    assert sequences == {"search_contents": 150, "search_runs": 75}
-
-    repository = SearchRunRepository(database)
-    douyin = repository.create_run(
-        monitoring_rule_id=1,
-        platform="dy",
-        rule_name="抖音任务",
-        terms=("龙田街道",),
-        max_results_per_term=7,
-    )
-    repository.mark_running(douyin.id)
-    _observe(
-        repository,
-        run_id=douyin.id,
-        term_position=0,
-        item=SearchContentInput(
-            platform_content_id="7512345678901234567",
-            content_type="video",
-            title="抖音标题",
-            snippet="抖音正文",
-            creator_hash="0123456789abcdef",
-            publisher_name="抖***户",
-            published_at_text="2026-08-26 16:00",
-            content_url="https://www.douyin.com/video/7512345678901234567",
-            observed_at="2026-08-26T08:00:00+00:00",
-        ),
-    )
-    completed = repository.finish(douyin.id, "completed_with_results")
-
-    assert douyin.id == 76
-    assert (completed.new_count, completed.repeated_count) == (1, 0)
-    with database.connect() as migrated:
-        rows = migrated.execute(
-            """
-            SELECT platform, platform_content_id FROM search_contents
-            WHERE platform_content_id = '7512345678901234567' ORDER BY platform
-            """
-        ).fetchall()
-    assert [tuple(row) for row in rows] == [
-        ("dy", "7512345678901234567"),
-        ("ks", "7512345678901234567"),
-    ]
-
-
-def test_version_five_migration_preserves_rows_sequences_and_adds_xhs(
-    tmp_path: Path,
-) -> None:
-    database_path = tmp_path / "version-five.sqlite3"
-    connection = sqlite3.connect(database_path, isolation_level=None)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA foreign_keys = ON")
-    try:
-        _migrate_to_version_1(connection)
-        _migrate_to_version_2(connection)
-        _migrate_to_version_3(connection)
-        _migrate_to_version_4(connection)
-        _migrate_to_version_5(connection)
-        connection.execute("BEGIN IMMEDIATE")
-        connection.execute(
-            """
-            INSERT INTO search_runs (
-              id, monitoring_rule_id, platform, rule_name, max_results_per_term,
-              status, current_term_position, created_at, started_at, finished_at
-            ) VALUES (41, 1, 'dy', '抖音旧任务', 7, 'completed_with_results',
-                      0, '2026-08-25T08:00:00+00:00',
-                      '2026-08-25T08:00:01+00:00',
-                      '2026-08-25T08:00:02+00:00')
-            """
-        )
-        connection.execute("INSERT INTO search_run_terms VALUES (41, 0, '龙田街道')")
-        connection.execute(
-            """
-            INSERT INTO search_contents (
-              id, platform, platform_content_id, content_type, title, snippet,
-              creator_hash, publisher_name, published_at_text, content_url,
-              first_seen_at, last_seen_at
-            ) VALUES (
-              99, 'dy', '0123456789abcdef01234567', 'video', '旧标题', '旧摘要',
-              '0123456789abcdef', '抖***户', '2026-08-25 16:00',
-              'https://www.douyin.com/video/0123456789abcdef01234567',
-              '2026-08-25T08:00:01+00:00', '2026-08-25T08:00:01+00:00'
-            )
-            """
-        )
-        connection.execute(
-            """
-            INSERT INTO search_run_contents VALUES (
-              41, 99, 'new', '2026-08-25T08:00:01+00:00',
-              '2026-08-25T08:00:01+00:00'
-            )
-            """
-        )
-        connection.execute(
-            """
-            INSERT INTO search_run_content_terms VALUES (
-              41, 99, 0, '2026-08-25T08:00:01+00:00'
-            )
-            """
-        )
-        connection.execute(
-            "UPDATE sqlite_sequence SET seq = 75 WHERE name = 'search_runs'"
-        )
-        connection.execute(
-            "UPDATE sqlite_sequence SET seq = 150 WHERE name = 'search_contents'"
-        )
-        before = {
-            table: [tuple(row) for row in connection.execute(f"SELECT * FROM {table}")]
-            for table in (
-                "search_runs",
-                "search_run_terms",
-                "search_contents",
-                "search_run_contents",
-                "search_run_content_terms",
-            )
-        }
-        connection.execute("COMMIT")
-    finally:
-        connection.close()
-
-    database = Database(database_path)
-    database.initialize()
-    with database.connect() as migrated:
-        after = {
-            table: [tuple(row) for row in migrated.execute(f"SELECT * FROM {table}")]
-            for table in before
-        }
-        sequences = dict(
-            migrated.execute(
-                """
-                SELECT name, seq FROM sqlite_sequence
-                WHERE name IN ('search_runs', 'search_contents')
-                """
-            ).fetchall()
-        )
-        assert migrated.execute("PRAGMA user_version").fetchone()[0] == (
-            CURRENT_DATABASE_VERSION
-        )
-        assert migrated.execute("PRAGMA foreign_key_check").fetchall() == []
-
-    assert all(
-        row[-4:-2] == (0, 1) and row[-2:] == (None, None)
-        for row in after["search_runs"]
-    )
-    after["search_runs"] = [row[:-4] for row in after["search_runs"]]
-    assert after == before
-    assert sequences == {"search_contents": 150, "search_runs": 75}
-
-    repository = SearchRunRepository(database)
-    xhs = repository.create_run(
-        monitoring_rule_id=1,
-        platform="xhs",
-        rule_name="小红书任务",
-        terms=("龙田街道",),
-        max_results_per_term=7,
-    )
-    repository.mark_running(xhs.id)
-    _observe(
-        repository,
-        run_id=xhs.id,
-        term_position=0,
-        item=SearchContentInput(
-            platform_content_id="0123456789abcdef01234567",
-            content_type="image",
-            title="小红书标题",
-            snippet="小红书标题",
-            creator_hash="0123456789abcdef",
-            publisher_name="小***户",
-            published_at_text="",
-            content_url=(
-                "https://www.xiaohongshu.com/explore/0123456789abcdef01234567"
-            ),
-            observed_at="2026-08-26T08:00:00+00:00",
-        ),
-    )
-    completed = repository.finish(xhs.id, "completed_with_results")
-
-    assert xhs.id == 76
-    assert (completed.new_count, completed.repeated_count) == (1, 0)
-    with database.connect() as migrated:
-        rows = migrated.execute(
-            """
-            SELECT platform, platform_content_id FROM search_contents
-            WHERE platform_content_id = '0123456789abcdef01234567'
-            ORDER BY platform
-            """
-        ).fetchall()
-    assert [tuple(row) for row in rows] == [
-        ("dy", "0123456789abcdef01234567"),
-        ("xhs", "0123456789abcdef01234567"),
-    ]

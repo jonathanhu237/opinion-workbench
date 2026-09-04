@@ -2,11 +2,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 
 import { useAppShell } from '@/app/shell'
-import douyinLogo from '@/assets/platforms/douyin.svg'
-import kuaishouLogo from '@/assets/platforms/kuaishou.svg'
-import toutiaoLogo from '@/assets/platforms/toutiao.svg'
 import weiboLogo from '@/assets/platforms/weibo.svg'
-import xiaohongshuLogo from '@/assets/platforms/xiaohongshu.svg'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -24,12 +20,8 @@ import {
 } from '@/lib/api/platform-connections'
 import { cn } from '@/lib/utils'
 
-const platformLogos: Record<PlatformId, string> = {
+const platformLogos: Partial<Record<PlatformId, string>> = {
   wb: weiboLogo,
-  dy: douyinLogo,
-  ks: kuaishouLogo,
-  xhs: xiaohongshuLogo,
-  toutiao: toutiaoLogo,
 }
 
 const statusLabels: Record<PlatformConnectionStatus, string> = {
@@ -39,7 +31,6 @@ const statusLabels: Record<PlatformConnectionStatus, string> = {
   connected: '已登录',
   disconnected: '未登录',
   failed: '检查失败',
-  coming_soon: '待接入',
 }
 
 function statusBadgeClass(status: PlatformConnectionStatus) {
@@ -53,8 +44,6 @@ function statusBadgeClass(status: PlatformConnectionStatus) {
       return 'border-destructive/25 bg-destructive/8 text-destructive'
     case 'checking':
       return 'border-primary/25 bg-primary/10 text-primary'
-    case 'coming_soon':
-      return 'border-border bg-secondary/60 text-muted-foreground'
     case 'not_checked':
       return 'border-border bg-background text-muted-foreground'
   }
@@ -152,7 +141,7 @@ function PlatformRow({
         <div className="platform-identity">
           <span className="platform-mark" aria-hidden="true">
             <img
-              src={platformLogos[connection.platform]}
+              src={platformLogos[connection.platform] ?? weiboLogo}
               alt=""
               aria-hidden="true"
               className="size-6 object-contain"

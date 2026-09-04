@@ -23,7 +23,7 @@ FAILURE_MESSAGES: dict[FailureCode, str] = {
     "acquisition_failed": "原文暂时无法读取，请检查平台登录或验证状态。",
     "source_content_unavailable": "原帖已删除或不可读取，未使用搜索摘要代替正文。",
     "platform_not_supported": (
-        "该平台尚未接入正文和媒体补全；已有内容及成功总结仍可使用。"
+        "该采集结果尚未完成正文和媒体补全；已有内容及成功总结仍可使用。"
     ),
     "source_structure_changed": "原文返回结构无法识别，未提交模型。",
     "acquisition_timed_out": "原文获取超过本次时限，未自动重试。",

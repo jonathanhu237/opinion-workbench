@@ -54,7 +54,7 @@ const searchBatchAttemptSchema = z.strictObject({
 })
 const searchBatchItemSchema = z
   .strictObject({
-    position: z.number().int().min(0).max(4),
+    position: z.number().int().min(0).max(0),
     platform: searchPlatformSchema,
     status: searchBatchItemStatusSchema,
     attempt_count: nonnegativeSafeIntegerSchema,
@@ -127,12 +127,12 @@ const summaryShape = {
   monitoring_rule_id: positiveSafeIntegerSchema.nullable(),
   rule_name: z.string(),
   term_count: z.number().int().min(1).max(20),
-  platform_count: z.number().int().min(1).max(5),
-  terminal_item_count: z.number().int().min(0).max(5),
+  platform_count: z.number().int().min(1).max(1),
+  terminal_item_count: z.number().int().min(0).max(1),
   max_results_per_term: z.number().int().min(1).max(50),
   status: searchBatchStatusSchema,
   control_revision: nonnegativeSafeIntegerSchema,
-  current_item_position: z.number().int().min(0).max(4).nullable(),
+  current_item_position: z.number().int().min(0).max(0).nullable(),
   created_at: isoDateSchema,
   started_at: isoDateSchema.nullable(),
   finished_at: isoDateSchema.nullable(),
@@ -148,7 +148,7 @@ const searchBatchDetailSchema = z
   .strictObject({
     ...summaryShape,
     terms: z.array(z.string()).min(1).max(20),
-    items: z.array(searchBatchItemSchema).min(1).max(5),
+    items: z.array(searchBatchItemSchema).min(1).max(1),
   })
   .superRefine((value, context) => {
     const terminalCount = value.items.filter((item) =>
@@ -334,7 +334,7 @@ const productErrorContracts: Record<
   invalid_request: { status: 422, message: '请求内容不正确。' },
   search_platform_not_available: {
     status: 409,
-    message: '该平台尚未接入当前采集器，历史内容仍可查看。',
+    message: '当前版本仅支持微博采集，历史内容仍可查看。',
   },
   monitoring_rule_not_found: { status: 404, message: '未找到该监控规则。' },
   monitoring_rule_disabled: {
@@ -364,11 +364,11 @@ const productErrorContracts: Record<
   },
   search_batch_recovery_unavailable: {
     status: 409,
-    message: '无法确认可靠的续采位置，请跳过此平台或取消批次。',
+    message: '无法确认可靠的续采位置，请跳过本次采集或取消批次。',
   },
   search_batch_item_not_recoverable: {
     status: 409,
-    message: '该平台当前不能重新处理。',
+    message: '本次采集当前不能重新处理。',
   },
   search_storage_unavailable: {
     status: 503,
@@ -451,11 +451,17 @@ async function parseResponse<T>(
 export async function startSearchBatch(
   input: {
     monitoring_rule_id: number
-    platforms: SearchPlatform[]
+    platforms?: SearchPlatform[]
     max_results_per_term: number
   },
   signal?: AbortSignal,
 ) {
+  if (
+    input.platforms !== undefined &&
+    (input.platforms.length !== 1 || input.platforms[0] !== 'wb')
+  ) {
+    throw new SearchBatchApiError('当前版本仅支持微博采集。', 'invalid_request')
+  }
   const response = await request('/search-batches', {
     method: 'POST',
     headers: { Accept: 'application/json', 'Content-Type': 'application/json' },

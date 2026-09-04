@@ -49,7 +49,6 @@ import { ResultEvidence } from '@/routes/results-evidence'
 import {
   ResultSourceLink,
   ResultsPagination,
-  useResultSourceControls,
 } from '@/routes/results-presenters'
 import {
   LegacyReportRecord,
@@ -174,7 +173,6 @@ function ContentLibrary({
   onOpen: (id: number) => void
 }) {
   const [params, setParams] = useSearchParams()
-  const controls = useResultSourceControls()
   const offset = readOffset(params.get('offset'))
   const results = useQuery({
     queryKey: [...RESULTS_QUERY_KEY, 'report-library', offset],
@@ -330,11 +328,7 @@ function ContentLibrary({
                         >
                           查看详情
                         </Button>
-                        <ResultSourceLink
-                          source={result.source}
-                          controls={controls}
-                          disabled={isActiveResult(result)}
-                        />
+                        <ResultSourceLink source={result.source} />
                       </div>
                     </TableCell>
                   </TableRow>
@@ -363,7 +357,6 @@ export function Results({ mode }: { mode?: 'compose' | 'records' } = {}) {
   const legacyReportId = readId(params.get('report'))
   const requestedJobId = readId(params.get('job'))
   const requestedLegacyReportList = params.has('reports_before')
-  const resultControls = useResultSourceControls()
   const resultFocus = useRef<HTMLElement | null>(null)
   const [selectedIds, setSelectedIds] = useState<number[]>(readSelectionDraft)
   const inferredMode = isReportRecordContext(params) ? 'records' : 'compose'
@@ -530,7 +523,6 @@ export function Results({ mode }: { mode?: 'compose' | 'records' } = {}) {
         <ResultEvidence
           key={resultId}
           resultId={resultId}
-          controls={resultControls}
           onSelect={(result) =>
             setSelectedIds((ids) =>
               ids.includes(result.id) ? ids : [...ids, result.id],

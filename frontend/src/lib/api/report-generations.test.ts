@@ -104,7 +104,7 @@ it('rejects dishonest progress and a fabricated completed report', () => {
 })
 
 it('keeps a library policy separate from its uncapped frozen membership', async () => {
-  const policy = { kind: 'library_pending' as const, include_failed: true }
+  const policy = { kind: 'library_pending' as const }
   const value = {
     ...generation(),
     selection_policy: policy,
@@ -125,13 +125,13 @@ it('keeps a library policy separate from its uncapped frozen membership', async 
   ).toHaveLength(1001)
   fetchMock.mockResolvedValueOnce(
     Response.json(
-      { ...value, selection_policy: { ...policy, include_failed: false } },
+      { ...value, selection_policy: { kind: 'library_pending' } },
       { status: 202 },
     ),
   )
   await expect(
     createReportGeneration({ ...intent, selection: policy }),
-  ).rejects.toThrow()
+  ).resolves.toMatchObject({ selection_policy: policy })
 })
 
 it('resolves a library selection into a concrete snapshot without creating a task', async () => {
@@ -148,7 +148,7 @@ it('resolves a library selection into a concrete snapshot without creating a tas
     }),
   )
   await expect(
-    previewReportSelection({ kind: 'library', include_failed: false }),
+    previewReportSelection({ kind: 'library' }),
   ).resolves.toMatchObject({
     selection: { result_ids: [3, 2] },
     counts: { total: 2, pending: 1 },
@@ -158,6 +158,5 @@ it('resolves a library selection into a concrete snapshot without creating a tas
   )
   expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({
     kind: 'library',
-    include_failed: false,
   })
 })

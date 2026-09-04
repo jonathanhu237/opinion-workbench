@@ -167,7 +167,7 @@ it('adds the library snapshot to existing manual selection and does not create a
       name: `选择内容：${resultFixture().source.title}`,
     }),
   )
-  await user.click(screen.getByRole('button', { name: '选中全部待分析内容' }))
+  await user.click(screen.getByRole('button', { name: '选中全部未分析内容' }))
   await waitFor(() => expect(screen.getByText('已选 3 条')).toBeVisible())
   expect(createReportGeneration).not.toHaveBeenCalled()
 })

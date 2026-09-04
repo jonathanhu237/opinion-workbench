@@ -270,34 +270,12 @@ def test_unsafe_or_already_owned_profile_is_not_repaired_or_launched(
     assert marker.read_text() == "retain"
 
 
-def test_explicit_native_mode_never_launches_legacy_fallback(tmp_path, monkeypatch):
-    monkeypatch.setenv("LONGTIAN_COLLECTOR_BACKEND", "native-weibo")
-    launches = []
-
-    async def legacy_launch(*args, **kwargs):
-        launches.append(args)
-        raise RuntimeError("legacy must not run")
-
-    app = create_app(
-        platform_connection_service_factory=lambda: PlatformConnectionService(
-            browser_profile_dir=tmp_path / "rejected-daily-profile",
-            process_launcher=legacy_launch,
-        ),
-        monitoring_rule_service_factory=lambda: MonitoringRuleService(
-            database_path=tmp_path / "db.sqlite3"
-        ),
-    )
-    with TestClient(app) as client:
-        created = client.post(
-            "/api/v1/search-runs",
-            json={
-                "monitoring_rule_id": 1,
-                "platform": "wb",
-            },
+def test_legacy_collector_backend_is_rejected(tmp_path, monkeypatch):
+    monkeypatch.setenv("LONGTIAN_COLLECTOR_BACKEND", "legacy")
+    with pytest.raises(ValueError, match="Only the native Weibo collector"):
+        PlatformConnectionService(
+            browser_profile_dir=tmp_path / "runtime" / "browser" / "managed-chrome"
         )
-        run = _wait_for_terminal(client, created.json()["id"])
-        assert run["status"] == "browser_unavailable"
-        assert not launches
 
 
 @pytest.mark.parametrize(

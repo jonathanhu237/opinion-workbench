@@ -4,20 +4,14 @@ import hashlib
 import json
 import re
 from typing import Literal, Self
-from urllib.parse import urlsplit
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from longtian_api.search_platforms import SearchPlatform, is_valid_search_content_url
 
-ENRICHMENT_COMMAND_PREFIX = b"__MEDIACRAWLER_ENRICHMENT_COMMAND__"
-ENRICHMENT_EVENT_PREFIX = b"__MEDIACRAWLER_ENRICHMENT_EVENT__"
-MAX_ENRICHMENT_COMMAND_BYTES = 32 * 1024
-MAX_ENRICHMENT_EVENT_BYTES = 64 * 1024
 MAX_MANIFEST_BYTES = 192 * 1024
 MAX_MEDIA_BYTES = 6 * 1024 * 1024
-MEDIA_ROOT_ENV = "MEDIACRAWLER_MEDIA_ROOT"
 
 EnrichmentOutcome = Literal[
     "completed",
@@ -272,31 +266,7 @@ def valid_source_url(platform: SearchPlatform, content_id: str, value: str) -> b
         or re.fullmatch(r"[A-Za-z0-9_-]{1,128}", content_id) is None
     ):
         return False
-    if platform != "toutiao":
-        return is_valid_search_content_url(platform, content_id, value)
-    try:
-        parsed = urlsplit(value)
-        if parsed.scheme == "http":
-            # Preserve the observed stored legacy forms, including the empty
-            # channel query. The platform adapter upgrades them to HTTPS before
-            # any navigation.
-            legacy = re.fullmatch(
-                r"http://www\.toutiao\.com/a([0-9]+)(?:/?|/\?channel=)", value
-            )
-            return legacy is not None and legacy.group(1) == content_id
-        matched = re.fullmatch(
-            r"/(?:article/|group/|video/|[ai]|w/a?)([0-9]+)/?", parsed.path
-        )
-        return (
-            parsed.scheme == "https"
-            and parsed.netloc in {"www.toutiao.com", "m.toutiao.com", "toutiao.com"}
-            and not parsed.query
-            and not parsed.fragment
-            and matched is not None
-            and matched.group(1) == content_id
-        )
-    except ValueError:
-        return False
+    return is_valid_search_content_url(platform, content_id, value)
 
 
 def validate_content(

@@ -29,7 +29,6 @@ GenerationStatus = Literal[
 
 class LibraryPendingSelection(StrictModel):
     kind: Literal["library_pending"]
-    include_failed: bool
 
 
 GenerationSelection = Annotated[
@@ -70,7 +69,6 @@ class ExplicitSelectionPreview(StrictModel):
 
 class LibrarySelectionPreview(StrictModel):
     kind: Literal["library"]
-    include_failed: bool = False
 
 
 SelectionPreviewRequest = Annotated[

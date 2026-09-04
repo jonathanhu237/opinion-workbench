@@ -3,13 +3,7 @@ import { z } from 'zod'
 import { getApiBaseUrl } from '@/lib/api/client'
 
 export const SEARCH_RUNS_QUERY_KEY = ['search-runs'] as const
-export const SEARCH_PLATFORM_ORDER = [
-  'toutiao',
-  'wb',
-  'ks',
-  'dy',
-  'xhs',
-] as const
+export const SEARCH_PLATFORM_ORDER = ['wb'] as const
 
 const activeStatuses = ['queued', 'running'] as const
 const terminalStatuses = [
@@ -28,7 +22,7 @@ export const searchRunStatusSchema = z.enum([
   ...activeStatuses,
   ...terminalStatuses,
 ])
-export const searchPlatformSchema = z.enum(SEARCH_PLATFORM_ORDER)
+export const searchPlatformSchema = z.enum(['wb'] as const)
 export const isoDateSchema = z.string().datetime({ offset: true })
 export const searchFailureReasonSchema = z.enum([
   'page_state_unrecognized',
@@ -205,7 +199,7 @@ const productErrorContracts: Record<
   invalid_request: { status: 422, message: '请求内容不正确。' },
   search_platform_not_available: {
     status: 409,
-    message: '该平台尚未接入当前采集器，历史内容仍可查看。',
+    message: '当前版本仅支持微博采集，历史内容仍可查看。',
   },
   monitoring_rule_not_found: { status: 404, message: '未找到该监控规则。' },
   monitoring_rule_disabled: {
@@ -231,7 +225,7 @@ const productErrorContracts: Record<
   },
   search_result_open_not_supported: {
     status: 409,
-    message: '该平台的结果不需要通过浏览器任务打开。',
+    message: '该采集结果当前无法通过浏览器打开。',
   },
   search_storage_unavailable: {
     status: 503,
@@ -275,43 +269,11 @@ export function isValidSearchContentUrl(
   ) {
     return false
   }
-  if (platform === 'toutiao') {
-    return (
-      (url.protocol === 'http:' || url.protocol === 'https:') &&
-      (hostname === 'toutiao.com' || hostname.endsWith('.toutiao.com'))
-    )
-  }
   if (platform === 'wb') {
     return (
       value === `https://m.weibo.cn/detail/${platformContentId}` &&
       url.protocol === 'https:' &&
       hostname === 'm.weibo.cn' &&
-      url.search === ''
-    )
-  }
-  if (platform === 'ks') {
-    return (
-      value === `https://www.kuaishou.com/short-video/${platformContentId}` &&
-      url.protocol === 'https:' &&
-      hostname === 'www.kuaishou.com' &&
-      url.search === ''
-    )
-  }
-  if (platform === 'dy') {
-    return (
-      /^[0-9]+$/u.test(platformContentId) &&
-      value === `https://www.douyin.com/video/${platformContentId}` &&
-      url.protocol === 'https:' &&
-      hostname === 'www.douyin.com' &&
-      url.search === ''
-    )
-  }
-  if (platform === 'xhs') {
-    return (
-      /^[0-9a-f]{24}$/u.test(platformContentId) &&
-      value === `https://www.xiaohongshu.com/explore/${platformContentId}` &&
-      url.protocol === 'https:' &&
-      hostname === 'www.xiaohongshu.com' &&
       url.search === ''
     )
   }
@@ -390,11 +352,14 @@ async function parseResponse<T>(
 export async function startSearchRun(
   input: {
     monitoring_rule_id: number
-    platform: SearchPlatform
+    platform?: SearchPlatform
     max_results_per_term: number
   },
   signal?: AbortSignal,
 ) {
+  if (input.platform !== undefined && input.platform !== 'wb') {
+    throw new SearchRunApiError('当前版本仅支持微博采集。', 'invalid_request')
+  }
   const response = await request('/search-runs', {
     method: 'POST',
     headers: { Accept: 'application/json', 'Content-Type': 'application/json' },

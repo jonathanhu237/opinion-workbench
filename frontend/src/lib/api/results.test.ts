@@ -32,13 +32,13 @@ describe('global result boundary', () => {
     expect(
       (
         await fetchResults(
-          { platform: 'dy', state: 'never_started', offset: 0 },
+          { platform: 'wb', state: 'never_started', offset: 0 },
           signal,
         )
       ).eligible_count,
     ).toBe(1001)
     expect(fetchMock.mock.calls[0][0]).toContain(
-      'platform=dy&state=never_started',
+      'platform=wb&state=never_started',
     )
   })
   it('rejects wrong result/source IDs and filtered-state drift', async () => {
@@ -60,13 +60,13 @@ describe('global result boundary', () => {
       fetchResults({ state: 'completed', offset: 0 }, signal),
     ).rejects.toMatchObject({ code: 'invalid_response' })
   })
-  it('does not accept signed XHS URLs in global source projections', async () => {
+  it('does not accept unsafe URLs in global source projections', async () => {
     const result = resultFixture()
     result.source = {
       ...result.source,
-      platform: 'xhs',
-      platform_content_id: 'a'.repeat(24),
-      content_url: `https://www.xiaohongshu.com/explore/${'a'.repeat(24)}?xsec_token=sentinel`,
+      platform: 'wb',
+      platform_content_id: '5012345678901234',
+      content_url: 'https://m.weibo.cn/detail/5012345678901234?token=sentinel',
     }
     fetchMock.mockResolvedValue(json(result))
     await expect(fetchResult(11, signal)).rejects.toMatchObject({
@@ -99,12 +99,12 @@ describe('global result boundary', () => {
     expect(
       parseResultFilters(
         new URLSearchParams(
-          'from=2026-08-29&to=2026-08-29&offset=20&platform=dy',
+          'from=2026-08-29&to=2026-08-29&offset=20&platform=wb',
         ),
       ),
     ).toEqual({
       offset: 20,
-      platform: 'dy',
+      platform: 'wb',
       first_seen_from: '2026-08-28T16:00:00.000Z',
       first_seen_to: '2026-08-29T16:00:00.000Z',
     })

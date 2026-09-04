@@ -97,23 +97,12 @@ function usageMessage(usage: AISummaryUsage) {
   return `本次 ${usage.total_tokens.toLocaleString('zh-CN')} Token${usage.complete ? '' : '（统计不完整）'} · 调用 ${usage.attempted_requests} 次`
 }
 
-type SourceControls = {
-  openPending: boolean
-  activeOpenResultId: number | null | undefined
-  openFeedback: { resultId: number; message: string } | null
-  onOpen: (resultId: number) => void
-}
-
 function SourceLink({
   source,
-  disabled,
   citationNumber,
-  controls,
 }: {
   source: AISummarySource
-  disabled: boolean
   citationNumber?: number
-  controls: SourceControls
 }) {
   const label =
     citationNumber === undefined
@@ -122,70 +111,27 @@ function SourceLink({
   const accessibleLabel =
     citationNumber === undefined ? undefined : `${label}：${source.title}`
   const title = citationNumber === undefined ? undefined : source.title
-  if (source.platform !== 'xhs')
-    return (
-      <a
-        className={cn(
-          buttonVariants({ variant: 'link', size: 'sm' }),
-          'h-auto min-h-8 justify-start px-0 text-left [overflow-wrap:anywhere] whitespace-normal',
-          citationNumber !== undefined &&
-            'ms-2 align-baseline whitespace-nowrap underline',
-        )}
-        href={source.content_url}
-        target="_blank"
-        rel={
-          citationNumber === undefined ? 'noreferrer' : 'noopener noreferrer'
-        }
-        aria-label={accessibleLabel}
-        title={title}
-      >
-        {label}
-        <ExternalLink className="shrink-0" aria-hidden />
-      </a>
-    )
-  const pending =
-    controls.openPending && controls.activeOpenResultId === source.result_id
   return (
-    <span
+    <a
       className={cn(
-        'inline-flex flex-col items-start',
-        citationNumber !== undefined && 'ms-2 max-w-full align-baseline',
+        buttonVariants({ variant: 'link', size: 'sm' }),
+        'h-auto min-h-8 justify-start px-0 text-left [overflow-wrap:anywhere] whitespace-normal',
+        citationNumber !== undefined &&
+          'ms-2 align-baseline whitespace-nowrap underline',
       )}
+      href={source.content_url}
+      target="_blank"
+      rel={citationNumber === undefined ? 'noreferrer' : 'noopener noreferrer'}
+      aria-label={accessibleLabel}
+      title={title}
     >
-      <Button
-        variant="link"
-        size="sm"
-        className={cn(
-          'h-auto min-h-8 px-0 text-left [overflow-wrap:anywhere] whitespace-normal',
-          citationNumber !== undefined && 'whitespace-nowrap underline',
-        )}
-        disabled={disabled || controls.openPending}
-        aria-busy={pending}
-        aria-label={accessibleLabel}
-        title={title}
-        onClick={() => controls.onOpen(source.result_id)}
-      >
-        {pending ? '正在打开…' : label}
-        <ExternalLink className="shrink-0" aria-hidden />
-      </Button>
-      {controls.openFeedback?.resultId === source.result_id && (
-        <span role="status" className="text-sm text-muted-foreground">
-          {controls.openFeedback.message}
-        </span>
-      )}
-    </span>
+      {label}
+      <ExternalLink className="shrink-0" aria-hidden />
+    </a>
   )
 }
 
-function AnalysisRecord({
-  item,
-  active,
-  controls,
-}: {
-  item: AISummaryItem
-  active: boolean
-  controls: SourceControls
-}) {
+function AnalysisRecord({ item }: { item: AISummaryItem }) {
   return (
     <article className="space-y-2 py-4 first:pt-0 last:pb-0">
       <div className="flex flex-wrap items-center gap-2">
@@ -219,7 +165,7 @@ function AnalysisRecord({
           {stageLabels[item.error.stage]}：{item.error.message}
         </p>
       )}
-      <SourceLink source={item.source} disabled={active} controls={controls} />
+      <SourceLink source={item.source} />
     </article>
   )
 }
@@ -227,8 +173,10 @@ function AnalysisRecord({
 export function CollectionAISummary({
   run,
   historyOnly = false,
-  ...controls
-}: { run: SearchRunDetail; historyOnly?: boolean } & SourceControls) {
+}: {
+  run: SearchRunDetail
+  historyOnly?: boolean
+}) {
   const queryClient = useQueryClient()
   const [params, setParams] = useSearchParams()
   const [confirmation, setConfirmation] = useState<{
@@ -691,8 +639,6 @@ export function CollectionAISummary({
                               <SourceLink
                                 key={id}
                                 source={item.source}
-                                disabled={active}
-                                controls={controls}
                                 citationNumber={item.position + 1}
                               />
                             ) : null
@@ -709,12 +655,7 @@ export function CollectionAISummary({
                       {items
                         .slice(offset, offset + ANALYSIS_PAGE_SIZE)
                         .map((item) => (
-                          <AnalysisRecord
-                            key={item.id}
-                            item={item}
-                            active={active}
-                            controls={controls}
-                          />
+                          <AnalysisRecord key={item.id} item={item} />
                         ))}
                     </div>
                     {items.length > ANALYSIS_PAGE_SIZE && (

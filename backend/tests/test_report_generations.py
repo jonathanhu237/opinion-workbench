@@ -59,6 +59,56 @@ def test_one_start_reuses_three_summaries_and_analyses_seven_saved_bodies(tmp_pa
         assert model.counts == calls
 
 
+def test_new_report_retries_each_failed_source_once_and_clears_eligibility(
+    tmp_path,
+):
+    app, database, model, media = api_environment(tmp_path, count=2)
+    save_body(database, 1)
+    save_body(database, 2)
+    model.answers["initial"] = ["invalid", UNDERSTANDING]
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        saved(client)
+        first = client.post(
+            "/api/v1/report-generations", json=generation_request([1, 2])
+        )
+        assert first.status_code == 202, first.text
+        client.portal.call(finish, app.state.report_generation_service)
+        first_result = client.get(
+            f"/api/v1/report-generations/{first.json()['id']}"
+        ).json()
+        assert first_result["analysis"]["counts"]["failed"] == 1
+        assert first_result["analysis"]["counts"]["completed"] == 1
+        assert client.get("/api/v1/report-generations/eligibility").json() == {
+            "pending": 0,
+            "failed": 1,
+            "active": 0,
+        }
+
+        model.answers["initial"] = [UNDERSTANDING]
+        second_intent = generation_request([1, 2])
+        second = client.post("/api/v1/report-generations", json=second_intent)
+        assert second.status_code == 202, second.text
+        client.portal.call(finish, app.state.report_generation_service)
+        second_result = client.get(
+            f"/api/v1/report-generations/{second.json()['id']}"
+        ).json()
+        assert second_result["analysis"]["counts"]["reused"] == 1
+        assert second_result["analysis"]["counts"]["completed"] == 2
+        assert second_result["analysis"]["counts"]["failed"] == 0
+        assert model.counts["initial"] == 3
+        assert client.get("/api/v1/report-generations/eligibility").json() == {
+            "pending": 0,
+            "failed": 0,
+            "active": 0,
+        }
+        assert (
+            client.post("/api/v1/report-generations", json=second_intent).json()
+            == second_result
+        )
+        assert model.counts["initial"] == 3
+        assert not media.calls
+
+
 def test_url_only_without_stored_body_does_not_access_legacy_accounts(tmp_path):
     app, _, model, media = api_environment(tmp_path, count=1)
     with TestClient(app, base_url="http://127.0.0.1") as client:

@@ -19,13 +19,12 @@ def eligibility(connection):
     return GenerationEligibility(**dict(row))
 
 
-def select_library(connection, *, include_failed):
+def select_library(connection):
     return [
         row[0]
         for row in connection.execute(
             f"""SELECT cl.content_id
         {LIBRARY_FROM} WHERE ({INACTIVE}) AND
-        (({PENDING}) OR (? AND {RECOVERABLE})) ORDER BY cl.content_id""",
-            (include_failed,),
+        (({PENDING}) OR ({RECOVERABLE})) ORDER BY cl.content_id""",
         )
     ]

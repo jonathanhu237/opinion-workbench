@@ -192,9 +192,9 @@ def test_interval_empty_override_defaults_and_replay_precedes_config(tmp_path):
     with TestClient(app, base_url="http://127.0.0.1") as client:
         saved(client)
         settings = client.get("/api/v1/analysis-settings").json()
-        payload = interval_request(
-            db, instructions_override="  单次范围  "
-        ).model_dump(exclude_none=True)
+        payload = interval_request(db, instructions_override="  单次范围  ").model_dump(
+            exclude_none=True
+        )
         response = client.post("/api/v1/topic-reports", json=payload)
         assert response.status_code == 202, response.text
         report_id = response.json()["id"]

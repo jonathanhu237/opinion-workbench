@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, LoaderCircle, Square } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router'
 
 import { Badge } from '@/components/ui/badge'
@@ -12,14 +12,11 @@ import { useSearchRun, useSearchRunResults } from '@/hooks/use-search-runs'
 import {
   cancelSearchRun,
   isActiveSearchRun,
-  openSearchRunResult,
   SEARCH_RUNS_QUERY_KEY,
   SearchRunApiError,
   type SearchResultFilter,
 } from '@/lib/api/search-runs'
 import {
-  openOutcomeMessages,
-  openErrorMessage,
   searchPlatformPresenters,
   searchRunStatusGuidance,
   searchRunStatusLabel,
@@ -62,10 +59,6 @@ export function CollectionRunDetail() {
   const active = runQuery.data ? isActiveSearchRun(runQuery.data.status) : false
   const resultsQuery = useSearchRunResults(runId, filter, active, offset)
   const previousRunState = useRef({ runId, active })
-  const [openFeedback, setOpenFeedback] = useState<{
-    resultId: number
-    message: string
-  } | null>(null)
   useEffect(() => {
     const previous = previousRunState.current
     previousRunState.current = { runId, active }
@@ -86,26 +79,6 @@ export function CollectionRunDetail() {
       await queryClient.invalidateQueries({ queryKey: SEARCH_RUNS_QUERY_KEY })
     },
   })
-  const openMutation = useMutation({
-    mutationFn: (resultId: number) => openSearchRunResult(runId ?? 0, resultId),
-    onMutate: (resultId) => {
-      setOpenFeedback(null)
-      return { resultId }
-    },
-    onSuccess: (response, resultId) => {
-      setOpenFeedback({
-        resultId,
-        message: openOutcomeMessages[response.outcome],
-      })
-    },
-    onError: (error, resultId) => {
-      setOpenFeedback({ resultId, message: openErrorMessage(error) })
-    },
-  })
-  const activeOpenResultId = openMutation.isPending
-    ? openMutation.variables
-    : null
-
   const changePage = (nextOffset: number) => {
     const next = new URLSearchParams(searchParams)
     if (nextOffset === 0) next.delete('offset')
@@ -283,15 +256,7 @@ export function CollectionRunDetail() {
         </CardContent>
       </Card>
 
-      <CollectionAISummary
-        key={run.id}
-        run={run}
-        historyOnly
-        openPending={openMutation.isPending}
-        activeOpenResultId={activeOpenResultId}
-        openFeedback={openFeedback}
-        onOpen={(resultId) => openMutation.mutate(resultId)}
-      />
+      <CollectionAISummary key={run.id} run={run} historyOnly />
 
       <section aria-labelledby="collection-results-title">
         <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -350,18 +315,7 @@ export function CollectionRunDetail() {
               </div>
             ) : (
               visibleResults.map((result) => (
-                <SearchResultRecord
-                  key={result.id}
-                  result={result}
-                  openPending={openMutation.isPending}
-                  activeOpenResultId={activeOpenResultId}
-                  openFeedback={
-                    openFeedback?.resultId === result.id
-                      ? openFeedback.message
-                      : null
-                  }
-                  onOpen={(resultId) => openMutation.mutate(resultId)}
-                />
+                <SearchResultRecord key={result.id} result={result} />
               ))
             )}
           </CardContent>

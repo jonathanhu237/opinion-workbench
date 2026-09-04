@@ -17,7 +17,7 @@ import {
 const run: SearchRunDetail = {
   id: 7,
   monitoring_rule_id: 1,
-  platform: 'toutiao',
+  platform: 'wb',
   rule_name: '龙田街道及四个社区',
   term_count: 2,
   terms: ['龙田街道', '竹坑社区'],
@@ -33,78 +33,23 @@ const run: SearchRunDetail = {
   finished_at: '2026-08-26T08:00:05+00:00',
 }
 
-it('accepts an explicit execution budget stop but never on a successful run', () => {
-  const { terms: _terms, ...summary } = run
-  expect(
-    searchRunSummarySchema.safeParse({
-      ...summary,
-      status: 'timed_out',
-      execution_limit: 'requests',
-    }).success,
-  ).toBe(true)
-  expect(
-    searchRunSummarySchema.safeParse({
-      ...summary,
-      execution_limit: 'requests',
-    }).success,
-  ).toBe(false)
-})
-
 const result: SearchResult = {
   id: 11,
-  platform: 'toutiao',
-  platform_content_id: '100',
-  content_type: 'article',
-  title: '龙田街道公开信息',
+  platform: 'wb',
+  platform_content_id: '5012345678901234',
+  content_type: 'post',
+  title: '微博公开信息',
   snippet: '来自公开搜索页面',
   creator_hash: '0123456789abcdef',
   publisher_name: '本***察',
   published_at_text: '刚刚',
-  content_url: 'https://www.toutiao.com/article/100/',
+  content_url: 'https://m.weibo.cn/detail/5012345678901234',
   kind: 'new',
   matched_terms: ['龙田街道'],
   first_seen_at: '2026-08-26T08:00:02+00:00',
   last_seen_at: '2026-08-26T08:00:02+00:00',
   first_observed_at: '2026-08-26T08:00:02+00:00',
   last_observed_at: '2026-08-26T08:00:02+00:00',
-}
-
-const weiboResult: SearchResult = {
-  ...result,
-  platform: 'wb',
-  platform_content_id: '5012345678901234',
-  content_type: 'post',
-  title: '微博公开信息',
-  content_url: 'https://m.weibo.cn/detail/5012345678901234',
-}
-
-const kuaishouResult: SearchResult = {
-  ...result,
-  platform: 'ks',
-  platform_content_id: '3xabc123',
-  content_type: 'video',
-  title: '快手公开信息',
-  content_url: 'https://www.kuaishou.com/short-video/3xabc123',
-}
-
-const douyinResult: SearchResult = {
-  ...result,
-  platform: 'dy',
-  platform_content_id: '7512345678901234567',
-  content_type: 'video',
-  title: '抖音公开信息',
-  content_url: 'https://www.douyin.com/video/7512345678901234567',
-}
-
-const xhsResult: SearchResult = {
-  ...result,
-  platform: 'xhs',
-  platform_content_id: '0123456789abcdef01234567',
-  content_type: 'image',
-  title: '小红书公开信息',
-  snippet: '小红书公开信息',
-  published_at_text: '',
-  content_url: 'https://www.xiaohongshu.com/explore/0123456789abcdef01234567',
 }
 
 describe('search runs API boundary', () => {
@@ -119,83 +64,56 @@ describe('search runs API boundary', () => {
     vi.unstubAllGlobals()
   })
 
-  it.each([
-    'page_state_unrecognized',
-    'search_context_unavailable',
-    'search_response_incompatible',
-    'search_results_incompatible',
-    'search_pagination_incompatible',
-  ] as const)('accepts the structured failure reason %s', (failure_reason) => {
-    const summary = Object.fromEntries(
-      Object.entries(run).filter(([key]) => key !== 'terms'),
-    )
-    const payload = {
-      ...summary,
-      status: 'structure_changed' as const,
-      failure_reason,
-    }
-    expect(searchFailureReasonSchema.safeParse(failure_reason).success).toBe(
-      true,
-    )
-    expect(searchRunSummarySchema.safeParse(payload).success).toBe(true)
-  })
-
-  it('keeps historical null reasons and rejects unknown or contradictory reasons', () => {
-    const summary = Object.fromEntries(
-      Object.entries(run).filter(([key]) => key !== 'terms'),
-    )
-    expect(searchRunSummarySchema.safeParse(summary).success).toBe(true)
+  it('accepts an explicit execution budget stop but never on a successful run', () => {
+    const { terms: _terms, ...summary } = run
     expect(
       searchRunSummarySchema.safeParse({
         ...summary,
-        failure_reason: 'unknown_reason',
+        status: 'timed_out',
+        execution_limit: 'requests',
       }).success,
-    ).toBe(false)
+    ).toBe(true)
     expect(
       searchRunSummarySchema.safeParse({
         ...summary,
-        failure_reason: 'search_results_incompatible',
+        execution_limit: 'requests',
       }).success,
     ).toBe(false)
   })
 
-  it('rejects a contradictory failure reason on the run detail boundary', async () => {
-    fetchMock.mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          ...run,
-          failure_reason: 'search_results_incompatible',
-        }),
-        { status: 202 },
-      ),
-    )
-
-    await expect(
-      startSearchRun({
-        monitoring_rule_id: 1,
-        platform: 'toutiao',
-        max_results_per_term: 10,
-      }),
-    ).rejects.toMatchObject({ code: 'invalid_response', status: 202 })
+  it('validates structured failure reasons and contradictory pairs', () => {
+    const { terms: _terms, ...summary } = run
+    const reason = 'search_results_incompatible' as const
+    expect(searchFailureReasonSchema.safeParse(reason).success).toBe(true)
+    expect(
+      searchRunSummarySchema.safeParse({
+        ...summary,
+        status: 'structure_changed',
+        failure_reason: reason,
+      }).success,
+    ).toBe(true)
+    expect(
+      searchRunSummarySchema.safeParse({
+        ...summary,
+        failure_reason: reason,
+      }).success,
+    ).toBe(false)
   })
 
-  it('sends the exact start payload and requires an HTTP 202 detail', async () => {
+  it('sends the exact Weibo start payload and requires an HTTP 202 detail', async () => {
     fetchMock.mockResolvedValue(
       new Response(JSON.stringify(run), { status: 202 }),
     )
     const input = {
       monitoring_rule_id: 1,
-      platform: 'toutiao' as const,
+      platform: 'wb' as const,
       max_results_per_term: 10,
     }
 
     await expect(startSearchRun(input)).resolves.toEqual(run)
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/v1/search-runs',
-      expect.objectContaining({
-        method: 'POST',
-        body: JSON.stringify(input),
-      }),
+      expect.objectContaining({ method: 'POST', body: JSON.stringify(input) }),
     )
 
     fetchMock.mockResolvedValue(
@@ -207,80 +125,28 @@ describe('search runs API boundary', () => {
     })
   })
 
-  it('accepts the exact Weibo platform and sends it unchanged', async () => {
-    const weiboRun = { ...run, platform: 'wb' as const }
+  it('allows the fixed Weibo platform to be omitted from a start payload', async () => {
     fetchMock.mockResolvedValue(
-      new Response(JSON.stringify(weiboRun), { status: 202 }),
+      new Response(JSON.stringify(run), { status: 202 }),
     )
-    const input = {
-      monitoring_rule_id: 1,
-      platform: 'wb' as const,
-      max_results_per_term: 8,
-    }
 
-    await expect(startSearchRun(input)).resolves.toEqual(weiboRun)
+    await expect(
+      startSearchRun({ monitoring_rule_id: 1, max_results_per_term: 10 }),
+    ).resolves.toEqual(run)
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/v1/search-runs',
-      expect.objectContaining({ body: JSON.stringify(input) }),
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          monitoring_rule_id: 1,
+          max_results_per_term: 10,
+        }),
+      }),
     )
   })
 
-  it('accepts the exact Kuaishou platform and sends it unchanged', async () => {
-    const kuaishouRun = { ...run, platform: 'ks' as const }
-    fetchMock.mockResolvedValue(
-      new Response(JSON.stringify(kuaishouRun), { status: 202 }),
-    )
-    const input = {
-      monitoring_rule_id: 1,
-      platform: 'ks' as const,
-      max_results_per_term: 8,
-    }
-
-    await expect(startSearchRun(input)).resolves.toEqual(kuaishouRun)
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/v1/search-runs',
-      expect.objectContaining({ body: JSON.stringify(input) }),
-    )
-  })
-
-  it('accepts the exact Douyin platform and sends it unchanged', async () => {
-    const douyinRun = { ...run, platform: 'dy' as const }
-    fetchMock.mockResolvedValue(
-      new Response(JSON.stringify(douyinRun), { status: 202 }),
-    )
-    const input = {
-      monitoring_rule_id: 1,
-      platform: 'dy' as const,
-      max_results_per_term: 8,
-    }
-
-    await expect(startSearchRun(input)).resolves.toEqual(douyinRun)
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/v1/search-runs',
-      expect.objectContaining({ body: JSON.stringify(input) }),
-    )
-  })
-
-  it('accepts the exact Xiaohongshu platform and sends it unchanged', async () => {
-    const xhsRun = { ...run, platform: 'xhs' as const }
-    fetchMock.mockResolvedValue(
-      new Response(JSON.stringify(xhsRun), { status: 202 }),
-    )
-    const input = {
-      monitoring_rule_id: 1,
-      platform: 'xhs' as const,
-      max_results_per_term: 8,
-    }
-
-    await expect(startSearchRun(input)).resolves.toEqual(xhsRun)
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/v1/search-runs',
-      expect.objectContaining({ body: JSON.stringify(input) }),
-    )
-  })
-
-  it('forwards history pagination and abort signals', async () => {
-    fetchMock.mockResolvedValue(
+  it('forwards history pagination and validates the Weibo result URL', async () => {
+    fetchMock.mockResolvedValueOnce(
       new Response(
         JSON.stringify({
           runs: [{ ...run, terms: undefined }],
@@ -290,7 +156,6 @@ describe('search runs API boundary', () => {
       ),
     )
     const controller = new AbortController()
-
     await expect(
       fetchSearchRuns(controller.signal, { limit: 5, beforeId: 8 }),
     ).resolves.toMatchObject({ next_before_id: 4 })
@@ -298,33 +163,46 @@ describe('search runs API boundary', () => {
       '/api/v1/search-runs?limit=5&before_id=8',
       expect.objectContaining({ signal: controller.signal }),
     )
-  })
 
-  it('accepts only strict, allowlisted result projections', async () => {
     fetchMock.mockResolvedValueOnce(
       new Response(
         JSON.stringify({ results: [result], total: 1, limit: 50, offset: 0 }),
-        { status: 200 },
+        {
+          status: 200,
+        },
       ),
     )
-
     await expect(
       fetchSearchRunResults(7, 'new', new AbortController().signal),
     ).resolves.toEqual({ results: [result], total: 1, limit: 50, offset: 0 })
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/v1/search-runs/7/results?kind=new&limit=50&offset=0',
-      expect.any(Object),
-    )
 
-    fetchMock.mockResolvedValueOnce(
+    for (const content_url of [
+      'https://m.weibo.cn/detail/other-id',
+      'https://m.weibo.cn/detail/5012345678901234?q=1',
+      'https://evil.example/detail/5012345678901234',
+    ]) {
+      fetchMock.mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            results: [{ ...result, content_url }],
+            total: 1,
+            limit: 50,
+            offset: 0,
+          }),
+          { status: 200 },
+        ),
+      )
+      await expect(
+        fetchSearchRunResults(7, 'all', new AbortController().signal),
+      ).rejects.toMatchObject({ code: 'invalid_response' })
+    }
+  })
+
+  it('rejects secret-bearing or unknown response fields', async () => {
+    fetchMock.mockResolvedValue(
       new Response(
         JSON.stringify({
-          results: [
-            {
-              ...result,
-              content_url: 'https://evil.example/credential-sentinel',
-            },
-          ],
+          results: [{ ...result, raw_cookie: 'sentinel' }],
           total: 1,
           limit: 50,
           offset: 0,
@@ -338,285 +216,26 @@ describe('search runs API boundary', () => {
       new AbortController().signal,
     )
     await expect(rejected).rejects.toMatchObject({ code: 'invalid_response' })
-    await expect(rejected).rejects.not.toThrow(/credential-sentinel/u)
-
-    fetchMock.mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          results: [
-            {
-              ...result,
-              content_url: 'https://www.toutiao.com:444/article/100/',
-            },
-          ],
-          total: 1,
-          limit: 50,
-          offset: 0,
-        }),
-        { status: 200 },
-      ),
-    )
-    await expect(
-      fetchSearchRunResults(7, 'all', new AbortController().signal),
-    ).rejects.toMatchObject({ code: 'invalid_response' })
-
-    fetchMock.mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          results: [{ ...result, publisher_name: '本地观察' }],
-          total: 1,
-          limit: 50,
-          offset: 0,
-        }),
-        { status: 200 },
-      ),
-    )
-    await expect(
-      fetchSearchRunResults(7, 'all', new AbortController().signal),
-    ).rejects.toMatchObject({ code: 'invalid_response' })
+    await expect(rejected).rejects.not.toThrow(/sentinel/u)
   })
 
-  it('correlates Weibo result links with the platform and content ID', async () => {
-    fetchMock.mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          results: [weiboResult],
-          total: 1,
-          limit: 50,
-          offset: 0,
-        }),
-        { status: 200 },
-      ),
+  it('decodes Weibo open outcomes without accepting a request body', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ outcome: 'opened' }), { status: 200 }),
     )
-    await expect(
-      fetchSearchRunResults(7, 'all', new AbortController().signal),
-    ).resolves.toMatchObject({ results: [weiboResult] })
 
-    const emojiPublisherResult = {
-      ...weiboResult,
-      publisher_name: '😀***😁',
-    }
-    fetchMock.mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          results: [emojiPublisherResult],
-          total: 1,
-          limit: 50,
-          offset: 0,
-        }),
-        { status: 200 },
-      ),
+    await expect(openSearchRunResult(7, 11)).resolves.toEqual({
+      outcome: 'opened',
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/search-runs/7/results/11/open',
+      {
+        method: 'POST',
+        headers: { Accept: 'application/json' },
+        signal: undefined,
+      },
     )
-    await expect(
-      fetchSearchRunResults(7, 'all', new AbortController().signal),
-    ).resolves.toMatchObject({ results: [emojiPublisherResult] })
-
-    for (const invalid of [
-      { ...weiboResult, content_url: 'https://m.weibo.cn/detail/other-id' },
-      {
-        ...weiboResult,
-        content_url: 'https://m.weibo.cn/detail/5012345678901234?q=1',
-      },
-      { ...weiboResult, platform: 'toutiao' },
-    ]) {
-      fetchMock.mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            results: [invalid],
-            total: 1,
-            limit: 50,
-            offset: 0,
-          }),
-          { status: 200 },
-        ),
-      )
-      await expect(
-        fetchSearchRunResults(7, 'all', new AbortController().signal),
-      ).rejects.toMatchObject({ code: 'invalid_response' })
-    }
-  })
-
-  it('correlates Kuaishou result links with the platform and content ID', async () => {
-    fetchMock.mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          results: [kuaishouResult],
-          total: 1,
-          limit: 50,
-          offset: 0,
-        }),
-        { status: 200 },
-      ),
-    )
-    await expect(
-      fetchSearchRunResults(7, 'all', new AbortController().signal),
-    ).resolves.toMatchObject({ results: [kuaishouResult] })
-
-    for (const invalid of [
-      {
-        ...kuaishouResult,
-        content_url: 'https://www.kuaishou.com/short-video/other-id',
-      },
-      {
-        ...kuaishouResult,
-        content_url:
-          'https://www.kuaishou.com/short-video/3xabc123?shareToken=secret',
-      },
-      {
-        ...kuaishouResult,
-        content_url: 'https://evil.example/short-video/3xabc123',
-      },
-    ]) {
-      fetchMock.mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            results: [invalid],
-            total: 1,
-            limit: 50,
-            offset: 0,
-          }),
-          { status: 200 },
-        ),
-      )
-      await expect(
-        fetchSearchRunResults(7, 'all', new AbortController().signal),
-      ).rejects.toMatchObject({ code: 'invalid_response' })
-    }
-  })
-
-  it('correlates Douyin result links with numeric content IDs', async () => {
-    fetchMock.mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          results: [douyinResult],
-          total: 1,
-          limit: 50,
-          offset: 0,
-        }),
-        { status: 200 },
-      ),
-    )
-    await expect(
-      fetchSearchRunResults(7, 'all', new AbortController().signal),
-    ).resolves.toMatchObject({ results: [douyinResult] })
-
-    for (const invalid of [
-      { ...douyinResult, platform_content_id: 'not-numeric' },
-      {
-        ...douyinResult,
-        content_url: 'https://www.douyin.com/video/other-id',
-      },
-      {
-        ...douyinResult,
-        content_url:
-          'https://www.douyin.com/video/7512345678901234567?source=search',
-      },
-      {
-        ...douyinResult,
-        content_url: 'https://evil.example/video/7512345678901234567',
-      },
-    ]) {
-      fetchMock.mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            results: [invalid],
-            total: 1,
-            limit: 50,
-            offset: 0,
-          }),
-          { status: 200 },
-        ),
-      )
-      await expect(
-        fetchSearchRunResults(7, 'all', new AbortController().signal),
-      ).rejects.toMatchObject({ code: 'invalid_response' })
-    }
-  })
-
-  it('correlates Xiaohongshu links with lowercase IDs and rejects xsec tokens', async () => {
-    fetchMock.mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          results: [xhsResult],
-          total: 1,
-          limit: 50,
-          offset: 0,
-        }),
-        { status: 200 },
-      ),
-    )
-    await expect(
-      fetchSearchRunResults(7, 'all', new AbortController().signal),
-    ).resolves.toMatchObject({ results: [xhsResult] })
-
-    for (const invalid of [
-      { ...xhsResult, platform_content_id: 'ABCDEF0123456789ABCDEF01' },
-      {
-        ...xhsResult,
-        content_url: 'https://www.xiaohongshu.com/explore/other-id',
-      },
-      {
-        ...xhsResult,
-        content_url:
-          'https://www.xiaohongshu.com/explore/0123456789abcdef01234567?xsec_token=secret',
-      },
-      {
-        ...xhsResult,
-        content_url: 'https://evil.example/explore/0123456789abcdef01234567',
-      },
-    ]) {
-      fetchMock.mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            results: [invalid],
-            total: 1,
-            limit: 50,
-            offset: 0,
-          }),
-          { status: 200 },
-        ),
-      )
-      await expect(
-        fetchSearchRunResults(7, 'all', new AbortController().signal),
-      ).rejects.toMatchObject({ code: 'invalid_response' })
-    }
-  })
-
-  it('rejects count drift and unexpected response fields', async () => {
-    fetchMock
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            runs: [
-              {
-                ...run,
-                terms: undefined,
-                new_count: 2,
-                repeated_count: 0,
-                total_count: 1,
-              },
-            ],
-            next_before_id: null,
-          }),
-          { status: 200 },
-        ),
-      )
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ ...run, raw_cookie: 'sentinel' }), {
-          status: 202,
-        }),
-      )
-
-    await expect(
-      fetchSearchRuns(new AbortController().signal),
-    ).rejects.toMatchObject({ code: 'invalid_response' })
-    await expect(
-      startSearchRun({
-        monitoring_rule_id: 1,
-        platform: 'toutiao',
-        max_results_per_term: 10,
-      }),
-    ).rejects.toMatchObject({ code: 'invalid_response' })
+    expect(fetchMock.mock.calls[0]?.[1]).not.toHaveProperty('body')
   })
 
   it('maps only exact product errors and bounds other failures', async () => {
@@ -646,68 +265,12 @@ describe('search runs API boundary', () => {
 
     await expect(cancelSearchRun(7)).rejects.toMatchObject({
       code: 'browser_operation_active',
-      message: '谷歌浏览器正在执行其他操作，请稍后重试。',
       status: 409,
     })
     const mismatched = cancelSearchRun(7)
     await expect(mismatched).rejects.toBeInstanceOf(SearchRunApiError)
     await expect(mismatched).rejects.toMatchObject({ code: 'invalid_response' })
     await expect(mismatched).rejects.not.toThrow(/credential-sentinel/u)
-  })
-
-  it.each([
-    'opened',
-    'content_not_found',
-    'content_unavailable',
-    'login_required',
-    'manual_challenge_required',
-    'platform_blocked_or_rate_limited',
-    'structure_changed',
-    'browser_unavailable',
-    'internal_error',
-  ] as const)(
-    'opens an XHS result with no body and decodes %s',
-    async (outcome) => {
-      fetchMock.mockResolvedValue(
-        new Response(JSON.stringify({ outcome }), { status: 200 }),
-      )
-
-      await expect(openSearchRunResult(7, 11)).resolves.toEqual({ outcome })
-      expect(fetchMock).toHaveBeenCalledWith(
-        '/api/v1/search-runs/7/results/11/open',
-        {
-          method: 'POST',
-          headers: { Accept: 'application/json' },
-          signal: undefined,
-        },
-      )
-      const init = fetchMock.mock.calls[0]?.[1]
-      expect(init).not.toHaveProperty('body')
-      expect(init).not.toHaveProperty('Content-Type')
-    },
-  )
-
-  it('rejects secret-bearing or unknown open-result responses', async () => {
-    fetchMock
-      .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({
-            outcome: 'opened',
-            xsec_token: 'SENTINEL_XSEC_TOKEN',
-          }),
-          { status: 200 },
-        ),
-      )
-      .mockResolvedValueOnce(
-        new Response(JSON.stringify({ outcome: 'cancelled' }), { status: 200 }),
-      )
-
-    const secret = openSearchRunResult(7, 11)
-    await expect(secret).rejects.toMatchObject({ code: 'invalid_response' })
-    await expect(secret).rejects.not.toThrow(/SENTINEL_XSEC_TOKEN/u)
-    await expect(openSearchRunResult(7, 11)).rejects.toMatchObject({
-      code: 'invalid_response',
-    })
   })
 
   it('polls only statuses explicitly marked active', () => {

@@ -90,12 +90,8 @@ def list_reports(
 
 
 @router.post("", status_code=202, dependencies=[Depends(require_local_mutation)])
-async def create_report(
-    payload: ReportCreateRequest, service: Service
-) -> ReportRun:
-    return await service.create(
-        ReportCreate(**payload.model_dump(exclude_none=True))
-    )
+async def create_report(payload: ReportCreateRequest, service: Service) -> ReportRun:
+    return await service.create(ReportCreate(**payload.model_dump(exclude_none=True)))
 
 
 @router.get("/{report_id}")

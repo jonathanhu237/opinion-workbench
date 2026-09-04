@@ -1,5 +1,5 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useRef, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import { useEffect, useRef } from 'react'
 import { Link, useSearchParams } from 'react-router'
 
 import { Button, buttonVariants } from '@/components/ui/button'
@@ -10,29 +10,19 @@ import { useSearchBatchResults } from '@/hooks/use-search-batches'
 import {
   SEARCH_BATCHES_QUERY_KEY,
   type SearchBatchItem,
-  type SearchBatchResult,
 } from '@/lib/api/search-batches'
-import {
-  openSearchRunResult,
-  type SearchResultFilter,
-} from '@/lib/api/search-runs'
+import { type SearchResultFilter } from '@/lib/api/search-runs'
 import { SearchResultRecord } from '@/routes/search-result-record'
-import {
-  openErrorMessage,
-  openOutcomeMessages,
-  searchPlatformPresenters,
-} from '@/routes/search-run-presenters'
+import { searchPlatformPresenters } from '@/routes/search-run-presenters'
 
 const RESULT_LIMIT = 50
 
 export function CollectionBatchResults({
   batchId,
   item,
-  browserBusy,
 }: {
   batchId: number
   item: SearchBatchItem
-  browserBusy: boolean
 }) {
   const [params, setParams] = useSearchParams()
   const rawKind = params.get('kind')
@@ -67,23 +57,6 @@ export function CollectionBatchResults({
     }
     wasActive.current = active
   }, [active, batchId, item.position, queryClient])
-  const [feedback, setFeedback] = useState<{
-    resultId: number
-    message: string
-  } | null>(null)
-  const openMutation = useMutation({
-    mutationFn: (result: SearchBatchResult) =>
-      openSearchRunResult(result.source_run_id, result.id),
-    retry: false,
-    onMutate: () => setFeedback(null),
-    onSuccess: (response, result) =>
-      setFeedback({
-        resultId: result.id,
-        message: openOutcomeMessages[response.outcome],
-      }),
-    onError: (error, result) =>
-      setFeedback({ resultId: result.id, message: openErrorMessage(error) }),
-  })
   function changePage(nextOffset: number) {
     const next = new URLSearchParams(params)
     next.set('platform', item.platform)
@@ -155,24 +128,7 @@ export function CollectionBatchResults({
           ) : (
             resultsQuery.data.results.map((result) => (
               <div key={result.id}>
-                <SearchResultRecord
-                  result={result}
-                  openPending={browserBusy || openMutation.isPending}
-                  activeOpenResultId={
-                    openMutation.isPending ? openMutation.variables.id : null
-                  }
-                  openFeedback={
-                    browserBusy && result.platform === 'xhs'
-                      ? '采集正在使用浏览器，请等采集结束或取消后再打开原文。'
-                      : feedback?.resultId === result.id
-                        ? feedback.message
-                        : null
-                  }
-                  onOpen={() => {
-                    if (!browserBusy && !openMutation.isPending)
-                      openMutation.mutate(result)
-                  }}
-                />
+                <SearchResultRecord result={result} />
                 <div className="px-5 pb-3">
                   <Link
                     className={buttonVariants({ variant: 'ghost', size: 'sm' })}

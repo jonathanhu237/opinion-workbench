@@ -1,8 +1,8 @@
 """Project-owned collection contracts; no browser, transport or legacy imports.
 
-The compatibility worker re-exports these values so historical callers remain
-valid. Application services use only this boundary. Runtime selection is explicit:
-an injected collector never falls back to the legacy process after a failure.
+Application services depend on these small protocols and result values instead
+of a platform-specific process. Runtime selection is explicit: an injected
+collector never falls back to another implementation after a failure.
 """
 
 from collections.abc import Awaitable, Callable, Sequence
@@ -26,7 +26,7 @@ class QuiescentProcess(Protocol):
     def returncode(self) -> int | None: ...
 
 
-AuthPlatformId = Literal["wb", "dy", "ks", "xhs", "toutiao"]
+AuthPlatformId = Literal["wb"]
 AuthProgressPhase = Literal[
     "waiting_for_browser",
     "waiting_for_approval",
@@ -90,10 +90,9 @@ SearchTermCompletedCallback = Callable[[int, int], Awaitable[None]]
 
 
 def supports_platform(collector, platform):
-    """No-I/O capability check; absent metadata preserves the legacy adapter."""
-    return platform in getattr(
-        collector, "supported_platforms", ("wb", "dy", "ks", "xhs", "toutiao")
-    )
+    """Return whether the native Weibo collector owns this platform."""
+    supported = getattr(collector, "supported_platforms", None)
+    return platform == "wb" and (supported is None or platform in supported)
 
 
 class AuthWorkerError(Exception):

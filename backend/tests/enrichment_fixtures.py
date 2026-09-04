@@ -12,20 +12,15 @@ PNG = base64.b64decode(
 
 
 def content_payload(platform="wb", identity="12345", url=None):
-    urls = {
-        "wb": f"https://m.weibo.cn/detail/{identity}",
-        "dy": f"https://www.douyin.com/video/{identity}",
-        "ks": f"https://www.kuaishou.com/short-video/{identity}",
-        "xhs": f"https://www.xiaohongshu.com/explore/{identity}",
-        "toutiao": f"https://www.toutiao.com/article/{identity}/",
-    }
+    if platform != "wb":
+        raise ValueError("only Weibo fixtures are supported")
     return {
         "schema_version": 1,
         "platform": platform,
         "content_id": identity,
-        "content_url": url or urls[platform],
+        "content_url": url or f"https://m.weibo.cn/detail/{identity}",
         "acquired_at": 1_788_000_000_000,
-        "extractor_version": f"{platform}-enrichment-v1",
+        "extractor_version": "wb-enrichment-v1",
         "status": "ready",
         "text": {"title": "正文标题", "body": "完整的正文。", "coverage": "complete"},
         "detected_modalities": ["text"],
