@@ -259,8 +259,8 @@ describe('Longtian public opinion application', () => {
     expect(links.map((link) => link.textContent)).toEqual([
       '平台账号',
       '监控规则',
-      '自动任务',
       '舆情爬取',
+      '自动任务',
       '设置',
     ])
     const platformAccountsLink = within(navigation).getByRole('link', {
@@ -432,8 +432,8 @@ describe('Longtian public opinion application', () => {
     expect(links.map((link) => link.textContent)).toEqual([
       '平台账号',
       '监控规则',
-      '自动任务',
       '舆情爬取',
+      '自动任务',
       '设置',
     ])
     expect(within(dialog).getAllByRole('separator')).toHaveLength(1)

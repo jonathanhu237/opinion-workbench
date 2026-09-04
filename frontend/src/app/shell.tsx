@@ -188,14 +188,6 @@ function PrimaryNavigation() {
       isActive: location.pathname === '/monitoring-rules',
     },
     {
-      label: '自动任务',
-      to: '/automation-tasks',
-      icon: ClipboardList,
-      isActive:
-        location.pathname.startsWith('/automation-tasks') ||
-        location.pathname.startsWith('/automation-runs'),
-    },
-    {
       label: '舆情爬取',
       to: '/collection-runs',
       icon: ClipboardList,
@@ -247,6 +239,24 @@ function PrimaryNavigation() {
           },
         ]}
       />
+      <SidebarMenuItem>
+        <SidebarMenuButton
+          render={
+            <NavLink
+              to="/automation-tasks"
+              onClick={() => setOpenMobile(false)}
+            />
+          }
+          isActive={
+            location.pathname.startsWith('/automation-tasks') ||
+            location.pathname.startsWith('/automation-runs')
+          }
+          className="min-h-11 gap-3 rounded-lg px-3 text-sidebar-foreground/78 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground md:min-h-10 data-active:bg-sidebar-primary data-active:text-sidebar-primary-foreground data-active:shadow-[inset_3px_0_0_var(--sidebar-ring)]"
+        >
+          <ClipboardList className="size-4" aria-hidden />
+          <span>自动任务</span>
+        </SidebarMenuButton>
+      </SidebarMenuItem>
       <SidebarMenuItem>
         <SidebarMenuButton
           render={
