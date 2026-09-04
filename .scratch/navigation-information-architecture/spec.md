@@ -1,6 +1,6 @@
 # 导航层级与页面标题精简
 
-Status: claimed
+Status: resolved
 
 Labels: ready-for-agent
 
@@ -143,4 +143,10 @@ Labels: ready-for-agent
 - 当前侧边栏已经具备可复用的二级菜单原语，实施应复用既有组件及可访问语义。是否使用内部折叠辅助组件属于实现细节，不改变本规格行为。
 - 领域术语表已明确区分报告生成、舆情报告和报告记录；实施文案、测试名称及后续任务应沿用这些词语。
 - 导航层级和文案精简均为可逆的前端信息架构调整，不满足新增架构决策记录的必要条件，因此本次不新增 ADR。
-- 本规格发布到项目约定的本地 Markdown 任务跟踪目录并标记 `ready-for-agent`。该标签表示可以在后续明确授权后领取实施，不表示本次规格整理已经开始修改产品。
+- 本规格已完成实现；旧地址兼容、活动/历史任务承接、报告详情分页状态和无障碍导航语义均已纳入回归测试。
+
+## Comments
+
+- 2026-09-04：完成前端实现，新增 `/reports/new`、`/reports/history`、`/settings/ai`、`/settings/media` 四个规范地址；旧 `/results`、`/ai-settings`、`/media-settings` 保留兼容跳转。
+- 2026-09-04：前端全量测试 34 个文件、565 个测试通过；typecheck、lint、Prettier 检查和 production build 通过；后端现有 1184 个测试通过。
+- 2026-09-04：基于固定基线完成 Standards/Spec 双向审查，无 P0/P1/P2 阻塞项。
