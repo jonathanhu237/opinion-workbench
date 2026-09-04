@@ -14,7 +14,6 @@ import { NavLink, Outlet, useLocation, useOutletContext } from 'react-router'
 import {
   Sidebar,
   SidebarContent,
-  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
   SidebarGroupLabel,
@@ -376,6 +375,12 @@ export function AppShell() {
         <nav aria-label="主导航" className="flex min-h-0 flex-1 flex-col">
           <SidebarContent className="px-2 py-3">
             <SidebarGroup className="p-0">
+              <SidebarGroupContent>
+                <SettingsNavigation />
+              </SidebarGroupContent>
+            </SidebarGroup>
+            <SidebarSeparator className="my-2" />
+            <SidebarGroup className="p-0">
               <SidebarGroupLabel className="px-3 text-[10px] tracking-[0.16em] text-sidebar-foreground/60">
                 值守功能
               </SidebarGroupLabel>
@@ -384,10 +389,6 @@ export function AppShell() {
               </SidebarGroupContent>
             </SidebarGroup>
           </SidebarContent>
-          <SidebarSeparator />
-          <SidebarFooter className="px-2 py-3">
-            <SettingsNavigation />
-          </SidebarFooter>
         </nav>
       </Sidebar>
 

@@ -286,6 +286,11 @@ describe('Longtian public opinion application', () => {
       throw new Error('Desktop sidebar was not rendered')
     }
     expect(within(sidebar).getAllByRole('separator')).toHaveLength(2)
+    expect(
+      within(navigation)
+        .getAllByRole('button')
+        .map((button) => button.textContent),
+    ).toEqual(['设置', '舆情报告'])
     expect(screen.queryByText('单机值守模式')).toBeNull()
     expect(screen.queryByText('数据与浏览器操作仅留在本机')).toBeNull()
 
