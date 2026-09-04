@@ -177,17 +177,19 @@ function PolicyForm({ policy }: { policy: MediaPolicy }) {
   )
 }
 
-export function MediaSettings() {
+export function MediaSettings({ embedded = false }: { embedded?: boolean }) {
   const query = useQuery({
     queryKey: MEDIA_POLICY_KEY,
     queryFn: ({ signal }) => fetchMediaPolicy(signal),
     retry: false,
   })
   return (
-    <section className="space-y-6" aria-label="原媒体保留策略">
-      <header>
-        <h2 className="font-display text-2xl">原媒体保留策略</h2>
-      </header>
+    <section className="flex flex-col gap-6" aria-label="原媒体保留策略">
+      {!embedded && (
+        <header>
+          <h2 className="font-display text-2xl">原媒体保留策略</h2>
+        </header>
+      )}
       {query.isPending && <p role="status">正在读取媒体策略…</p>}
       {query.isError && (
         <div role="alert" className="space-y-2 text-sm">

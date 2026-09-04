@@ -5,7 +5,6 @@ import { createMemoryRouter } from 'react-router'
 import { RouterProvider } from 'react-router/dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import App from './App'
 import { appRoutes } from './app/router'
 import douyinLogo from './assets/platforms/douyin.svg'
 import kuaishouLogo from './assets/platforms/kuaishou.svg'
@@ -18,6 +17,7 @@ import {
   HEALTH_SERVICE,
   type HealthResponse,
 } from './lib/api/health'
+import { fetchMediaPolicy } from './lib/api/media-cache'
 import {
   fetchMonitoringRules,
   type MonitoringRulesResponse,
@@ -30,8 +30,6 @@ import {
   type PlatformConnectionsResponse,
 } from './lib/api/platform-connections'
 import { fetchSearchRuns } from './lib/api/search-runs'
-import { fetchWorkbench } from './lib/api/workbench'
-import { workbenchFixture } from './lib/api/workbench.fixtures'
 
 vi.mock('./lib/api/health', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./lib/api/health')>()
@@ -68,6 +66,11 @@ vi.mock('./lib/api/monitoring-rules', async (importOriginal) => {
   }
 })
 
+vi.mock('./lib/api/media-cache', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./lib/api/media-cache')>()
+  return { ...actual, fetchMediaPolicy: vi.fn() }
+})
+
 vi.mock('./lib/api/search-runs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./lib/api/search-runs')>()
 
@@ -75,11 +78,6 @@ vi.mock('./lib/api/search-runs', async (importOriginal) => {
     ...actual,
     fetchSearchRuns: vi.fn(),
   }
-})
-
-vi.mock('./lib/api/workbench', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('./lib/api/workbench')>()
-  return { ...actual, fetchWorkbench: vi.fn() }
 })
 
 const connectedResponse: HealthResponse = {
@@ -159,8 +157,8 @@ const mockedFetchAISettings = vi.mocked(fetchAISettings)
 const mockedFetchPlatformConnections = vi.mocked(fetchPlatformConnections)
 const mockedStartAttempt = vi.mocked(startPlatformConnectionAttempt)
 const mockedFetchMonitoringRules = vi.mocked(fetchMonitoringRules)
+const mockedFetchMediaPolicy = vi.mocked(fetchMediaPolicy)
 const mockedFetchSearchRuns = vi.mocked(fetchSearchRuns)
-const mockedFetchWorkbench = vi.mocked(fetchWorkbench)
 const defaultMatchMedia = window.matchMedia
 
 function renderRoute(initialEntry = '/') {
@@ -211,8 +209,15 @@ describe('Longtian public opinion application', () => {
     mockedFetchPlatformConnections.mockReset()
     mockedStartAttempt.mockReset()
     mockedFetchMonitoringRules.mockReset()
+    mockedFetchMediaPolicy.mockReset().mockResolvedValue({
+      retention_days: 30,
+      capacity_mib: 1024,
+      revision: 0,
+      reserved_bytes: 0,
+      files: 0,
+      pending_files: 0,
+    })
     mockedFetchSearchRuns.mockReset()
-    mockedFetchWorkbench.mockReset().mockResolvedValue(workbenchFixture())
     mockedFetchHealth.mockResolvedValue(connectedResponse)
     mockedFetchPlatformConnections.mockResolvedValue(catalog())
     mockedFetchMonitoringRules.mockResolvedValue(monitoringRulesResponse)
@@ -222,55 +227,49 @@ describe('Longtian public opinion application', () => {
     })
   })
 
-  it('renders the read-only workbench through the application providers', async () => {
-    render(<App />)
+  it('opens platform accounts directly from the application root', async () => {
+    const { router } = renderRoute()
 
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe('/platform-accounts'),
+    )
     expect(
-      screen.getByRole('heading', { name: '工作台', level: 1 }),
+      screen.getByRole('heading', { name: '平台账号', level: 1 }),
     ).toBeInTheDocument()
-    expect(screen.getByRole('main')).toHaveAccessibleName('工作台')
-    expect(
-      await screen.findByRole('heading', { name: '当前状态尚未完全确认' }),
-    ).toBeInTheDocument()
-    expect(screen.getByText('还没有可阅读的舆情报告')).toBeInTheDocument()
-    expect(screen.getByText('平台准备情况')).toBeInTheDocument()
-    expect(screen.queryByText('今日发现', { exact: true })).toBeNull()
-    expect(screen.queryByText('待跟进', { exact: true })).toBeNull()
-    expect(screen.queryByText('已处理', { exact: true })).toBeNull()
-    expect(mockedFetchWorkbench).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('main')).toHaveAccessibleName('平台账号')
+    expect(await screen.findByText('微博')).toBeInTheDocument()
+    expect(screen.queryByText('工作台')).toBeNull()
     expect(mockedFetchPlatformConnections).toHaveBeenCalledTimes(1)
     expect(mockedFetchMonitoringRules).not.toHaveBeenCalled()
   })
 
-  it('groups report and settings destinations while marking the active page', async () => {
+  it('groups report destinations and keeps settings as a single-level link', async () => {
     const user = userEvent.setup()
     const { router } = renderRoute()
 
-    expect(router.state.location.pathname).toBe('/')
+    await waitFor(() =>
+      expect(router.state.location.pathname).toBe('/platform-accounts'),
+    )
     expect(
-      screen.getByRole('heading', { name: '工作台', level: 1 }),
+      screen.getByRole('heading', { name: '平台账号', level: 1 }),
     ).toBeInTheDocument()
     const navigation = screen.getByRole('navigation', { name: '主导航' })
     const links = within(navigation).getAllByRole('link')
     expect(links).toHaveLength(5)
     expect(links.map((link) => link.textContent)).toEqual([
-      '工作台',
       '平台账号',
       '监控规则',
       '自动任务',
       '舆情爬取',
+      '设置',
     ])
-    const workbenchLink = within(navigation).getByRole('link', {
-      name: '工作台',
-    })
     const platformAccountsLink = within(navigation).getByRole('link', {
       name: '平台账号',
     })
     const monitoringRulesLink = within(navigation).getByRole('link', {
       name: '监控规则',
     })
-    expect(workbenchLink).toHaveAttribute('aria-current', 'page')
-    expect(platformAccountsLink).not.toHaveAttribute('aria-current')
+    expect(platformAccountsLink).toHaveAttribute('aria-current', 'page')
     expect(monitoringRulesLink).not.toHaveAttribute('aria-current')
     for (const label of [
       '舆情信息',
@@ -285,12 +284,13 @@ describe('Longtian public opinion application', () => {
     if (sidebar === null) {
       throw new Error('Desktop sidebar was not rendered')
     }
-    expect(within(sidebar).getAllByRole('separator')).toHaveLength(2)
+    expect(within(sidebar).getAllByRole('separator')).toHaveLength(1)
     expect(
       within(navigation)
         .getAllByRole('button')
         .map((button) => button.textContent),
-    ).toEqual(['设置', '舆情报告'])
+    ).toEqual(['舆情报告'])
+    expect(within(navigation).queryByText('值守功能')).toBeNull()
     expect(screen.queryByText('单机值守模式')).toBeNull()
     expect(screen.queryByText('数据与浏览器操作仅留在本机')).toBeNull()
 
@@ -301,9 +301,7 @@ describe('Longtian public opinion application', () => {
       await screen.findByRole('heading', { name: '平台账号', level: 1 }),
     ).toBeInTheDocument()
     expect(platformAccountsLink).toHaveAttribute('aria-current', 'page')
-    expect(workbenchLink).not.toHaveAttribute('aria-current')
     expect(screen.getByRole('main')).toHaveAccessibleName('平台账号')
-    expect(screen.getByRole('main')).toHaveFocus()
 
     await user.click(within(navigation).getByRole('link', { name: '监控规则' }))
 
@@ -349,33 +347,49 @@ describe('Longtian public opinion application', () => {
       within(navigation).getByRole('link', { name: '报告记录' }),
     ).toHaveAttribute('href', '/reports/history')
 
-    const settingsGroup = within(navigation).getByRole('button', {
+    const settingsLink = within(navigation).getByRole('link', {
       name: '设置',
     })
-    expect(settingsGroup).toHaveAttribute('aria-expanded', 'false')
-    await user.click(settingsGroup)
-    expect(settingsGroup).toHaveAttribute('aria-expanded', 'true')
-    await user.click(within(navigation).getByRole('link', { name: 'AI 配置' }))
+    expect(settingsLink).toHaveAttribute('href', '/settings')
+    await user.click(settingsLink)
     expect(await screen.findByLabelText('API Key')).toBeVisible()
-    expect(router.state.location.pathname).toBe('/settings/ai')
+    expect(router.state.location.pathname).toBe('/settings')
     expect(
-      screen.getByRole('heading', { name: 'AI 配置', level: 1 }),
+      screen.getByRole('heading', { name: '设置', level: 1 }),
     ).toBeVisible()
     expect(
-      within(navigation).getByRole('link', { name: 'AI 配置' }),
-    ).toHaveAttribute('aria-current', 'page')
-    expect(screen.getByRole('main')).toHaveAccessibleName('AI 配置')
+      screen.getByRole('heading', { name: 'AI 配置', level: 2 }),
+    ).toBeVisible()
+    expect(
+      screen.getByRole('heading', { name: '媒体缓存', level: 2 }),
+    ).toBeVisible()
+    expect(settingsLink).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByRole('main')).toHaveAccessibleName('设置')
     expect(screen.getByRole('main')).toHaveFocus()
   })
 
-  it('offers a keyboard skip link to the named main content region', () => {
+  it('redirects legacy settings links to the matching unified section', async () => {
+    const { router } = renderRoute('/settings/media?source=legacy')
+
+    await waitFor(() =>
+      expect(router.state.location).toMatchObject({
+        pathname: '/settings',
+        search: '?source=legacy',
+        hash: '#media',
+      }),
+    )
+  })
+
+  it('offers a keyboard skip link to the named main content region', async () => {
     renderRoute()
 
     expect(screen.getByRole('link', { name: '跳到主要内容' })).toHaveAttribute(
       'href',
       '#main-content',
     )
-    expect(screen.getByRole('main')).toHaveAccessibleName('工作台')
+    expect(
+      await screen.findByRole('main', { name: '平台账号' }),
+    ).toBeInTheDocument()
   })
 
   it('labels platform readiness as loading until the catalog arrives', async () => {
@@ -416,13 +430,13 @@ describe('Longtian public opinion application', () => {
     const links = within(navigation).getAllByRole('link')
     expect(links).toHaveLength(5)
     expect(links.map((link) => link.textContent)).toEqual([
-      '工作台',
       '平台账号',
       '监控规则',
       '自动任务',
       '舆情爬取',
+      '设置',
     ])
-    expect(within(dialog).getAllByRole('separator')).toHaveLength(2)
+    expect(within(dialog).getAllByRole('separator')).toHaveLength(1)
     expect(within(dialog).queryByText('单机值守模式')).toBeNull()
     expect(within(dialog).queryByText('数据与浏览器操作仅留在本机')).toBeNull()
 
@@ -439,11 +453,11 @@ describe('Longtian public opinion application', () => {
       name: '主导航',
     })
     await user.click(
-      within(reopenedDialog).getByRole('link', { name: '工作台' }),
+      within(reopenedDialog).getByRole('link', { name: '平台账号' }),
     )
 
     expect(
-      await screen.findByRole('heading', { name: '工作台', level: 1 }),
+      await screen.findByRole('heading', { name: '平台账号', level: 1 }),
     ).toBeInTheDocument()
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
   })

@@ -5,7 +5,6 @@ import {
   FileSearch,
   ListChecks,
   Settings2,
-  SlidersHorizontal,
   type LucideIcon,
 } from 'lucide-react'
 import { useEffect, useReducer, useRef, useState } from 'react'
@@ -16,7 +15,6 @@ import {
   SidebarContent,
   SidebarGroup,
   SidebarGroupContent,
-  SidebarGroupLabel,
   SidebarHeader,
   SidebarInset,
   SidebarMenu,
@@ -48,15 +46,14 @@ type ShellContext = {
 }
 
 const pageTitles: Record<string, string> = {
-  '/': '工作台',
+  '/': '平台账号',
   '/platform-accounts': '平台账号',
   '/monitoring-rules': '监控规则',
   '/collection-runs': '舆情爬取',
   '/automation-tasks': '自动任务',
   '/reports/new': '生成报告',
   '/reports/history': '报告记录',
-  '/settings/ai': 'AI 配置',
-  '/settings/media': '媒体缓存',
+  '/settings': '设置',
   '/results': '生成报告',
   '/ai-settings': 'AI 配置',
   '/media-settings': '媒体缓存',
@@ -167,6 +164,10 @@ function PrimaryNavigation() {
   const { setOpenMobile } = useSidebar()
   const reportsActive =
     location.pathname.startsWith('/reports') || location.pathname === '/results'
+  const settingsActive =
+    location.pathname.startsWith('/settings') ||
+    location.pathname === '/ai-settings' ||
+    location.pathname === '/media-settings'
   const [reportsOpen, setReportsOpen] = useState(reportsActive)
 
   useEffect(() => {
@@ -174,12 +175,6 @@ function PrimaryNavigation() {
   }, [reportsActive])
 
   const navigationItems = [
-    {
-      label: '工作台',
-      to: '/',
-      icon: SlidersHorizontal,
-      isActive: location.pathname === '/',
-    },
     {
       label: '平台账号',
       to: '/platform-accounts',
@@ -217,11 +212,7 @@ function PrimaryNavigation() {
       <SidebarMenuItem key={item.to}>
         <SidebarMenuButton
           render={
-            <NavLink
-              to={item.to}
-              end={item.to === '/'}
-              onClick={() => setOpenMobile(false)}
-            />
+            <NavLink to={item.to} end onClick={() => setOpenMobile(false)} />
           }
           isActive={item.isActive}
           className="min-h-11 gap-3 rounded-lg px-3 text-sidebar-foreground/78 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground md:min-h-10 data-active:bg-sidebar-primary data-active:text-sidebar-primary-foreground data-active:shadow-[inset_3px_0_0_var(--sidebar-ring)]"
@@ -256,44 +247,18 @@ function PrimaryNavigation() {
           },
         ]}
       />
-    </SidebarMenu>
-  )
-}
-
-function SettingsNavigation() {
-  const location = useLocation()
-  const settingsActive =
-    location.pathname.startsWith('/settings') ||
-    location.pathname === '/ai-settings' ||
-    location.pathname === '/media-settings'
-  const [open, setOpen] = useState(settingsActive)
-
-  useEffect(() => {
-    if (settingsActive) setOpen(true)
-  }, [settingsActive])
-
-  return (
-    <SidebarMenu>
-      <SidebarExpandableGroup
-        id="settings"
-        label="设置"
-        icon={Settings2}
-        open={open}
-        active={settingsActive}
-        onToggle={() => setOpen((current) => !current)}
-        items={[
-          {
-            label: 'AI 配置',
-            to: '/settings/ai',
-            isActive: location.pathname === '/settings/ai',
-          },
-          {
-            label: '媒体缓存',
-            to: '/settings/media',
-            isActive: location.pathname === '/settings/media',
-          },
-        ]}
-      />
+      <SidebarMenuItem>
+        <SidebarMenuButton
+          render={
+            <NavLink to="/settings" onClick={() => setOpenMobile(false)} />
+          }
+          isActive={settingsActive}
+          className="min-h-11 gap-3 rounded-lg px-3 text-sidebar-foreground/78 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground md:min-h-10 data-active:bg-sidebar-primary data-active:text-sidebar-primary-foreground data-active:shadow-[inset_3px_0_0_var(--sidebar-ring)]"
+        >
+          <Settings2 className="size-4" aria-hidden />
+          <span>设置</span>
+        </SidebarMenuButton>
+      </SidebarMenuItem>
     </SidebarMenu>
   )
 }
@@ -375,15 +340,6 @@ export function AppShell() {
         <nav aria-label="主导航" className="flex min-h-0 flex-1 flex-col">
           <SidebarContent className="px-2 py-3">
             <SidebarGroup className="p-0">
-              <SidebarGroupContent>
-                <SettingsNavigation />
-              </SidebarGroupContent>
-            </SidebarGroup>
-            <SidebarSeparator className="my-2" />
-            <SidebarGroup className="p-0">
-              <SidebarGroupLabel className="px-3 text-[10px] tracking-[0.16em] text-sidebar-foreground/60">
-                值守功能
-              </SidebarGroupLabel>
               <SidebarGroupContent>
                 <PrimaryNavigation />
               </SidebarGroupContent>

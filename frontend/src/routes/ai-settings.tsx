@@ -21,6 +21,7 @@ import {
   testAIConnection,
   type AISettings as Settings,
 } from '@/lib/api/ai-settings'
+import { cn } from '@/lib/utils'
 
 const emptySettings: Settings = {
   base_url: null,
@@ -339,7 +340,7 @@ function SettingsForm({ saved }: { saved: Settings }) {
   )
 }
 
-export function AISettings() {
+export function AISettings({ embedded = false }: { embedded?: boolean }) {
   const query = useQuery({
     queryKey: AI_SETTINGS_QUERY_KEY,
     queryFn: ({ signal }) => fetchAISettings(signal),
@@ -358,7 +359,10 @@ export function AISettings() {
   return (
     <section
       aria-label="模型连接配置"
-      className="max-w-xl space-y-5 rounded-xl border border-border bg-card p-5 sm:p-6"
+      className={cn(
+        'max-w-xl space-y-5',
+        !embedded && 'rounded-xl border border-border bg-card p-5 sm:p-6',
+      )}
     >
       {query.isError && (
         <div className="space-y-3">

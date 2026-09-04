@@ -9,7 +9,6 @@ import { AppShell } from '@/app/shell'
 import { isReportRecordContext } from '@/lib/report-route-state'
 import { PlatformAccounts } from '@/routes/platform-accounts'
 import { RouteErrorBoundary } from '@/routes/route-error-boundary'
-import { Workbench } from '@/routes/workbench'
 
 export const appRoutes: RouteObject[] = [
   {
@@ -19,7 +18,7 @@ export const appRoutes: RouteObject[] = [
     children: [
       {
         index: true,
-        element: <Workbench />,
+        element: <Navigate replace to="/platform-accounts" />,
       },
       {
         path: 'automation-tasks',
@@ -64,28 +63,24 @@ export const appRoutes: RouteObject[] = [
         element: <PlatformAccounts />,
       },
       {
-        path: 'settings/ai',
+        path: 'settings',
         hydrateFallbackElement: (
           <p role="status" className="text-sm text-muted-foreground">
-            正在加载 AI 配置…
+            正在加载设置…
           </p>
         ),
         lazy: async () => {
-          const { AISettings } = await import('@/routes/ai-settings')
-          return { Component: AISettings }
+          const { Settings } = await import('@/routes/settings')
+          return { Component: Settings }
         },
       },
       {
+        path: 'settings/ai',
+        element: <LegacyPathRedirect to="/settings" hash="#ai" />,
+      },
+      {
         path: 'settings/media',
-        hydrateFallbackElement: (
-          <p role="status" className="text-sm text-muted-foreground">
-            正在加载媒体缓存…
-          </p>
-        ),
-        lazy: async () => {
-          const { MediaSettings } = await import('@/routes/media-settings')
-          return { Component: MediaSettings }
-        },
+        element: <LegacyPathRedirect to="/settings" hash="#media" />,
       },
       {
         path: 'monitoring-rules',
@@ -129,11 +124,11 @@ export const appRoutes: RouteObject[] = [
       },
       {
         path: 'ai-settings',
-        element: <LegacyPathRedirect to="/settings/ai" />,
+        element: <LegacyPathRedirect to="/settings" hash="#ai" />,
       },
       {
         path: 'media-settings',
-        element: <LegacyPathRedirect to="/settings/media" />,
+        element: <LegacyPathRedirect to="/settings" hash="#media" />,
       },
       {
         path: 'collection-runs',
@@ -193,12 +188,16 @@ function LegacyResultsRedirect() {
   return <Navigate replace to={legacyResultsDestination(location.search)} />
 }
 
-function LegacyPathRedirect({ to }: { to: string }) {
+function LegacyPathRedirect({ to, hash }: { to: string; hash?: string }) {
   const location = useLocation()
   return (
     <Navigate
       replace
-      to={{ pathname: to, search: location.search, hash: location.hash }}
+      to={{
+        pathname: to,
+        search: location.search,
+        hash: hash ?? location.hash,
+      }}
     />
   )
 }

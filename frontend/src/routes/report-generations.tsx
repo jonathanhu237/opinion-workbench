@@ -329,7 +329,7 @@ function GenerationDetails({ value }: { value: ReportGeneration }) {
       {value.status === 'configuration_blocked' && (
         <p className="text-sm">
           同一配置下的相关手动任务已停止，不会逐条重复失败请求。
-          <Link className="underline underline-offset-4" to="/settings/ai">
+          <Link className="underline underline-offset-4" to="/settings#ai">
             检查模型设置
           </Link>
         </p>

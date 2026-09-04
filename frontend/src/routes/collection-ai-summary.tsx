@@ -471,7 +471,7 @@ export function CollectionAISummary({
           {admissionMessage}
           {!settingsQuery.isPending && !settings?.has_api_key && (
             <Link
-              to="/settings/ai"
+              to="/settings#ai"
               className="ml-2 underline underline-offset-4"
             >
               前往 AI 配置
