@@ -658,15 +658,7 @@ export function MonitoringRules() {
 
   return (
     <div className="space-y-5">
-      <section className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h2 className="font-display text-2xl font-semibold tracking-[-0.035em] text-foreground sm:text-[1.75rem]">
-            监控规则
-          </h2>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-            填写对象和关键词，查看要搜索的词。
-          </p>
-        </div>
+      <section className="flex justify-end">
         <Button
           type="button"
           className="min-h-11 w-full sm:min-h-8 sm:w-auto"

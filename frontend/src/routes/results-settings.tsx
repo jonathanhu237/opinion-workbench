@@ -183,7 +183,7 @@ export function ResultsSettings({
           {!provider?.has_api_key && (
             <Link
               className={buttonVariants({ variant: 'link' })}
-              to="/ai-settings"
+              to="/settings/ai"
             >
               先保存 AI 配置
             </Link>

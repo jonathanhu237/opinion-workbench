@@ -242,7 +242,7 @@ describe('Longtian public opinion application', () => {
     expect(mockedFetchMonitoringRules).not.toHaveBeenCalled()
   })
 
-  it('keeps the eight real navigation destinations and marks them exactly', async () => {
+  it('groups report and settings destinations while marking the active page', async () => {
     const user = userEvent.setup()
     const { router } = renderRoute()
 
@@ -252,16 +252,13 @@ describe('Longtian public opinion application', () => {
     ).toBeInTheDocument()
     const navigation = screen.getByRole('navigation', { name: '主导航' })
     const links = within(navigation).getAllByRole('link')
-    expect(links).toHaveLength(8)
+    expect(links).toHaveLength(5)
     expect(links.map((link) => link.textContent)).toEqual([
       '工作台',
       '平台账号',
       '监控规则',
       '自动任务',
       '舆情爬取',
-      '报告生成',
-      'AI 配置',
-      '媒体缓存',
     ])
     const workbenchLink = within(navigation).getByRole('link', {
       name: '工作台',
@@ -288,7 +285,7 @@ describe('Longtian public opinion application', () => {
     if (sidebar === null) {
       throw new Error('Desktop sidebar was not rendered')
     }
-    expect(within(sidebar).getAllByRole('separator')).toHaveLength(1)
+    expect(within(sidebar).getAllByRole('separator')).toHaveLength(2)
     expect(screen.queryByText('单机值守模式')).toBeNull()
     expect(screen.queryByText('数据与浏览器操作仅留在本机')).toBeNull()
 
@@ -334,9 +331,28 @@ describe('Longtian public opinion application', () => {
     expect(screen.getByRole('main')).toHaveAccessibleName('舆情爬取')
     expect(screen.getByRole('main')).toHaveFocus()
 
+    const reportGroup = within(navigation).getByRole('button', {
+      name: '舆情报告',
+    })
+    expect(reportGroup).toHaveAttribute('aria-expanded', 'false')
+    await user.click(reportGroup)
+    expect(reportGroup).toHaveAttribute('aria-expanded', 'true')
+    expect(
+      within(navigation).getByRole('link', { name: '生成报告' }),
+    ).toHaveAttribute('href', '/reports/new')
+    expect(
+      within(navigation).getByRole('link', { name: '报告记录' }),
+    ).toHaveAttribute('href', '/reports/history')
+
+    const settingsGroup = within(navigation).getByRole('button', {
+      name: '设置',
+    })
+    expect(settingsGroup).toHaveAttribute('aria-expanded', 'false')
+    await user.click(settingsGroup)
+    expect(settingsGroup).toHaveAttribute('aria-expanded', 'true')
     await user.click(within(navigation).getByRole('link', { name: 'AI 配置' }))
     expect(await screen.findByLabelText('API Key')).toBeVisible()
-    expect(router.state.location.pathname).toBe('/ai-settings')
+    expect(router.state.location.pathname).toBe('/settings/ai')
     expect(
       screen.getByRole('heading', { name: 'AI 配置', level: 1 }),
     ).toBeVisible()
@@ -393,25 +409,23 @@ describe('Longtian public opinion application', () => {
       name: '主导航',
     })
     const links = within(navigation).getAllByRole('link')
-    expect(links).toHaveLength(8)
+    expect(links).toHaveLength(5)
     expect(links.map((link) => link.textContent)).toEqual([
       '工作台',
       '平台账号',
       '监控规则',
       '自动任务',
       '舆情爬取',
-      '报告生成',
-      'AI 配置',
-      '媒体缓存',
     ])
-    expect(within(dialog).getAllByRole('separator')).toHaveLength(1)
+    expect(within(dialog).getAllByRole('separator')).toHaveLength(2)
     expect(within(dialog).queryByText('单机值守模式')).toBeNull()
     expect(within(dialog).queryByText('数据与浏览器操作仅留在本机')).toBeNull()
 
-    await user.click(within(dialog).getByRole('link', { name: '监控规则' }))
+    await user.click(within(dialog).getByRole('button', { name: '舆情报告' }))
+    await user.click(within(dialog).getByRole('link', { name: '生成报告' }))
 
     expect(
-      await screen.findByRole('heading', { name: '监控规则', level: 1 }),
+      await screen.findByRole('heading', { name: '生成报告', level: 1 }),
     ).toBeInTheDocument()
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
 
@@ -456,13 +470,14 @@ describe('Longtian public opinion application', () => {
     renderRoute('/platform-accounts')
 
     expect(
-      screen.getByRole('heading', { name: '平台账号', level: 2 }),
+      screen.getByRole('heading', { name: '平台账号', level: 1 }),
     ).toBeInTheDocument()
     expect(
-      screen.getByText(
+      screen.queryByText(
         '需要登录、扫码或安全验证时，请在应用打开的专用谷歌浏览器中完成。首次使用需要在该窗口登录，登录状态会由浏览器保留。',
       ),
-    ).toBeInTheDocument()
+    ).toBeNull()
+    expect(screen.queryByText('龙田街道舆情值守')).toBeNull()
     expect(screen.getByText('登录状态', { exact: true })).toBeInTheDocument()
     expect(screen.queryByText('账号接入')).toBeNull()
     expect(screen.queryByText('本机浏览器通道')).toBeNull()

@@ -521,24 +521,11 @@ export function AutomationTasks() {
 
   return (
     <div className="space-y-6">
-      <section aria-labelledby="automation-tasks-title" className="space-y-4">
+      <section aria-label="自动任务操作" className="space-y-4">
         <Card className="overflow-hidden">
           <CardHeader className="border-b bg-card/90">
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-              <div className="space-y-2">
-                <h1
-                  id="automation-tasks-title"
-                  className="font-display text-2xl tracking-[-0.04em] sm:text-3xl"
-                >
-                  自动任务
-                </h1>
-                <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
-                  每个任务有自己的两阶段提示词。启用后，系统会按“采集 → 初步分析
-                  →
-                  相关性判断与报告”完成一轮；你可以查看进度、取消任务，或从失败阶段重试。
-                </p>
-              </div>
-              <div className="flex shrink-0 flex-wrap gap-2">
+            <div className="flex justify-end">
+              <div className="flex flex-wrap gap-2">
                 <Button
                   ref={refreshButtonRef}
                   variant="outline"
@@ -917,9 +904,6 @@ export function AutomationTaskRuns() {
                   {task.data.name} · 运行记录
                 </h1>
               </div>
-              <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
-                每次运行都会保留任务版本、各阶段结果和最终状态。错过或跳过的计划也会单独记录。
-              </p>
             </CardHeader>
             <CardContent className="space-y-4 pt-5">
               {runs.isPending ? (

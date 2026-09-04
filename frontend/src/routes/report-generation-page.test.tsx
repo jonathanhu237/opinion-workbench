@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { createMemoryRouter, RouterProvider } from 'react-router'
 import { beforeEach, expect, it, vi } from 'vitest'
 
-import { Results } from '@/routes/results'
+import { ReportGeneration } from '@/routes/results'
 import {
   analysisProvider,
   analysisSettingsFixture,
@@ -91,14 +91,32 @@ beforeEach(() => {
 
 function renderPage() {
   const router = createMemoryRouter(
-    [{ path: '/results', element: <Results /> }],
-    { initialEntries: ['/results'] },
+    [{ path: '/reports/new', element: <ReportGeneration /> }],
+    { initialEntries: ['/reports/new'] },
   )
   return render(
     <QueryClientProvider client={new QueryClient()}>
       <RouterProvider router={router} />
     </QueryClientProvider>,
   )
+}
+
+function renderPageWithHistory() {
+  const router = createMemoryRouter(
+    [
+      { path: '/reports/new', element: <ReportGeneration /> },
+      { path: '/reports/history', element: <p>报告记录</p> },
+    ],
+    { initialEntries: ['/reports/new'] },
+  )
+  return {
+    router,
+    ...render(
+      <QueryClientProvider client={new QueryClient()}>
+        <RouterProvider router={router} />
+      </QueryClientProvider>,
+    ),
+  }
 }
 
 it('keeps selection separate from report creation and submits the fixed IDs after confirmation', async () => {
@@ -152,4 +170,21 @@ it('adds the library snapshot to existing manual selection and does not create a
   await user.click(screen.getByRole('button', { name: '选中全部待分析内容' }))
   await waitFor(() => expect(screen.getByText('已选 3 条')).toBeVisible())
   expect(createReportGeneration).not.toHaveBeenCalled()
+})
+
+it('takes the user to report records after a generation is accepted', async () => {
+  const user = userEvent.setup()
+  vi.mocked(createReportGeneration).mockResolvedValue({ id: 23 } as never)
+  const { router } = renderPageWithHistory()
+  await user.click(
+    await screen.findByRole('checkbox', {
+      name: `选择内容：${resultFixture().source.title}`,
+    }),
+  )
+  await user.click(screen.getByRole('button', { name: '生成报告' }))
+  await user.click(await screen.findByRole('button', { name: '确认生成报告' }))
+  await waitFor(() => {
+    expect(router.state.location.pathname).toBe('/reports/history')
+    expect(router.state.location.search).toBe('?generation=23')
+  })
 })

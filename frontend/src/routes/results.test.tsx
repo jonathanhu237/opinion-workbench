@@ -156,7 +156,7 @@ describe('报告生成页面', () => {
     })
   })
 
-  it('shows the report-first tabs and waits for confirmation before creating work', async () => {
+  it('shows report composition without an extra page-level introduction', async () => {
     const user = userEvent.setup()
     // Keep the mutation pending so the route does not need a second, unrelated
     // report-detail fixture to verify the submission boundary.
@@ -165,14 +165,9 @@ describe('报告生成页面', () => {
     )
     renderResults()
 
-    expect(
-      await screen.findByRole('heading', { name: '报告生成' }),
-    ).toBeVisible()
-    expect(screen.getByRole('tab', { name: '生成报告' })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    )
-    expect(screen.getByRole('tab', { name: '报告记录' })).toBeVisible()
+    expect(screen.queryByText(/选择舆情内容并填写报告信息后/u)).toBeNull()
+    expect(screen.queryByRole('tab', { name: '生成报告' })).toBeNull()
+    expect(screen.queryByRole('tab', { name: '报告记录' })).toBeNull()
     expect(
       await screen.findByRole('table', { name: '舆情内容表格' }),
     ).toBeVisible()
@@ -308,14 +303,10 @@ describe('报告生成页面', () => {
     await waitFor(() => expect(detail).toHaveFocus())
   })
 
-  it('shows report records as a separate view without the former analysis panels', async () => {
-    const user = userEvent.setup()
-    renderResults()
-    await user.click(await screen.findByRole('tab', { name: '报告记录' }))
-    expect(
-      await screen.findByRole('heading', { name: '报告记录' }),
-    ).toBeVisible()
-    expect(screen.getByText('尚未启动报告生成任务。')).toBeVisible()
+  it('shows report records as a separate route without the former analysis panels', async () => {
+    renderResults('/results?view=records')
+    expect(await screen.findByText('报告列表')).toBeVisible()
+    expect(await screen.findByText('尚未启动报告生成任务。')).toBeVisible()
     expect(screen.queryByText('自动分析设置')).toBeNull()
     expect(screen.queryByText('报告筛选')).toBeNull()
   })
@@ -357,14 +348,9 @@ describe('报告生成页面', () => {
     )
   })
 
-  it('clears record parameters when switching back to report composition', async () => {
-    const user = userEvent.setup()
-    const { router } = renderResults('/results?view=records&generation=9')
-    await user.click(await screen.findByRole('tab', { name: '生成报告' }))
-    expect(router.state.location.search).toBe('')
-    expect(screen.getByRole('tab', { name: '生成报告' })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    )
+  it('infers the records view from legacy report query parameters', async () => {
+    renderResults('/results?job=7')
+    expect(await screen.findByText('报告列表')).toBeVisible()
+    expect(screen.queryByRole('tab')).toBeNull()
   })
 })

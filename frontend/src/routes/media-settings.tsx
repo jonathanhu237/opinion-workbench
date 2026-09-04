@@ -187,9 +187,6 @@ export function MediaSettings() {
     <section className="space-y-6" aria-label="原媒体保留策略">
       <header>
         <h2 className="font-display text-2xl">原媒体保留策略</h2>
-        <p className="mt-2 text-sm text-muted-foreground">
-          管理本机原始图片和视频的保留期限与磁盘占用。
-        </p>
       </header>
       {query.isPending && <p role="status">正在读取媒体策略…</p>}
       {query.isError && (

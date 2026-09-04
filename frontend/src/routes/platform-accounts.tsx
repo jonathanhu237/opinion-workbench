@@ -390,15 +390,6 @@ export function PlatformAccounts() {
   return (
     <div className="space-y-5">
       <section>
-        <h2 className="font-display text-2xl font-semibold tracking-[-0.035em] text-foreground sm:text-[1.75rem]">
-          平台账号
-        </h2>
-        <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground">
-          需要登录、扫码或安全验证时，请在应用打开的专用谷歌浏览器中完成。首次使用需要在该窗口登录，登录状态会由浏览器保留。
-        </p>
-      </section>
-
-      <section>
         <Card className="connection-panel bg-card/94">
           <CardHeader className="border-b border-border/75 sm:grid-cols-[minmax(0,1fr)_auto]">
             <div>

@@ -72,9 +72,9 @@ function attentionLink(item: WorkbenchAttention) {
     case 'collection_batch':
       return `/collection-batches/${item.resource_id}`
     case 'initial_analysis':
-      return `/results?job=${item.resource_id}`
+      return `/reports/history?job=${item.resource_id}`
     case 'report':
-      return `/results?report=${item.resource_id}`
+      return `/reports/history?report=${item.resource_id}`
   }
 }
 
@@ -309,7 +309,7 @@ function ReportPanel({
               完成一次采集和分析后，报告会显示在这里。原始结果请到“报告生成”查看。
             </p>
             <Link
-              to="/results"
+              to="/reports/new"
               className={cn(
                 buttonVariants({ variant: 'outline' }),
                 'mt-5 w-fit',
@@ -338,7 +338,7 @@ function ReportPanel({
                 {report.coverage.total} 条来源
               </p>
               <Link
-                to={`/results?report=${report.id}`}
+                to={`/reports/history?report=${report.id}`}
                 className={buttonVariants({ variant: 'outline' })}
               >
                 查看完整报告记录
@@ -361,7 +361,7 @@ function ReportPanel({
                 条与主题相关
               </p>
               <Link
-                to={`/results?report=${report.id}`}
+                to={`/reports/history?report=${report.id}`}
                 className={buttonVariants({ variant: 'outline' })}
               >
                 阅读完整报告
@@ -525,7 +525,7 @@ function analysisStage(activity: WorkbenchAnalysisActivity | null): StageProps {
       ? `已完成 ${activity.completed_count}/${activity.total_count} 条${activity.unsuccessful_count ? ` · ${activity.unsuccessful_count} 条未成功` : ''}`
       : undefined,
     active: activity !== null,
-    href: activity ? `/results?job=${activity.id}` : undefined,
+    href: activity ? `/reports/history?job=${activity.id}` : undefined,
     icon: FileSearch,
     progress: activity
       ? {
@@ -547,7 +547,7 @@ function reportStage(activity: WorkbenchReportActivity | null): StageProps {
         : `已判断 ${activity.completed_count}/${activity.total_count} 条`
       : undefined,
     active: activity !== null,
-    href: activity ? `/results?report=${activity.id}` : undefined,
+    href: activity ? `/reports/history?report=${activity.id}` : undefined,
     icon: FileText,
     progress: activity
       ? { value: activity.completed_count, total: activity.total_count }

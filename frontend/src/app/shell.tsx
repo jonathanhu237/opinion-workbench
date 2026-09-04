@@ -1,17 +1,20 @@
 import {
   CircleUserRound,
   ClipboardList,
+  ChevronRight,
   FileSearch,
   ListChecks,
   Settings2,
   SlidersHorizontal,
+  type LucideIcon,
 } from 'lucide-react'
-import { useEffect, useReducer, useRef } from 'react'
+import { useEffect, useReducer, useRef, useState } from 'react'
 import { NavLink, Outlet, useLocation, useOutletContext } from 'react-router'
 
 import {
   Sidebar,
   SidebarContent,
+  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
   SidebarGroupLabel,
@@ -20,6 +23,9 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarMenuSub,
+  SidebarMenuSubButton,
+  SidebarMenuSubItem,
   SidebarProvider,
   SidebarSeparator,
   SidebarTrigger,
@@ -48,7 +54,11 @@ const pageTitles: Record<string, string> = {
   '/monitoring-rules': '监控规则',
   '/collection-runs': '舆情爬取',
   '/automation-tasks': '自动任务',
-  '/results': '报告生成',
+  '/reports/new': '生成报告',
+  '/reports/history': '报告记录',
+  '/settings/ai': 'AI 配置',
+  '/settings/media': '媒体缓存',
+  '/results': '生成报告',
   '/ai-settings': 'AI 配置',
   '/media-settings': '媒体缓存',
 }
@@ -89,9 +99,82 @@ function ProductIdentity() {
   )
 }
 
+type NavigationChild = {
+  label: string
+  to: string
+  isActive: boolean
+}
+
+function SidebarExpandableGroup({
+  id,
+  label,
+  icon: Icon,
+  open,
+  active,
+  onToggle,
+  items,
+}: {
+  id: string
+  label: string
+  icon: LucideIcon
+  open: boolean
+  active: boolean
+  onToggle: () => void
+  items: readonly NavigationChild[]
+}) {
+  const { setOpenMobile } = useSidebar()
+
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton
+        type="button"
+        aria-expanded={open}
+        aria-controls={`sidebar-${id}-submenu`}
+        onClick={onToggle}
+        isActive={active}
+        className="min-h-11 gap-3 rounded-lg px-3 text-sidebar-foreground/78 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground md:min-h-10 data-active:bg-sidebar-primary data-active:text-sidebar-primary-foreground data-active:shadow-[inset_3px_0_0_var(--sidebar-ring)]"
+      >
+        <Icon className="size-4" aria-hidden />
+        <span>{label}</span>
+        <ChevronRight
+          className={`ml-auto size-4 transition-transform ${open ? 'rotate-90' : ''}`}
+          aria-hidden
+        />
+      </SidebarMenuButton>
+      {open && (
+        <SidebarMenuSub id={`sidebar-${id}-submenu`}>
+          {items.map((item) => (
+            <SidebarMenuSubItem key={item.to}>
+              <SidebarMenuSubButton
+                render={
+                  <NavLink
+                    to={item.to}
+                    end
+                    onClick={() => setOpenMobile(false)}
+                  />
+                }
+                isActive={item.isActive}
+              >
+                <span>{item.label}</span>
+              </SidebarMenuSubButton>
+            </SidebarMenuSubItem>
+          ))}
+        </SidebarMenuSub>
+      )}
+    </SidebarMenuItem>
+  )
+}
+
 function PrimaryNavigation() {
   const location = useLocation()
   const { setOpenMobile } = useSidebar()
+  const reportsActive =
+    location.pathname.startsWith('/reports') || location.pathname === '/results'
+  const [reportsOpen, setReportsOpen] = useState(reportsActive)
+
+  useEffect(() => {
+    if (reportsActive) setReportsOpen(true)
+  }, [reportsActive])
 
   const navigationItems = [
     {
@@ -128,53 +211,93 @@ function PrimaryNavigation() {
         location.pathname.startsWith('/collection-runs') ||
         location.pathname.startsWith('/collection-batches'),
     },
-    {
-      label: '报告生成',
-      to: '/results',
-      icon: FileSearch,
-      isActive: location.pathname === '/results',
-    },
-    {
-      label: 'AI 配置',
-      to: '/ai-settings',
-      icon: Settings2,
-      isActive: location.pathname === '/ai-settings',
-    },
-    {
-      label: '媒体缓存',
-      to: '/media-settings',
-      icon: Settings2,
-      isActive: location.pathname === '/media-settings',
-    },
   ] as const
 
-  return (
-    <nav aria-label="主导航">
-      <SidebarMenu>
-        {navigationItems.map((item) => {
-          const Icon = item.icon
+  const renderLink = (item: (typeof navigationItems)[number]) => {
+    const Icon = item.icon
 
-          return (
-            <SidebarMenuItem key={item.to}>
-              <SidebarMenuButton
-                render={
-                  <NavLink
-                    to={item.to}
-                    end={item.to === '/'}
-                    onClick={() => setOpenMobile(false)}
-                  />
-                }
-                isActive={item.isActive}
-                className="min-h-11 gap-3 rounded-lg px-3 text-sidebar-foreground/78 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground md:min-h-10 data-active:bg-sidebar-primary data-active:text-sidebar-primary-foreground data-active:shadow-[inset_3px_0_0_var(--sidebar-ring)]"
-              >
-                <Icon className="size-4" aria-hidden />
-                <span>{item.label}</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          )
-        })}
-      </SidebarMenu>
-    </nav>
+    return (
+      <SidebarMenuItem key={item.to}>
+        <SidebarMenuButton
+          render={
+            <NavLink
+              to={item.to}
+              end={item.to === '/'}
+              onClick={() => setOpenMobile(false)}
+            />
+          }
+          isActive={item.isActive}
+          className="min-h-11 gap-3 rounded-lg px-3 text-sidebar-foreground/78 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground md:min-h-10 data-active:bg-sidebar-primary data-active:text-sidebar-primary-foreground data-active:shadow-[inset_3px_0_0_var(--sidebar-ring)]"
+        >
+          <Icon className="size-4" aria-hidden />
+          <span>{item.label}</span>
+        </SidebarMenuButton>
+      </SidebarMenuItem>
+    )
+  }
+
+  return (
+    <SidebarMenu>
+      {navigationItems.map(renderLink)}
+      <SidebarExpandableGroup
+        id="reports"
+        label="舆情报告"
+        icon={FileSearch}
+        open={reportsOpen}
+        active={reportsActive}
+        onToggle={() => setReportsOpen((current) => !current)}
+        items={[
+          {
+            label: '生成报告',
+            to: '/reports/new',
+            isActive: location.pathname === '/reports/new',
+          },
+          {
+            label: '报告记录',
+            to: '/reports/history',
+            isActive: location.pathname === '/reports/history',
+          },
+        ]}
+      />
+    </SidebarMenu>
+  )
+}
+
+function SettingsNavigation() {
+  const location = useLocation()
+  const settingsActive =
+    location.pathname.startsWith('/settings') ||
+    location.pathname === '/ai-settings' ||
+    location.pathname === '/media-settings'
+  const [open, setOpen] = useState(settingsActive)
+
+  useEffect(() => {
+    if (settingsActive) setOpen(true)
+  }, [settingsActive])
+
+  return (
+    <SidebarMenu>
+      <SidebarExpandableGroup
+        id="settings"
+        label="设置"
+        icon={Settings2}
+        open={open}
+        active={settingsActive}
+        onToggle={() => setOpen((current) => !current)}
+        items={[
+          {
+            label: 'AI 配置',
+            to: '/settings/ai',
+            isActive: location.pathname === '/settings/ai',
+          },
+          {
+            label: '媒体缓存',
+            to: '/settings/media',
+            isActive: location.pathname === '/settings/media',
+          },
+        ]}
+      />
+    </SidebarMenu>
   )
 }
 
@@ -252,16 +375,22 @@ export function AppShell() {
           />
         </SidebarHeader>
         <SidebarSeparator />
-        <SidebarContent className="px-2 py-3">
-          <SidebarGroup className="p-0">
-            <SidebarGroupLabel className="px-3 text-[10px] tracking-[0.16em] text-sidebar-foreground/60">
-              值守功能
-            </SidebarGroupLabel>
-            <SidebarGroupContent>
-              <PrimaryNavigation />
-            </SidebarGroupContent>
-          </SidebarGroup>
-        </SidebarContent>
+        <nav aria-label="主导航" className="flex min-h-0 flex-1 flex-col">
+          <SidebarContent className="px-2 py-3">
+            <SidebarGroup className="p-0">
+              <SidebarGroupLabel className="px-3 text-[10px] tracking-[0.16em] text-sidebar-foreground/60">
+                值守功能
+              </SidebarGroupLabel>
+              <SidebarGroupContent>
+                <PrimaryNavigation />
+              </SidebarGroupContent>
+            </SidebarGroup>
+          </SidebarContent>
+          <SidebarSeparator />
+          <SidebarFooter className="px-2 py-3">
+            <SettingsNavigation />
+          </SidebarFooter>
+        </nav>
       </Sidebar>
 
       <SidebarInset
@@ -277,9 +406,6 @@ export function AppShell() {
           />
 
           <div className="min-w-0">
-            <p className="truncate text-[10px] tracking-[0.12em] text-muted-foreground">
-              龙田街道舆情值守
-            </p>
             <h1
               id="page-title"
               className="truncate text-base font-semibold text-foreground"

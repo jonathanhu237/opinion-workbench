@@ -236,63 +236,58 @@ export function ReportSelectionActions({
 
   return (
     <div
-      className="flex flex-col gap-3"
+      className="flex min-w-0 flex-col gap-3"
       aria-busy={start.isPending || bulk.isPending}
     >
-      <div className="flex flex-wrap items-center gap-2">
-        <Button
-          variant="outline"
-          className="min-h-10"
-          disabled={bulk.isPending || Boolean(currentIntent)}
-          onClick={() => bulk.mutate(false)}
-        >
-          {bulk.isPending ? '正在形成选材快照…' : '选中全部待分析内容'}
-        </Button>
-        <details className="relative">
-          <summary
-            className="flex min-h-10 cursor-pointer list-none items-center rounded-lg border px-3 text-sm [&::-webkit-details-marker]:hidden"
-            aria-label="更多选材方式"
+      <div
+        data-slot="report-selection-toolbar"
+        className="flex min-w-0 flex-col gap-3 lg:flex-row lg:items-center lg:justify-between"
+      >
+        <div className="flex w-full min-w-0 flex-wrap items-center gap-2 lg:w-auto">
+          <Button
+            variant="outline"
+            className="min-h-10"
+            disabled={bulk.isPending || Boolean(currentIntent)}
+            onClick={() => bulk.mutate(false)}
           >
-            更多选材
-          </summary>
-          <div className="absolute top-full left-0 z-20 mt-2 min-w-56 rounded-lg border bg-background p-1 shadow-lg">
-            <button
-              type="button"
-              className="w-full rounded-md px-3 py-2 text-left text-sm hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
-              disabled={bulk.isPending || Boolean(currentIntent)}
-              onClick={(event) => {
-                event.currentTarget.closest('details')?.removeAttribute('open')
-                bulk.mutate(true)
-              }}
+            {bulk.isPending ? '正在形成选材快照…' : '选中全部待分析内容'}
+          </Button>
+          <details className="relative">
+            <summary
+              className="flex min-h-10 cursor-pointer list-none items-center rounded-lg border px-3 text-sm [&::-webkit-details-marker]:hidden"
+              aria-label="更多选材方式"
             >
-              同时加入分析失败内容
-            </button>
-          </div>
-        </details>
-        <span className="text-sm text-muted-foreground">
-          待分析 {eligibility.data?.pending ?? '—'} · 失败{' '}
-          {eligibility.data?.failed ?? '—'}
-        </span>
-      </div>
-      <p className="text-xs leading-5 text-muted-foreground">
-        批量选材只把点击当时的具体条目加入当前选材，不会启动补全、模型调用或报告任务；之后新增的内容不会自动加入。
-      </p>
-      {bulk.isError && (
-        <p role="alert" className="text-sm text-destructive">
-          {analysisErrorMessage(bulk.error)}
-        </p>
-      )}
-      {eligibility.isError && (
-        <p role="alert" className="text-sm text-destructive">
-          无法读取待分析数量。{analysisErrorMessage(eligibility.error)}
-        </p>
-      )}
-      <div className="fixed inset-x-4 bottom-4 z-40 flex flex-wrap items-center justify-between gap-3 rounded-xl border bg-background/95 p-3 text-sm shadow-lg backdrop-blur sm:inset-x-8 lg:inset-x-12">
-        <span>已选 {effectiveIds.length} 条</span>
-        <span className="text-muted-foreground">
-          选材可跨页保留，提交前可逐条移除。
-        </span>
-        <div className="flex shrink-0 gap-2">
+              更多选材
+            </summary>
+            <div className="absolute top-full left-0 z-20 mt-2 min-w-56 rounded-lg border bg-background p-1 shadow-lg">
+              <button
+                type="button"
+                className="w-full rounded-md px-3 py-2 text-left text-sm hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={bulk.isPending || Boolean(currentIntent)}
+                onClick={(event) => {
+                  event.currentTarget
+                    .closest('details')
+                    ?.removeAttribute('open')
+                  bulk.mutate(true)
+                }}
+              >
+                同时加入分析失败内容
+              </button>
+            </div>
+          </details>
+          <span className="w-full shrink-0 text-sm whitespace-nowrap text-muted-foreground sm:w-auto">
+            待分析 {eligibility.data?.pending ?? '—'} · 失败{' '}
+            {eligibility.data?.failed ?? '—'}
+          </span>
+        </div>
+        <div className="flex w-full flex-wrap items-center justify-between gap-2 sm:w-auto sm:flex-nowrap sm:justify-start">
+          <span
+            className="mr-1 text-sm font-medium whitespace-nowrap tabular-nums"
+            aria-live="polite"
+            aria-atomic="true"
+          >
+            已选 {effectiveIds.length} 条
+          </span>
           {effectiveIds.length > 0 && (
             <Button
               variant="ghost"
@@ -306,7 +301,7 @@ export function ReportSelectionActions({
             </Button>
           )}
           <Button
-            className="min-h-11"
+            className="min-h-10"
             disabled={effectiveIds.length === 0 || active || !modelConfigured}
             onClick={openDialog}
           >
@@ -314,6 +309,19 @@ export function ReportSelectionActions({
           </Button>
         </div>
       </div>
+      <p className="text-xs leading-5 text-muted-foreground">
+        批量选材会固定点击当时的条目；选材可跨页保留，提交前仍可移除。
+      </p>
+      {bulk.isError && (
+        <p role="alert" className="text-sm text-destructive">
+          {analysisErrorMessage(bulk.error)}
+        </p>
+      )}
+      {eligibility.isError && (
+        <p role="alert" className="text-sm text-destructive">
+          无法读取待分析数量。{analysisErrorMessage(eligibility.error)}
+        </p>
+      )}
       {!modelConfigured && (
         <p className="text-sm text-destructive" role="status">
           尚未配置 AI 模型，请先到 AI 设置完成配置后再生成报告。

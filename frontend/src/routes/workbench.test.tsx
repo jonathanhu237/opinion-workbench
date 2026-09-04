@@ -267,13 +267,13 @@ describe('homepage workbench', () => {
       '/platform-accounts',
       '/automation-tasks/11/runs',
       '/collection-batches/12',
-      '/results?job=13',
-      '/results?report=14',
+      '/reports/history?job=13',
+      '/reports/history?report=14',
       '/automation-runs/15',
     ])
     expect(screen.getByRole('link', { name: /阅读完整报告/u })).toHaveAttribute(
       'href',
-      '/results?report=31',
+      '/reports/history?report=31',
     )
   })
 

@@ -1,4 +1,9 @@
-import { createBrowserRouter, type RouteObject } from 'react-router'
+import {
+  createBrowserRouter,
+  Navigate,
+  useLocation,
+  type RouteObject,
+} from 'react-router'
 
 import { AppShell } from '@/app/shell'
 import { PlatformAccounts } from '@/routes/platform-accounts'
@@ -58,7 +63,7 @@ export const appRoutes: RouteObject[] = [
         element: <PlatformAccounts />,
       },
       {
-        path: 'ai-settings',
+        path: 'settings/ai',
         hydrateFallbackElement: (
           <p role="status" className="text-sm text-muted-foreground">
             正在加载 AI 配置…
@@ -70,8 +75,12 @@ export const appRoutes: RouteObject[] = [
         },
       },
       {
-        path: 'media-settings',
-        hydrateFallbackElement: <p role="status">正在加载媒体策略…</p>,
+        path: 'settings/media',
+        hydrateFallbackElement: (
+          <p role="status" className="text-sm text-muted-foreground">
+            正在加载媒体缓存…
+          </p>
+        ),
         lazy: async () => {
           const { MediaSettings } = await import('@/routes/media-settings')
           return { Component: MediaSettings }
@@ -91,15 +100,39 @@ export const appRoutes: RouteObject[] = [
       },
       {
         path: 'results',
+        element: <LegacyResultsRedirect />,
+      },
+      {
+        path: 'reports/new',
         hydrateFallbackElement: (
           <p role="status" className="text-sm text-muted-foreground">
-            正在加载报告生成…
+            正在加载生成报告…
           </p>
         ),
         lazy: async () => {
-          const { Results } = await import('@/routes/results')
-          return { Component: Results }
+          const { ReportGeneration } = await import('@/routes/results')
+          return { Component: ReportGeneration }
         },
+      },
+      {
+        path: 'reports/history',
+        hydrateFallbackElement: (
+          <p role="status" className="text-sm text-muted-foreground">
+            正在加载报告记录…
+          </p>
+        ),
+        lazy: async () => {
+          const { ReportRecords } = await import('@/routes/results')
+          return { Component: ReportRecords }
+        },
+      },
+      {
+        path: 'ai-settings',
+        element: <LegacyPathRedirect to="/settings/ai" />,
+      },
+      {
+        path: 'media-settings',
+        element: <LegacyPathRedirect to="/settings/media" />,
       },
       {
         path: 'collection-runs',
@@ -142,5 +175,35 @@ export const appRoutes: RouteObject[] = [
     ],
   },
 ]
+
+export function legacyResultsDestination(search: string) {
+  const params = new URLSearchParams(search)
+  const records =
+    params.get('view') === 'records' ||
+    params.has('generation') ||
+    params.has('report') ||
+    params.has('job')
+  params.delete('view')
+  const nextSearch = params.toString()
+  return {
+    pathname: records ? '/reports/history' : '/reports/new',
+    search: nextSearch ? `?${nextSearch}` : '',
+  }
+}
+
+function LegacyResultsRedirect() {
+  const location = useLocation()
+  return <Navigate replace to={legacyResultsDestination(location.search)} />
+}
+
+function LegacyPathRedirect({ to }: { to: string }) {
+  const location = useLocation()
+  return (
+    <Navigate
+      replace
+      to={{ pathname: to, search: location.search, hash: location.hash }}
+    />
+  )
+}
 
 export const router = createBrowserRouter(appRoutes)

@@ -114,3 +114,16 @@ it('uses the library preview for bulk selection and makes failure inclusion expl
   expect(createReportGeneration).not.toHaveBeenCalled()
   expect(onStarted).not.toHaveBeenCalled()
 })
+
+it('keeps the report action beside selection instead of fixing it to the viewport', () => {
+  const { container } = show([])
+  const toolbar = container.querySelector(
+    '[data-slot="report-selection-toolbar"]',
+  )
+  expect(toolbar).not.toBeNull()
+  expect(toolbar).not.toHaveClass('fixed')
+  expect(toolbar).not.toHaveClass('inset-x-4')
+  expect(toolbar).toContainElement(
+    screen.getByRole('button', { name: '生成报告' }),
+  )
+})

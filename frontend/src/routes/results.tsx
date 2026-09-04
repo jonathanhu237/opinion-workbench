@@ -1,11 +1,17 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { RefreshCw } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
-import { useSearchParams } from 'react-router'
+import { type ReactNode, useEffect, useRef, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardHeader } from '@/components/ui/card'
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
   Table,
@@ -15,7 +21,6 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { AI_SETTINGS_QUERY_KEY, fetchAISettings } from '@/lib/api/ai-settings'
 import {
   ANALYSIS_SETTINGS_QUERY_KEY,
@@ -156,10 +161,12 @@ function summaryText(result: SharedResult) {
 }
 
 function ContentLibrary({
+  actions,
   selectedIds,
   onSelectionChange,
   onOpen,
 }: {
+  actions: ReactNode
   selectedIds: number[]
   onSelectionChange: (ids: number[]) => void
   onOpen: (id: number) => void
@@ -212,143 +219,155 @@ function ContentLibrary({
     setParams(next)
   }
   return (
-    <div className="space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <h2 className="font-display text-xl">舆情内容</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            内容库是报告选材来源，按最新入库优先展示；首版暂不提供筛选。
-          </p>
+    <Card className="min-w-0">
+      <CardHeader className="min-w-0 border-b sm:grid-cols-[minmax(0,1fr)_auto] sm:gap-x-4">
+        <div className="min-w-0">
+          <CardTitle>
+            <h2 className="font-display text-xl">舆情内容</h2>
+          </CardTitle>
+          <CardDescription className="mt-1 flex min-w-0 flex-col gap-1">
+            <span>内容库是报告选材来源，按最新入库优先展示；暂不提供筛选。</span>
+            <span className="text-xs sm:hidden">
+              共 {results.data?.total ?? '—'} 条 · 每页 {RESULT_PAGE_SIZE} 条
+            </span>
+          </CardDescription>
         </div>
-        <span className="text-sm text-muted-foreground">
+        <span className="hidden self-start text-sm whitespace-nowrap text-muted-foreground sm:block">
           共 {results.data?.total ?? '—'} 条 · 每页 {RESULT_PAGE_SIZE} 条
         </span>
-      </div>
-      {results.isPending && <p role="status">正在读取舆情内容…</p>}
-      {results.isError && (
-        <p role="alert" className="text-sm text-destructive">
-          {analysisErrorMessage(results.error)}
-        </p>
-      )}
-      {results.data?.items.length === 0 && (
-        <p className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
-          还没有舆情内容。请先到“舆情爬取”完成一次搜索。
-        </p>
-      )}
-      {results.data && results.data.items.length > 0 && (
-        <>
-          <Table aria-label="舆情内容表格">
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-12">
-                  <Checkbox
-                    aria-label="选择当前页"
-                    checked={allSelected}
-                    indeterminate={someSelected && !allSelected}
-                    disabled={selectable.length === 0}
-                    onCheckedChange={(checked) => togglePage(checked === true)}
-                  />
-                </TableHead>
-                <TableHead>平台</TableHead>
-                <TableHead className="min-w-64">内容摘要</TableHead>
-                <TableHead>素材</TableHead>
-                <TableHead>发布时间</TableHead>
-                <TableHead>分析状态</TableHead>
-                <TableHead className="text-right">操作</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {items.map((result) => (
-                <TableRow
-                  key={result.id}
-                  data-state={
-                    selectedIds.includes(result.id) ? 'selected' : undefined
-                  }
-                >
-                  <TableCell>
+      </CardHeader>
+      <CardContent className="flex min-w-0 flex-col gap-4">
+        {actions}
+        {results.isPending && <p role="status">正在读取舆情内容…</p>}
+        {results.isError && (
+          <p role="alert" className="text-sm text-destructive">
+            {analysisErrorMessage(results.error)}
+          </p>
+        )}
+        {results.data?.items.length === 0 && (
+          <p className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
+            还没有舆情内容。请先到“舆情爬取”完成一次搜索。
+          </p>
+        )}
+        {results.data && results.data.items.length > 0 && (
+          <>
+            <Table aria-label="舆情内容表格">
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-12">
                     <Checkbox
-                      aria-label={`选择内容：${result.source.title}`}
-                      checked={selectedIds.includes(result.id)}
-                      disabled={isActiveResult(result)}
+                      aria-label="选择当前页"
+                      checked={allSelected}
+                      indeterminate={someSelected && !allSelected}
+                      disabled={selectable.length === 0}
                       onCheckedChange={(checked) =>
-                        toggle(result.id, checked === true)
+                        togglePage(checked === true)
                       }
                     />
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant="outline">
-                      {searchPlatformPresenters[result.source.platform].label}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="max-w-[28rem] whitespace-normal">
-                    <p className="line-clamp-2 font-medium [overflow-wrap:anywhere]">
-                      {summaryText(result)}
-                    </p>
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex flex-wrap gap-1 text-sm">
-                      {materialLabels(result).map((label) => (
-                        <span key={label}>{label}</span>
-                      ))}
-                    </div>
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {result.source.published_at_text || '未知'}
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant={resultStatusVariant(result)}>
-                      {resultStatus(result)}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <div className="flex flex-wrap justify-end gap-2">
-                      <Button
-                        variant="outline"
-                        className="min-h-9"
-                        onClick={() => onOpen(result.id)}
-                        aria-label={`查看内容详情：${result.source.title}`}
-                      >
-                        查看详情
-                      </Button>
-                      <ResultSourceLink
-                        source={result.source}
-                        controls={controls}
-                        disabled={isActiveResult(result)}
-                      />
-                    </div>
-                  </TableCell>
+                  </TableHead>
+                  <TableHead>平台</TableHead>
+                  <TableHead className="min-w-64">内容摘要</TableHead>
+                  <TableHead>素材</TableHead>
+                  <TableHead>发布时间</TableHead>
+                  <TableHead>分析状态</TableHead>
+                  <TableHead className="text-right">操作</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-          <ResultsPagination
-            label="舆情内容"
-            offset={offset}
-            limit={RESULT_PAGE_SIZE}
-            total={results.data.total}
-            onChange={goPage}
-          />
-        </>
-      )}
-    </div>
+              </TableHeader>
+              <TableBody>
+                {items.map((result) => (
+                  <TableRow
+                    key={result.id}
+                    data-state={
+                      selectedIds.includes(result.id) ? 'selected' : undefined
+                    }
+                  >
+                    <TableCell>
+                      <Checkbox
+                        aria-label={`选择内容：${result.source.title}`}
+                        checked={selectedIds.includes(result.id)}
+                        disabled={isActiveResult(result)}
+                        onCheckedChange={(checked) =>
+                          toggle(result.id, checked === true)
+                        }
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="outline">
+                        {searchPlatformPresenters[result.source.platform].label}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="max-w-[28rem] whitespace-normal">
+                      <p className="line-clamp-2 font-medium [overflow-wrap:anywhere]">
+                        {summaryText(result)}
+                      </p>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex flex-wrap gap-1 text-sm">
+                        {materialLabels(result).map((label) => (
+                          <span key={label}>{label}</span>
+                        ))}
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-sm text-muted-foreground">
+                      {result.source.published_at_text || '未知'}
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={resultStatusVariant(result)}>
+                        {resultStatus(result)}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex flex-wrap justify-end gap-2">
+                        <Button
+                          variant="outline"
+                          className="min-h-9"
+                          onClick={() => onOpen(result.id)}
+                          aria-label={`查看内容详情：${result.source.title}`}
+                        >
+                          查看详情
+                        </Button>
+                        <ResultSourceLink
+                          source={result.source}
+                          controls={controls}
+                          disabled={isActiveResult(result)}
+                        />
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+            <ResultsPagination
+              label="舆情内容"
+              offset={offset}
+              limit={RESULT_PAGE_SIZE}
+              total={results.data.total}
+              onChange={goPage}
+            />
+          </>
+        )}
+      </CardContent>
+    </Card>
   )
 }
 
-export function Results() {
+export function Results({ mode }: { mode?: 'compose' | 'records' } = {}) {
   const client = useQueryClient()
+  const navigate = useNavigate()
   const [params, setParams] = useSearchParams()
   const resultId = readId(params.get('result'))
   const legacyReportId = readId(params.get('report'))
   const resultControls = useResultSourceControls()
   const resultFocus = useRef<HTMLElement | null>(null)
   const [selectedIds, setSelectedIds] = useState<number[]>(readSelectionDraft)
-  const [view, setViewState] = useState<'compose' | 'records'>(() =>
+  const inferredMode =
     params.get('view') === 'records' ||
     params.has('generation') ||
-    params.has('report')
+    params.has('report') ||
+    params.has('job')
       ? 'records'
-      : 'compose',
-  )
+      : 'compose'
+  const activeMode = mode ?? inferredMode
   const settings = useQuery({
     queryKey: ANALYSIS_SETTINGS_QUERY_KEY,
     queryFn: ({ signal }) => fetchAnalysisSettings(signal),
@@ -376,36 +395,6 @@ export function Results() {
   useEffect(() => {
     writeSelectionDraft(selectedIds)
   }, [selectedIds])
-  useEffect(() => {
-    const nextView =
-      params.get('view') === 'records' ||
-      params.has('generation') ||
-      params.has('report')
-        ? 'records'
-        : 'compose'
-    setViewState(nextView)
-  }, [params])
-  const setView = (next: 'compose' | 'records') => {
-    setViewState(next)
-    setParams((current) => {
-      const updated = new URLSearchParams(current)
-      if (next === 'compose') {
-        for (const key of [
-          'view',
-          'generation',
-          'report',
-          'report_section',
-          'report_sources_offset',
-          'report_sections_offset',
-          'reports_before',
-          'attempt',
-          'attempt_offset',
-        ])
-          updated.delete(key)
-      } else updated.set('view', 'records')
-      return updated
-    })
-  }
   const openResult = (id: number) => {
     resultFocus.current = document.activeElement as HTMLElement | null
     setParams((current) => {
@@ -439,42 +428,27 @@ export function Results() {
     void provider.refetch()
   }
   return (
-    <div className="space-y-5 pb-32">
-      <Card>
-        <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div>
-            <h2 className="font-display text-2xl">报告生成</h2>
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
-              从舆情内容库选材，确认报告名称和提示词后，系统会依次补全内容、生成单条总结并汇总报告。
-            </p>
-          </div>
-          <Button
-            variant="outline"
-            className="min-h-11 shrink-0"
-            onClick={refresh}
-            disabled={settings.isFetching || provider.isFetching}
-          >
-            <RefreshCw aria-hidden />
-            刷新
-          </Button>
-        </CardHeader>
-      </Card>
-      <Tabs
-        value={view}
-        onValueChange={(value) => setView(value as 'compose' | 'records')}
-      >
-        <TabsList aria-label="报告生成页面视图" variant="line">
-          <TabsTrigger value="compose">生成报告</TabsTrigger>
-          <TabsTrigger value="records">报告记录</TabsTrigger>
-        </TabsList>
-        <TabsContent value="compose" className="mt-4 space-y-5">
+    <div className="space-y-5">
+      <section aria-label="报告操作" className="flex justify-end">
+        <Button
+          variant="outline"
+          className="min-h-10 shrink-0 self-start sm:self-auto"
+          onClick={refresh}
+          disabled={settings.isFetching || provider.isFetching}
+        >
+          <RefreshCw aria-hidden />
+          刷新
+        </Button>
+      </section>
+      {activeMode === 'compose' ? (
+        <div className="space-y-5">
           {(settings.isError || provider.isError) && (
             <p role="alert" className="text-sm text-destructive">
               无法读取报告所需的提示词或模型配置，请刷新后重试。
             </p>
           )}
-          <Card>
-            <CardContent className="space-y-4 p-4 sm:p-5">
+          <ContentLibrary
+            actions={
               <ReportSelectionActions
                 selectedIds={selectedIds}
                 onSelectionChange={setSelectedIds}
@@ -483,33 +457,26 @@ export function Results() {
                 active={active}
                 onStarted={(generation) => {
                   setSelectedIds([])
-                  setView('records')
-                  setParams((current) => {
-                    const next = new URLSearchParams(current)
-                    next.delete('result')
-                    next.set('generation', String(generation.id))
-                    next.set('view', 'records')
-                    return next
+                  navigate({
+                    pathname: '/reports/history',
+                    search: `?generation=${generation.id}`,
                   })
                   void client.invalidateQueries({
                     queryKey: GENERATIONS_QUERY_KEY,
                   })
-                  void client.invalidateQueries({ queryKey: RESULTS_QUERY_KEY })
+                  void client.invalidateQueries({
+                    queryKey: RESULTS_QUERY_KEY,
+                  })
                 }}
               />
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent className="p-4 sm:p-5">
-              <ContentLibrary
-                selectedIds={selectedIds}
-                onSelectionChange={setSelectedIds}
-                onOpen={openResult}
-              />
-            </CardContent>
-          </Card>
-        </TabsContent>
-        <TabsContent value="records" className="mt-4">
+            }
+            selectedIds={selectedIds}
+            onSelectionChange={setSelectedIds}
+            onOpen={openResult}
+          />
+        </div>
+      ) : (
+        <div>
           <ReportGenerations
             selectedId={readId(params.get('generation'))}
             autoSelectLatest={legacyReportId === null}
@@ -518,7 +485,7 @@ export function Results() {
                 const next = new URLSearchParams(current)
                 if (id === null) next.delete('generation')
                 else next.set('generation', String(id))
-                next.set('view', 'records')
+                next.delete('view')
                 return next
               })
             }}
@@ -527,7 +494,7 @@ export function Results() {
                 const next = new URLSearchParams(current)
                 next.delete('generation')
                 next.set('report', String(id))
-                next.set('view', 'records')
+                next.delete('view')
                 return next
               })
             }}
@@ -537,8 +504,8 @@ export function Results() {
               <LegacyReportRecord reportId={legacyReportId} />
             </div>
           )}
-        </TabsContent>
-      </Tabs>
+        </div>
+      )}
       {resultId !== null && (
         <ResultEvidence
           key={resultId}
@@ -556,4 +523,12 @@ export function Results() {
       )}
     </div>
   )
+}
+
+export function ReportGeneration() {
+  return <Results mode="compose" />
+}
+
+export function ReportRecords() {
+  return <Results mode="records" />
 }

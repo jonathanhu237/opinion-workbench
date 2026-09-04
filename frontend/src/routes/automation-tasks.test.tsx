@@ -170,9 +170,6 @@ describe('automation task route', () => {
       '/automation-tasks',
     )
 
-    expect(
-      await screen.findByRole('heading', { name: '自动任务' }),
-    ).toBeVisible()
     expect(await screen.findAllByText('系统默认模板')).toHaveLength(2)
     expect(screen.getByRole('button', { name: '立即运行' })).toBeEnabled()
     expect(screen.getByRole('link', { name: /查看运行/u })).toHaveAttribute(
@@ -370,7 +367,7 @@ describe('automation run routes', () => {
     expect(
       await screen.findByRole('heading', { name: /运行记录/u }),
     ).toBeVisible()
-    expect(screen.getByText(/每次运行都会保留任务版本/u)).toBeVisible()
+    expect(screen.queryByText(/每次运行都会保留任务版本/u)).toBeNull()
     expect(screen.queryByText(/冻结|修订|运行快照|已保存产物/u)).toBeNull()
     expect(screen.getByText(/采集 · 已完成/u)).toBeVisible()
     expect(screen.getByText(/计划记录/u)).toBeVisible()
@@ -393,7 +390,7 @@ describe('automation run routes', () => {
     )
     expect(screen.getByRole('link', { name: /查看本轮报告/u })).toHaveAttribute(
       'href',
-      '/results?report=401',
+      '/reports/history?report=401',
     )
     expect(screen.getAllByRole('listitem')).toHaveLength(3)
   })

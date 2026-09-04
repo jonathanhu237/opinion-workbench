@@ -510,7 +510,7 @@ export function ReportDetails({
                         variant: 'link',
                         className: 'min-h-11',
                       })}
-                      to={`/results?result=${item.source.result_id}${item.initial_attempt_id === null ? '' : `&attempt=${item.initial_attempt_id}`}&report=${report.id}`}
+                      to={`/reports/history?result=${item.source.result_id}${item.initial_attempt_id === null ? '' : `&attempt=${item.initial_attempt_id}`}&report=${report.id}`}
                       preventScrollReset
                     >
                       {item.initial_attempt_id === null

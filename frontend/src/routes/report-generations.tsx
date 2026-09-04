@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Link } from 'react-router'
 
 import { Button } from '@/components/ui/button'
@@ -313,7 +313,7 @@ function GenerationDetails({ value }: { value: ReportGeneration }) {
       {value.status === 'configuration_blocked' && (
         <p className="text-sm">
           同一配置下的相关手动任务已停止，不会逐条重复失败请求。
-          <Link className="underline underline-offset-4" to="/ai-settings">
+          <Link className="underline underline-offset-4" to="/settings/ai">
             检查模型设置
           </Link>
         </p>
@@ -338,7 +338,7 @@ function GenerationDetails({ value }: { value: ReportGeneration }) {
                 <div key={item.id} className="flex flex-col gap-1 text-sm">
                   <Link
                     className="underline underline-offset-4"
-                    to={`/results?generation=${value.id}&result=${item.source.result_id}&attempt=${item.id}`}
+                    to={`/reports/history?generation=${value.id}&result=${item.source.result_id}&attempt=${item.id}`}
                   >
                     {item.source.title || `内容 #${item.source.result_id}`}
                   </Link>
@@ -430,13 +430,6 @@ export function ReportGenerations({
   autoSelectLatest?: boolean
 }) {
   const [beforeId, setBeforeId] = useState<number | undefined>()
-  const heading = useRef<HTMLHeadingElement>(null)
-  useEffect(() => {
-    if (selectedId !== null) {
-      heading.current?.focus()
-      heading.current?.scrollIntoView?.({ block: 'start' })
-    }
-  }, [selectedId])
   const history = useQuery({
     queryKey: [...GENERATIONS_QUERY_KEY, 'list', beforeId],
     queryFn: ({ signal }) => fetchReportGenerations(signal, beforeId),
@@ -475,15 +468,6 @@ export function ReportGenerations({
   })
   return (
     <Card>
-      <CardHeader>
-        <h2
-          ref={heading}
-          tabIndex={-1}
-          className="scroll-mt-24 font-display text-xl outline-none"
-        >
-          报告记录
-        </h2>
-      </CardHeader>
       <CardContent className="flex flex-col gap-4">
         {selectedId !== null &&
           (selected.isError ? (

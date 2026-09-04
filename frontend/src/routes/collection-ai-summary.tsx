@@ -435,7 +435,7 @@ export function CollectionAISummary({
         </h2>
         {historyOnly ? (
           <Link
-            to="/results"
+            to="/reports/new"
             className={buttonVariants({ className: 'min-h-11 sm:min-h-8' })}
           >
             前往报告生成
@@ -457,7 +457,7 @@ export function CollectionAISummary({
       </div>
       <p className="text-sm leading-6 text-muted-foreground">
         旧版分析只针对本次采集，历史报告继续保留。
-        <Link to="/results" className="ml-1 underline underline-offset-4">
+        <Link to="/reports/new" className="ml-1 underline underline-offset-4">
           前往报告生成查看选材与报告
         </Link>
       </p>
@@ -471,7 +471,7 @@ export function CollectionAISummary({
           {admissionMessage}
           {!settingsQuery.isPending && !settings?.has_api_key && (
             <Link
-              to="/ai-settings"
+              to="/settings/ai"
               className="ml-2 underline underline-offset-4"
             >
               前往 AI 配置

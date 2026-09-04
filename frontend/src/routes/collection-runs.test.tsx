@@ -526,7 +526,7 @@ describe('multi-platform collection routes', () => {
     ).toBeVisible()
     expect(screen.getByRole('link', { name: '前往报告生成' })).toHaveAttribute(
       'href',
-      '/results',
+      '/reports/new',
     )
     expect(screen.queryByRole('button', { name: '生成汇总' })).toBeNull()
     expect(startAISummary).not.toHaveBeenCalled()
