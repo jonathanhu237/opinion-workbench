@@ -17,9 +17,10 @@ import {
   type SearchResultFilter,
 } from '@/lib/api/search-runs'
 import {
+  incompleteTermsGuidance,
   searchPlatformPresenters,
+  searchRunDisplayLabel,
   searchRunStatusGuidance,
-  searchRunStatusLabel,
 } from '@/routes/search-run-presenters'
 import { cn } from '@/lib/utils'
 import { SearchResultRecord } from '@/routes/search-result-record'
@@ -174,7 +175,7 @@ export function CollectionRunDetail() {
                   aria-hidden
                 />
               )}
-              {searchRunStatusLabel(run.status, run.failure_reason)}
+              {searchRunDisplayLabel(run)}
             </Badge>
           </div>
         </CardHeader>
@@ -225,6 +226,16 @@ export function CollectionRunDetail() {
               )}
             </div>
           )}
+          {run.incomplete_terms?.length &&
+          run.status !== 'completed_with_results' &&
+          run.status !== 'completed_empty' ? (
+            <div
+              className="rounded-lg border border-amber-300/70 bg-amber-50/60 p-4 text-sm text-amber-900 dark:border-amber-700/70 dark:bg-amber-950/20 dark:text-amber-100"
+              role="status"
+            >
+              {incompleteTermsGuidance(run.incomplete_terms)}
+            </div>
+          ) : null}
 
           <dl className="grid grid-cols-3 gap-3 rounded-lg border p-4 text-center">
             <div>

@@ -566,6 +566,35 @@ describe('search batch API boundary', () => {
     },
   )
 
+  it('accepts incomplete coverage when the platform item itself finished', async () => {
+    const diagnostic = {
+      position: 0,
+      term: '龙田街道',
+      reason: 'view_all_unresolved' as const,
+      result_count: 0,
+    }
+    const payload: SearchBatchDetail = {
+      ...batch,
+      status: 'completed_with_failures',
+      items: [
+        {
+          ...batch.items[0],
+          incomplete_terms: [diagnostic],
+          latest_attempt: {
+            attempt_number: 1,
+            run: { ...run, incomplete_terms: [diagnostic] },
+          },
+        },
+      ],
+    }
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify(payload), { status: 200 }),
+    )
+    await expect(
+      fetchSearchBatch(4, new AbortController().signal),
+    ).resolves.toEqual(payload)
+  })
+
   it('keeps an out-of-range historical position readable only as unavailable recovery', async () => {
     const payload = {
       ...batch,

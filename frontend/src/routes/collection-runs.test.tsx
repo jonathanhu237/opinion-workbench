@@ -274,6 +274,56 @@ describe('Weibo collection routes', () => {
     expect(screen.queryByText(/今日头条|抖音|快手|小红书/u)).toBeNull()
   })
 
+  it('shows incomplete keyword coverage without presenting it as login failure', async () => {
+    const incomplete = run({
+      incomplete_terms: [
+        {
+          position: 0,
+          term: '龙田街道',
+          reason: 'view_all_unresolved',
+          result_count: 1,
+        },
+      ],
+    })
+    vi.mocked(fetchSearchRun).mockResolvedValue({
+      ...incomplete,
+      terms: rule.terms,
+    })
+    renderRoute('/collection-runs/31')
+    expect(
+      await screen.findByText(
+        /以下搜索词未能完整获取：龙田街道（已保留 1 条）/u,
+      ),
+    ).toBeVisible()
+    expect(screen.queryByText(/请先到“平台账号”/u)).toBeNull()
+  })
+
+  it('keeps incomplete keywords visible when a later global failure is primary', async () => {
+    const incomplete = run({
+      status: 'structure_changed',
+      failure_reason: 'page_state_unrecognized',
+      incomplete_terms: [
+        {
+          position: 0,
+          term: '龙田街道',
+          reason: 'view_all_unresolved',
+          result_count: 1,
+        },
+      ],
+    })
+    vi.mocked(fetchSearchRun).mockResolvedValue({
+      ...incomplete,
+      terms: rule.terms,
+    })
+    renderRoute('/collection-runs/31')
+    expect(
+      await screen.findByText(/当前未能识别微博页面的工作状态/u),
+    ).toBeVisible()
+    expect(
+      screen.getByText(/以下搜索词未能完整获取：龙田街道（已保留 1 条）/u),
+    ).toBeVisible()
+  })
+
   it('renders one-item batch progress and no platform fan-out', async () => {
     renderRoute('/collection-batches/8')
     expect(

@@ -5,7 +5,11 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from longtian_api.schemas.search_runs import SearchResult, SearchRunSummary
+from longtian_api.schemas.search_runs import (
+    SearchResult,
+    SearchRunSummary,
+    SearchTermDiagnostic,
+)
 from longtian_api.search_platforms import SearchPlatform
 
 SearchBatchStatus = Literal[
@@ -122,6 +126,7 @@ class SearchBatchItem(BaseModel):
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
+    incomplete_terms: tuple[SearchTermDiagnostic, ...] = ()
 
 
 class SearchBatchSummary(BaseModel):

@@ -2,6 +2,7 @@
 
 import asyncio
 from collections import deque
+from urllib.parse import quote_plus, urlencode
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,6 +14,7 @@ from longtian_api.services.ai_settings import AISettingsService
 from longtian_api.services.monitoring_rules import MonitoringRuleService
 from longtian_api.services.native_weibo import NativeWeiboCollector
 from longtian_api.services.platform_connections import PlatformConnectionService
+from longtian_api.services.weibo_dom import read_search_page
 
 CARD = """<div class="card-wrap" action-type="feed_list_item" mid="3501756485200075">
   <div class="content"><a class="name" href="//weibo.com/1234567890">样本发布者</a>
@@ -20,6 +22,52 @@ CARD = """<div class="card-wrap" action-type="feed_list_item" mid="3501756485200
   <p class="from"><a href="//weibo.com/1234567890/z0JH2lOMb">今天 12:00</a></p>
   </div></div>"""
 EMPTY = '<div class="card-no-result">抱歉，未找到相关结果。</div>'
+
+
+def card(mid: str, body: str, *, next_url: str | None = None) -> str:
+    next_link = f'<a class="next" href="{next_url}">下一页</a>' if next_url else ""
+    return f"""<div class="card-wrap" action-type="feed_list_item" mid="{mid}">
+      <div class="content"><a class="name" href="//weibo.com/1234567890">样本发布者</a>
+      <p node-type="feed_list_content">{body}</p>
+      <p class="from"><a href="https://m.weibo.cn/detail/{mid}">今天 12:00</a></p>
+      </div></div>{next_link}"""
+
+
+def omitted_page(term: str) -> str:
+    encoded = quote_plus(term)
+    return f"""<div class="search-result-summary">
+      找到 40 条结果，部分相似结果已省略
+      <a href="https://s.weibo.com/weibo?q={encoded}&amp;nodup=1">查看全部搜索结果</a>
+    </div>"""
+
+
+def loading_page() -> str:
+    return "<main>正在加载</main>"
+
+
+def test_omission_parser_requires_notice_and_same_keyword_view_all_link():
+    term = "龙田街道"
+    url = "https://s.weibo.com/weibo?" + urlencode({"q": term})
+    parsed = read_search_page(url, omitted_page(term), 200, term)
+    assert parsed.state == "omitted"
+    assert parsed.view_all_url == url + "&nodup=1"
+
+    assert read_search_page(url, loading_page(), 200, term).state == "pending"
+    wrong_keyword = omitted_page("竹坑社区")
+    assert read_search_page(url, wrong_keyword, 200, term).state == "pending"
+    invalid_target = omitted_page(term).replace(
+        "https://s.weibo.com/weibo?q=", "https://example.com/weibo?q="
+    )
+    assert read_search_page(url, invalid_target, 200, term).state == "pending"
+
+
+def test_omission_text_in_a_post_does_not_trigger_recovery():
+    term = "龙田街道"
+    url = "https://s.weibo.com/weibo?" + urlencode({"q": term})
+    page = card("5012345678901234", "用户说：部分相似结果已省略")
+    parsed = read_search_page(url, page, 200, term)
+    assert parsed.state == "results"
+    assert parsed.view_all_url is None
 
 
 class BrowserFixture:
@@ -131,6 +179,225 @@ def test_native_discovery_saves_aliases_across_terms_and_runs_without_analysis(
         )
         assert browser.frozen
     assert browser.closed
+
+
+def test_native_discovery_recovers_view_all_results_after_omitted_second_page(
+    tmp_path,
+):
+    term = "龙田街道"
+    first_page_url = "https://s.weibo.com/weibo?" + urlencode({"q": term})
+    ordinary_second_page = first_page_url + "&page=2"
+    view_all_url = first_page_url + "&nodup=1"
+    view_all_second_page = view_all_url + "&page=2"
+    app, browser = environment(
+        tmp_path,
+        [
+            card(
+                "5012345678901234",
+                "第一页 A",
+                next_url=ordinary_second_page,
+            )
+            + card("5012345678901235", "第一页 B"),
+            omitted_page(term),
+            card(
+                "5012345678901234",
+                "第一页 A",
+                next_url=view_all_second_page,
+            )
+            + card("5012345678901235", "第一页 B"),
+            card("5012345678901236", "补救后的 C"),
+            EMPTY,
+            EMPTY,
+            EMPTY,
+            EMPTY,
+        ],
+    )
+
+    with TestClient(app) as client:
+        run = collect(client, limit=3)
+        assert run["status"] == "completed_with_results"
+        assert run["failure_reason"] is None
+        assert (run["new_count"], run["repeated_count"], run["total_count"]) == (
+            3,
+            0,
+            3,
+        )
+        assert run["incomplete_terms"] == []
+        results = client.get(f"/api/v1/search-runs/{run['id']}/results").json()
+        assert results["total"] == 3
+        assert {item["platform_content_id"] for item in results["results"]} == {
+            "5012345678901234",
+            "5012345678901235",
+            "5012345678901236",
+        }
+        assert browser.visits[:4] == [
+            first_page_url,
+            ordinary_second_page,
+            view_all_url,
+            view_all_second_page,
+        ]
+        assert len(browser.visits) == 8
+
+
+def test_native_discovery_marks_unresolved_view_all_keyword_and_continues(
+    tmp_path,
+):
+    term = "龙田街道"
+    first_page_url = "https://s.weibo.com/weibo?" + urlencode({"q": term})
+    ordinary_second_page = first_page_url + "&page=2"
+    app, browser = environment(
+        tmp_path,
+        [
+            card("5012345678901234", "第一页 A", next_url=ordinary_second_page),
+            omitted_page(term),
+            loading_page(),
+            card("5012345678901235", "下一个关键词 B"),
+            EMPTY,
+            EMPTY,
+            EMPTY,
+        ],
+    )
+
+    with TestClient(app) as client:
+        run = collect(client, limit=3)
+        assert run["status"] == "completed_with_results"
+        assert (run["new_count"], run["total_count"]) == (2, 2)
+        assert run["incomplete_terms"] == [
+            {
+                "position": 0,
+                "term": "龙田街道",
+                "reason": "view_all_unresolved",
+                "result_count": 1,
+            }
+        ]
+        detail = client.get(f"/api/v1/search-runs/{run['id']}").json()
+        assert detail["incomplete_terms"] == run["incomplete_terms"]
+        assert len(browser.visits) == 7
+        assert browser.frozen
+
+
+def test_batch_finishes_with_incomplete_coverage_instead_of_pausing(
+    tmp_path,
+):
+    term = "龙田街道"
+    ordinary_second_page = (
+        "https://s.weibo.com/weibo?" + urlencode({"q": term}) + "&page=2"
+    )
+    app, browser = environment(
+        tmp_path,
+        [
+            card("5012345678901234", "第一页 A", next_url=ordinary_second_page),
+            omitted_page(term),
+            loading_page(),
+            EMPTY,
+            EMPTY,
+            EMPTY,
+            EMPTY,
+        ],
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/search-batches",
+            json={
+                "monitoring_rule_id": 1,
+                "platforms": ["wb"],
+                "max_results_per_term": 3,
+            },
+        )
+        assert response.status_code == 202
+        batch = _wait_for_batch(
+            client, response.json()["id"], {"completed_with_failures"}
+        )
+        assert batch["items"][0]["status"] == "completed"
+        assert batch["items"][0]["latest_attempt"]["run"]["incomplete_terms"]
+        assert browser.frozen
+
+
+def test_all_incomplete_keywords_are_not_reported_as_successful_empty(
+    tmp_path,
+):
+    terms = ["龙田街道", "龙田社区", "老坑社区", "竹坑社区", "南布社区"]
+    pages = []
+    for term in terms:
+        pages.extend((omitted_page(term), loading_page()))
+    app, browser = environment(tmp_path, pages)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/search-runs",
+            json={
+                "monitoring_rule_id": 1,
+                "platform": "wb",
+                "max_results_per_term": 3,
+            },
+        )
+        assert response.status_code == 202
+        run_id = response.json()["id"]
+        for _ in range(300):
+            run = client.get(f"/api/v1/search-runs/{run_id}").json()
+            if run["status"] not in {"queued", "running"}:
+                break
+            client.portal.call(asyncio.sleep, 0.01)
+        else:
+            raise AssertionError("search run did not become terminal")
+        assert run["status"] == "completed_empty"
+        assert run["total_count"] == 0
+        assert [item["term"] for item in run["incomplete_terms"]] == terms
+        assert len(browser.visits) == len(pages)
+
+
+def test_incomplete_keyword_remains_visible_after_later_manual_pause_and_resume(
+    tmp_path,
+):
+    term = "龙田街道"
+    ordinary_second_page = (
+        "https://s.weibo.com/weibo?" + urlencode({"q": term}) + "&page=2"
+    )
+    challenge = '<div role="dialog">请完成验证</div>'
+    app, browser = environment(
+        tmp_path,
+        [
+            card("5012345678901234", "第一页 A", next_url=ordinary_second_page),
+            omitted_page(term),
+            loading_page(),
+            challenge,
+            EMPTY,
+            EMPTY,
+            EMPTY,
+            EMPTY,
+            EMPTY,
+        ],
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/v1/search-batches",
+            json={
+                "monitoring_rule_id": 1,
+                "platforms": ["wb"],
+                "max_results_per_term": 3,
+            },
+        )
+        assert response.status_code == 202
+        identity = response.json()["id"]
+        paused = _wait_for_batch(client, identity, {"paused_for_manual_action"})
+        assert paused["items"][0]["incomplete_terms"] == [
+            {
+                "position": 0,
+                "term": "龙田街道",
+                "reason": "view_all_unresolved",
+                "result_count": 1,
+            }
+        ]
+        control = _control(client, identity)
+        browser.html = EMPTY
+        assert client.post(
+            f"/api/v1/search-batches/{identity}/continue", json=control
+        ).status_code == 202
+        finished = _wait_for_batch(client, identity, {"completed_with_failures"})
+        assert finished["items"][0]["status"] == "completed"
+        assert finished["items"][0]["incomplete_terms"][0]["term"] == "龙田街道"
 
 
 def test_native_connection_check_brings_owned_browser_to_front(tmp_path):

@@ -47,7 +47,7 @@ import {
   formatLocalDate,
   searchBatchStatusLabel,
   searchPlatformPresenters,
-  searchRunStatusLabel,
+  searchRunDisplayLabel,
 } from '@/routes/search-run-presenters'
 
 const startSchema = z.object({
@@ -204,7 +204,7 @@ function RunHistory({ runs }: { runs: SearchRunSummary[] }) {
             <TableRow key={run.id}>
               <TableCell>
                 <Badge variant={runBadgeVariant(run.status)}>
-                  {searchRunStatusLabel(run.status, run.failure_reason)}
+                  {searchRunDisplayLabel(run)}
                 </Badge>
               </TableCell>
               <TableCell>

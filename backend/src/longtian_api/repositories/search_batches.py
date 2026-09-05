@@ -25,6 +25,9 @@ from longtian_api.schemas.search_batches import (
 )
 from longtian_api.search_checkpoints import Checkpoint, item_checkpoint
 from longtian_api.search_platforms import SearchPlatform
+from longtian_api.services.collector_contracts import (
+    SearchTermDiagnostic as CollectorSearchTermDiagnostic,
+)
 
 ACTIVE = {"queued", "running", "paused_for_manual_action"}
 SUCCESS = {"completed_with_results", "completed_empty"}
@@ -52,6 +55,7 @@ class SearchBatchItemRecord:
     created_at: str
     started_at: str | None
     finished_at: str | None
+    incomplete_terms: tuple[CollectorSearchTermDiagnostic, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -817,12 +821,26 @@ def _finalize(connection: sqlite3.Connection, batch_id: int) -> None:
         s in ACTIVE for s in statuses
     ):
         raise SearchBatchNotActiveError
+    incomplete = (
+        connection.execute(
+            """
+            SELECT 1
+            FROM search_batch_attempts AS attempts
+            JOIN search_run_term_diagnostics AS diagnostics
+              ON diagnostics.run_id = attempts.search_run_id
+            WHERE attempts.batch_id = ?
+            LIMIT 1
+            """,
+            (batch_id,),
+        ).fetchone()
+        is not None
+    )
     connection.execute(
         """UPDATE search_batches SET status = ?, current_item_position = NULL,
            finished_at = ?, control_revision = control_revision + 1 WHERE id = ?""",
         (
             "completed"
-            if all(s == "completed" for s in statuses)
+            if all(s == "completed" for s in statuses) and not incomplete
             else "completed_with_failures",
             _utc_timestamp(),
             batch_id,
@@ -906,6 +924,29 @@ def _read_batch(connection: sqlite3.Connection, batch_id: int) -> SearchBatchRec
                           FROM results""",
             (batch_id, position),
         ).fetchone()
+        diagnostic_rows = connection.execute(
+            """
+            SELECT term_position, value, reason, result_count
+            FROM (
+              SELECT terms.position AS term_position, terms.value,
+                     diagnostics.reason, diagnostics.result_count,
+                     ROW_NUMBER() OVER (
+                       PARTITION BY terms.position
+                       ORDER BY attempts.attempt_number DESC
+                     ) AS ordinal
+              FROM search_batch_attempts AS attempts
+              JOIN search_run_term_diagnostics AS diagnostics
+                ON diagnostics.run_id = attempts.search_run_id
+              JOIN search_run_terms AS terms
+                ON terms.run_id = diagnostics.run_id
+               AND terms.position = diagnostics.term_position
+              WHERE attempts.batch_id = ? AND attempts.item_position = ?
+            )
+            WHERE ordinal = 1
+            ORDER BY term_position ASC
+            """,
+            (batch_id, position),
+        ).fetchall()
         items.append(
             SearchBatchItemRecord(
                 position=position,
@@ -922,6 +963,14 @@ def _read_batch(connection: sqlite3.Connection, batch_id: int) -> SearchBatchRec
                 created_at=item["created_at"],
                 started_at=item["started_at"],
                 finished_at=item["finished_at"],
+                incomplete_terms=tuple(
+                    CollectorSearchTermDiagnostic(
+                        position=int(diagnostic["term_position"]),
+                        reason=str(diagnostic["reason"]),  # type: ignore[arg-type]
+                        result_count=int(diagnostic["result_count"]),
+                    )
+                    for diagnostic in diagnostic_rows
+                ),
             )
         )
     return SearchBatchRecord(

@@ -70,6 +70,7 @@ def test_real_v12_to_v13_preserves_every_old_column_and_reopens(tmp_path):
         "media_cache_policy",
         "media_cache_entries",
         "media_cache_bindings",
+        "search_run_term_diagnostics",
     }
     assert all(
         after[table] == []

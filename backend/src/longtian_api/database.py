@@ -4,7 +4,7 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
-CURRENT_DATABASE_VERSION = 26
+CURRENT_DATABASE_VERSION = 27
 DEFAULT_RULE_NAME = "龙田街道及四个社区"
 DEFAULT_RULE_TERMS = (
     "龙田街道",
@@ -128,6 +128,9 @@ class Database:
                 version = 25
             if version < 26:
                 _migrate_to_version_26(connection)
+                version = 26
+            if version < 27:
+                _migrate_to_version_27(connection)
         finally:
             connection.close()
 
@@ -379,6 +382,27 @@ def _migrate_to_version_26(connection: sqlite3.Connection) -> None:
         connection.execute(
             f"PRAGMA legacy_alter_table = {int(previous_legacy_alter_table)}"
         )
+
+
+def _migrate_to_version_27(connection: sqlite3.Connection) -> None:
+    """Persist per-keyword diagnostics for bounded view-all recovery."""
+    from longtian_api.migrations.search_term_diagnostics_v27 import migrate
+
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        version = _read_user_version(connection)
+        if version >= 27:
+            connection.execute("COMMIT")
+            return
+        if version != 26:
+            raise DatabaseVersionError("Unsupported database migration source version.")
+        migrate(connection)
+        connection.execute("PRAGMA user_version = 27")
+        connection.execute("COMMIT")
+    except BaseException:
+        if connection.in_transaction:
+            connection.execute("ROLLBACK")
+        raise
 
 
 def _migrate_to_version_23(connection: sqlite3.Connection) -> None:

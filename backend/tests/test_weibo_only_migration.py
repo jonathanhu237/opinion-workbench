@@ -214,7 +214,9 @@ def test_fresh_database_has_the_same_weibo_only_constraints(tmp_path: Path) -> N
     database.initialize()
 
     with database.connect() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 26
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == (
+            CURRENT_DATABASE_VERSION
+        )
         for table in (
             "search_runs",
             "search_contents",

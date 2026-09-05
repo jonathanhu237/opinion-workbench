@@ -43,7 +43,10 @@ from longtian_api.schemas.search_batches import (
     SearchBatchResultListResponse,
     SearchBatchSummary,
 )
-from longtian_api.schemas.search_runs import SearchRunSummary
+from longtian_api.schemas.search_runs import (
+    SearchRunSummary,
+    SearchTermDiagnostic,
+)
 from longtian_api.search_platforms import SEARCH_PLATFORMS, SearchPlatform
 from longtian_api.services.browser_operations import (
     BrowserOperationCoordinator,
@@ -811,6 +814,15 @@ def _to_run_summary(record: SearchRunRecord) -> SearchRunSummary:
         created_at=record.created_at,
         started_at=record.started_at,
         finished_at=record.finished_at,
+        incomplete_terms=tuple(
+            SearchTermDiagnostic(
+                position=diagnostic.position,
+                term=record.terms[diagnostic.position],
+                reason=diagnostic.reason,
+                result_count=diagnostic.result_count,
+            )
+            for diagnostic in record.incomplete_terms
+        ),
     )
 
 
@@ -821,7 +833,9 @@ def _to_attempt(record: SearchBatchAttemptRecord) -> SearchBatchAttempt:
     )
 
 
-def _to_item(record: SearchBatchItemRecord) -> SearchBatchItem:
+def _to_item(
+    record: SearchBatchItemRecord, terms: tuple[str, ...]
+) -> SearchBatchItem:
     return SearchBatchItem(
         position=record.position,
         platform=record.platform,
@@ -843,6 +857,15 @@ def _to_item(record: SearchBatchItemRecord) -> SearchBatchItem:
         created_at=record.created_at,
         started_at=record.started_at,
         finished_at=record.finished_at,
+        incomplete_terms=tuple(
+            SearchTermDiagnostic(
+                position=diagnostic.position,
+                term=terms[diagnostic.position],
+                reason=diagnostic.reason,
+                result_count=diagnostic.result_count,
+            )
+            for diagnostic in record.incomplete_terms
+        ),
     )
 
 
@@ -872,7 +895,7 @@ def _to_detail(record: SearchBatchRecord) -> SearchBatchDetail:
     return SearchBatchDetail(
         **_to_summary(record).model_dump(),
         terms=record.terms,
-        items=tuple(_to_item(item) for item in record.items),
+        items=tuple(_to_item(item, record.terms) for item in record.items),
     )
 
 

@@ -5,6 +5,7 @@ import {
   type SearchFailureReason,
   type SearchResultOpenOutcome,
   type SearchPlatform,
+  type SearchTermDiagnostic,
   type SearchRunSummary,
   type SearchRunStatus,
 } from '@/lib/api/search-runs'
@@ -46,7 +47,11 @@ const failureReasonLabels: Record<SearchFailureReason, string> = {
 
 export type SearchRunPresentation = Pick<
   SearchRunSummary,
-  'status' | 'platform' | 'failure_reason' | 'execution_limit'
+  | 'status'
+  | 'platform'
+  | 'failure_reason'
+  | 'execution_limit'
+  | 'incomplete_terms'
 >
 
 export function searchFailureReasonLabel(reason: SearchFailureReason) {
@@ -69,6 +74,23 @@ function failureReasonGuidance(
 
 function legacyStructureGuidance(platformName: string) {
   return `未能可靠识别${platformName}的采集内容。可以打开平台检查后再试；如果问题持续，请更新采集器。`
+}
+
+export function incompleteTermsGuidance(
+  diagnostics: readonly SearchTermDiagnostic[] | undefined,
+) {
+  const items = diagnostics ?? []
+  if (items.length === 0) return null
+  const terms = items
+    .map(
+      (diagnostic) =>
+        `${diagnostic.term}（已保留 ${diagnostic.result_count} 条）`,
+    )
+    .join('、')
+  const retained = items.reduce((total, item) => total + item.result_count, 0)
+  const prefix =
+    retained > 0 ? '本次采集已保存可识别内容，但' : '本次采集未能确认完整结果，'
+  return `${prefix}以下搜索词未能完整获取：${terms}。已保存内容仍可使用，后续可按需重新发起采集。`
 }
 
 const statusGuidance: Partial<
@@ -96,6 +118,17 @@ export function searchRunStatusLabel(
     return searchFailureReasonLabel(failureReason)
   }
   return statusLabels[status]
+}
+
+export function searchRunDisplayLabel(run: SearchRunPresentation) {
+  if (
+    run.incomplete_terms?.length &&
+    (run.status === 'completed_with_results' ||
+      run.status === 'completed_empty')
+  ) {
+    return '采集未完整覆盖'
+  }
+  return searchRunStatusLabel(run.status, run.failure_reason)
 }
 
 export function searchRunStatusGuidance(
@@ -139,6 +172,13 @@ export function searchRunStatusGuidance(
     return run.failure_reason === null
       ? legacyStructureGuidance(platformName)
       : failureReasonGuidance(platformName, run.failure_reason)
+  }
+  if (
+    (run.status === 'completed_with_results' ||
+      run.status === 'completed_empty') &&
+    run.incomplete_terms?.length
+  ) {
+    return incompleteTermsGuidance(run.incomplete_terms)
   }
   const guidance = statusGuidance[run.status]
   return guidance?.(platformName) ?? null

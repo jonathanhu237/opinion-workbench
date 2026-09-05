@@ -13,6 +13,9 @@ from longtian_api.search_failure_reasons import (
     is_search_failure_reason,
 )
 from longtian_api.search_platforms import SearchPlatform
+from longtian_api.services.collector_contracts import (
+    SearchTermDiagnostic as CollectorSearchTermDiagnostic,
+)
 from longtian_api.services.native_browser_contracts import ExecutionLimit
 
 SearchRunStatus = Literal[
@@ -52,6 +55,7 @@ class SearchRunRecord:
     execution_start_term_position: int = 0
     search_protocol_version: int = 2
     execution_limit: ExecutionLimit | None = None
+    incomplete_terms: tuple[CollectorSearchTermDiagnostic, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -274,6 +278,57 @@ class SearchRunRepository:
                    VALUES (?, ?, 'worker_term_completed', ?, ?, ?)""",
                 (run_id, term_position, item_count, timestamp, timestamp),
             )
+
+    def record_incomplete_terms(
+        self,
+        run_id: int,
+        diagnostics: Sequence[CollectorSearchTermDiagnostic],
+    ) -> None:
+        """Persist bounded omission-recovery outcomes before the run closes."""
+        if not diagnostics:
+            return
+        with _translate_storage_errors(), self._write_connection() as connection:
+            run = _require_active_writer(connection, run_id)
+            for diagnostic in diagnostics:
+                if (
+                    type(diagnostic.position) is not int
+                    or not 0 <= diagnostic.position < 20
+                    or diagnostic.reason != "view_all_unresolved"
+                    or type(diagnostic.result_count) is not int
+                    or not 0 <= diagnostic.result_count <= run["max_results_per_term"]
+                    or connection.execute(
+                        "SELECT 1 FROM search_run_terms "
+                        "WHERE run_id = ? AND position = ?",
+                        (run_id, diagnostic.position),
+                    ).fetchone()
+                    is None
+                    or connection.execute(
+                        "SELECT 1 FROM search_run_term_completions WHERE run_id = ? "
+                        "AND term_position = ?",
+                        (run_id, diagnostic.position),
+                    ).fetchone()
+                    is None
+                ):
+                    raise SearchRunNotActiveError
+                observed = connection.execute(
+                    "SELECT COUNT(*) FROM search_run_content_terms WHERE run_id = ? "
+                    "AND term_position = ?",
+                    (run_id, diagnostic.position),
+                ).fetchone()[0]
+                if observed != diagnostic.result_count:
+                    raise SearchRunNotActiveError
+                connection.execute(
+                    """INSERT OR IGNORE INTO search_run_term_diagnostics
+                       (run_id, term_position, reason, result_count, recorded_at)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (
+                        run_id,
+                        diagnostic.position,
+                        diagnostic.reason,
+                        diagnostic.result_count,
+                        _utc_timestamp(),
+                    ),
+                )
 
     def observe_item(
         self,
@@ -694,6 +749,27 @@ def _read_run(
     terms = tuple(str(term["value"]) for term in term_rows)
     if not terms and not allow_empty_terms:
         raise sqlite3.DatabaseError("Search run has no terms")
+    diagnostic_rows = connection.execute(
+        """
+        SELECT diagnostics.term_position, terms.value, diagnostics.reason,
+               diagnostics.result_count
+        FROM search_run_term_diagnostics AS diagnostics
+        JOIN search_run_terms AS terms
+          ON terms.run_id = diagnostics.run_id
+         AND terms.position = diagnostics.term_position
+        WHERE diagnostics.run_id = ?
+        ORDER BY diagnostics.term_position ASC
+        """,
+        (run_id,),
+    ).fetchall()
+    incomplete_terms = tuple(
+        CollectorSearchTermDiagnostic(
+            position=int(row["term_position"]),
+            reason=str(row["reason"]),  # type: ignore[arg-type]
+            result_count=int(row["result_count"]),
+        )
+        for row in diagnostic_rows
+    )
     failure_reason = row["failure_reason"]
     if failure_reason is not None and not is_search_failure_reason(failure_reason):
         raise sqlite3.DatabaseError("Search run has an unknown failure reason")
@@ -724,6 +800,7 @@ def _read_run(
         execution_start_term_position=int(row["execution_start_term_position"]),
         search_protocol_version=int(row["search_protocol_version"]),
         execution_limit=cast(ExecutionLimit | None, row["execution_limit"]),
+        incomplete_terms=incomplete_terms,
     )
 
 

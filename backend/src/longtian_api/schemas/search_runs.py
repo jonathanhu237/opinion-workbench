@@ -52,6 +52,7 @@ SearchRunErrorCode = Literal[
     "search_result_open_not_supported",
     "search_storage_unavailable",
 ]
+SearchTermIncompleteReason = Literal["view_all_unresolved"]
 
 
 class SearchRunCreate(BaseModel):
@@ -69,6 +70,15 @@ class SearchRunCreate(BaseModel):
         if not is_supported_search_platform(self.platform):
             raise ValueError("only Weibo is supported")
         return self
+
+
+class SearchTermDiagnostic(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    position: int = Field(ge=0, le=19)
+    term: str = Field(min_length=1, max_length=200)
+    reason: SearchTermIncompleteReason
+    result_count: int = Field(ge=0, le=50)
 
 
 class SearchRunSummary(BaseModel):
@@ -90,6 +100,7 @@ class SearchRunSummary(BaseModel):
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
+    incomplete_terms: tuple[SearchTermDiagnostic, ...] = ()
 
     @model_validator(mode="after")
     def validate_failure_reason(self) -> "SearchRunSummary":
@@ -97,11 +108,25 @@ class SearchRunSummary(BaseModel):
             raise ValueError("execution_limit requires timed_out status")
         if self.failure_reason is not None and self.status != "structure_changed":
             raise ValueError("failure_reason requires structure_changed status")
+        positions = [item.position for item in self.incomplete_terms]
+        if len(positions) != len(set(positions)) or any(
+            position >= self.term_count for position in positions
+        ):
+            raise ValueError("invalid incomplete term diagnostics")
         return self
 
 
 class SearchRunDetail(SearchRunSummary):
     terms: tuple[str, ...]
+
+    @model_validator(mode="after")
+    def validate_diagnostic_terms(self) -> "SearchRunDetail":
+        if any(
+            self.terms[item.position] != item.term
+            for item in self.incomplete_terms
+        ):
+            raise ValueError("incomplete diagnostic term does not match run terms")
+        return self
 
 
 class SearchRunListResponse(BaseModel):

@@ -86,7 +86,10 @@ ProgressCallback = Callable[[UUID, AuthPlatformId, AuthProgressPhase], Awaitable
 SessionDisconnectedCallback = Callable[[UUID | None], Awaitable[None]]
 SearchProgressCallback = Callable[[int, int], Awaitable[None]]
 SearchItemCallback = Callable[[int, "SearchWorkerItem"], Awaitable[None]]
-SearchTermCompletedCallback = Callable[[int, int], Awaitable[None]]
+SearchTermIncompleteReason = Literal["view_all_unresolved"]
+SearchTermCompletedCallback = Callable[
+    [int, int, SearchTermIncompleteReason | None], Awaitable[None]
+]
 
 
 def supports_platform(collector, platform):
@@ -134,9 +137,19 @@ class SearchWorkerItem:
 
 
 @dataclass(frozen=True, slots=True)
+class SearchTermDiagnostic:
+    """A keyword that ended after bounded omission recovery without full coverage."""
+
+    position: int
+    reason: SearchTermIncompleteReason
+    result_count: int
+
+
+@dataclass(frozen=True, slots=True)
 class SearchWorkerResult:
     outcome: SearchOutcome
     execution_limit: ExecutionLimit | None = None
+    incomplete_terms: tuple[SearchTermDiagnostic, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

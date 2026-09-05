@@ -30,6 +30,7 @@ from longtian_api.schemas.search_runs import (
     SearchRunErrorCode,
     SearchRunListResponse,
     SearchRunSummary,
+    SearchTermDiagnostic,
 )
 from longtian_api.search_failure_reasons import (
     SEARCH_FAILURE_REASONS,
@@ -46,8 +47,12 @@ from longtian_api.services.collector_contracts import (
     ManualPageAction,
     ManualPageWorkerResult,
     SearchCollector,
+    SearchTermIncompleteReason,
     SearchWorkerItem,
     supports_platform,
+)
+from longtian_api.services.collector_contracts import (
+    SearchTermDiagnostic as CollectorSearchTermDiagnostic,
 )
 from longtian_api.services.monitoring_rules import (
     MonitoringRuleError,
@@ -96,6 +101,10 @@ class SearchRunRepositoryProtocol(Protocol):
 
     def observe_item(
         self, *, run_id: int, term_position: int, item: SearchContentInput
+    ) -> None: ...
+
+    def record_incomplete_terms(
+        self, run_id: int, diagnostics: tuple[CollectorSearchTermDiagnostic, ...]
     ) -> None: ...
 
     def finish(
@@ -494,10 +503,30 @@ class SearchRunService:
                     self._repository.set_progress, record.id, start + position
                 )
 
-            async def on_term_completed(position: int, count: int) -> None:
+            async def on_term_completed(
+                position: int,
+                count: int,
+                incomplete_reason: SearchTermIncompleteReason | None = None,
+            ) -> None:
                 await database_call(
                     self._repository.complete_term, record.id, start + position, count
                 )
+                if incomplete_reason is not None:
+                    record_diagnostics = getattr(
+                        self._repository, "record_incomplete_terms", None
+                    )
+                    if record_diagnostics is not None:
+                        await database_call(
+                            record_diagnostics,
+                            record.id,
+                            (
+                                CollectorSearchTermDiagnostic(
+                                    position=start + position,
+                                    reason=incomplete_reason,
+                                    result_count=count,
+                                ),
+                            ),
+                        )
 
             async def on_item(position: int, item: SearchWorkerItem) -> None:
                 observed_at = _timestamp_from_epoch_milliseconds(item.discovered_at)
@@ -528,6 +557,23 @@ class SearchRunService:
                     on_item=on_item,
                     on_term_completed=on_term_completed,
                 )
+            if result.incomplete_terms:
+                record_diagnostics = getattr(
+                    self._repository, "record_incomplete_terms", None
+                )
+                if record_diagnostics is not None:
+                    await database_call(
+                        record_diagnostics,
+                        record.id,
+                        tuple(
+                            CollectorSearchTermDiagnostic(
+                                position=start + diagnostic.position,
+                                reason=diagnostic.reason,
+                                result_count=diagnostic.result_count,
+                            )
+                            for diagnostic in result.incomplete_terms
+                        ),
+                    )
             projected = project_worker_outcome(result.outcome)
             terminal = projected.status
             failure_reason = projected.failure_reason
@@ -614,6 +660,15 @@ def _to_summary(record: SearchRunRecord) -> SearchRunSummary:
         created_at=record.created_at,
         started_at=record.started_at,
         finished_at=record.finished_at,
+        incomplete_terms=tuple(
+            SearchTermDiagnostic(
+                position=diagnostic.position,
+                term=record.terms[diagnostic.position],
+                reason=diagnostic.reason,
+                result_count=diagnostic.result_count,
+            )
+            for diagnostic in record.incomplete_terms
+        ),
     )
 
 

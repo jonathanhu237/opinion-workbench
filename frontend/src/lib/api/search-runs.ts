@@ -31,6 +31,12 @@ export const searchFailureReasonSchema = z.enum([
   'search_results_incompatible',
   'search_pagination_incompatible',
 ])
+export const searchTermDiagnosticSchema = z.strictObject({
+  position: z.number().int().min(0).max(19),
+  term: z.string().min(1).max(200),
+  reason: z.enum(['view_all_unresolved']),
+  result_count: z.number().int().min(0).max(50),
+})
 const positiveSafeIntegerSchema = z
   .number()
   .int()
@@ -58,6 +64,7 @@ const summaryShape = {
   created_at: isoDateSchema,
   started_at: isoDateSchema.nullable(),
   finished_at: isoDateSchema.nullable(),
+  incomplete_terms: z.array(searchTermDiagnosticSchema).max(20).optional(),
 } as const
 export const searchRunSummarySchema = z
   .strictObject(summaryShape)
@@ -67,6 +74,17 @@ export const searchRunSummarySchema = z
     }
     if (value.failure_reason !== null && value.status !== 'structure_changed') {
       context.addIssue({ code: 'custom', message: 'invalid failure reason' })
+    }
+    const diagnostics = value.incomplete_terms ?? []
+    if (
+      new Set(diagnostics.map((diagnostic) => diagnostic.position)).size !==
+        diagnostics.length ||
+      diagnostics.some((diagnostic) => diagnostic.position >= value.term_count)
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'invalid incomplete term diagnostics',
+      })
     }
     if (value.new_count + value.repeated_count !== value.total_count) {
       context.addIssue({ code: 'custom', message: 'invalid result counts' })
@@ -83,7 +101,10 @@ const searchRunDetailSchema = z
     }
     if (
       value.terms.length !== value.term_count ||
-      value.new_count + value.repeated_count !== value.total_count
+      value.new_count + value.repeated_count !== value.total_count ||
+      (value.incomplete_terms ?? []).some(
+        (diagnostic) => value.terms[diagnostic.position] !== diagnostic.term,
+      )
     ) {
       context.addIssue({ code: 'custom', message: 'invalid run detail' })
     }
@@ -159,6 +180,7 @@ const errorEnvelopeSchema = z.strictObject({
 
 export type SearchRunStatus = z.infer<typeof searchRunStatusSchema>
 export type SearchFailureReason = z.infer<typeof searchFailureReasonSchema>
+export type SearchTermDiagnostic = z.infer<typeof searchTermDiagnosticSchema>
 export type SearchPlatform = z.infer<typeof searchPlatformSchema>
 export type SearchRunSummary = z.infer<typeof searchRunSummarySchema>
 export type SearchRunDetail = z.infer<typeof searchRunDetailSchema>

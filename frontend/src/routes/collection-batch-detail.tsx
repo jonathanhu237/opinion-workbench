@@ -38,10 +38,12 @@ import { SEARCH_RUNS_QUERY_KEY } from '@/lib/api/search-runs'
 import {
   formatLocalDate,
   batchPauseGuidance,
+  incompleteTermsGuidance,
   manualPageMessages,
   searchBatchItemStatusLabel,
   searchBatchStatusLabel,
   searchPlatformPresenters,
+  searchRunDisplayLabel,
   searchRunStatusLabel,
 } from '@/routes/search-run-presenters'
 import { CollectionBatchResults } from '@/routes/collection-batch-results'
@@ -229,9 +231,14 @@ function BatchRail({
                       item.status !== 'queued' && (
                         <p className="mt-2 text-sm text-muted-foreground">
                           最近一次尝试：
-                          {searchRunStatusLabel(run.status, run.failure_reason)}
+                          {searchRunDisplayLabel(run)}
                         </p>
                       )}
+                    {item.incomplete_terms?.length ? (
+                      <p className="mt-2 text-sm text-amber-700 dark:text-amber-300">
+                        {incompleteTermsGuidance(item.incomplete_terms)}
+                      </p>
+                    ) : null}
                     {item.completion_basis === 'confirmed_terms' && (
                       <p className="mt-1 text-sm text-muted-foreground">
                         所有搜索词均已确认完成，无需再次采集。最近一次尝试的失败记录仍保留。

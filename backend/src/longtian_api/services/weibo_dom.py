@@ -79,6 +79,7 @@ class SearchPage:
     state: str
     items: tuple[SearchWorkerItem, ...] = ()
     next_url: str | None = None
+    view_all_url: str | None = None
 
 
 def document(raw):
@@ -129,6 +130,62 @@ def barrier(root, url, status):
         return "login_required"
     if status == 403:
         return "manual_challenge_required"
+    return None
+
+
+def _search_link(value: str, base: str, term: str, *, view_all: bool) -> str | None:
+    """Validate a rendered search link without accepting an arbitrary redirect."""
+    link = urljoin(base, value)
+    try:
+        parts = urlsplit(link)
+    except ValueError:
+        return None
+    if (
+        parts.scheme != "https"
+        or parts.netloc != "s.weibo.com"
+        or parts.path != "/weibo"
+    ):
+        return None
+    query = parse_qs(parts.query)
+    if query.get("q") != [term]:
+        return None
+    if view_all:
+        # Weibo's "查看全部搜索结果" entry is currently represented by
+        # nodup=1 and may omit a page number.  If a page is present, keep the
+        # ordinary numeric boundary so it cannot smuggle an arbitrary value.
+        if query.get("nodup") != ["1"]:
+            return None
+        page = query.get("page")
+        if page is not None and not re.fullmatch(r"[1-9][0-9]{0,3}", page[0]):
+            return None
+    elif not re.fullmatch(r"[1-9][0-9]{0,3}", query.get("page", [""])[0]):
+        return None
+    return link
+
+
+def _view_all_search_url(root, url: str, term: str) -> str | None:
+    """Find a view-all link only when it is attached to the omission notice."""
+    omission = re.compile(
+        r"找到\s*[0-9,]+\s*条结果[，,、\s]*部分相似结果已省略"
+    )
+    links = root.xpath(
+        "//a[@href and contains(normalize-space(.), '查看全部搜索结果')]"
+    )
+    for link in links:
+        target = _search_link(link.get("href", ""), url, term, view_all=True)
+        if target is None:
+            continue
+        current = link
+        for _ in range(8):
+            value = text_of(current)
+            # Keep the scope local to the result notice.  In particular, do
+            # not let a page-wide or user-authored post mention trigger this
+            # recovery branch merely because a link happens to be nearby.
+            if len(value) <= 400 and omission.search(value):
+                return target
+            current = current.getparent()
+            if current is None:
+                break
     return None
 
 
@@ -191,6 +248,9 @@ def read_search_page(url, raw, status, term):
             )
         )
     if not cards:
+        view_all_url = _view_all_search_url(root, url, term)
+        if view_all_url is not None:
+            return SearchPage("omitted", view_all_url=view_all_url)
         empty = root.xpath("//*[" + css_class("card-no-result") + "]")
         if empty and any(word in text_of(empty[0]) for word in ("未找到", "没有找到")):
             return SearchPage("empty")
@@ -198,15 +258,9 @@ def read_search_page(url, raw, status, term):
     next_links = root.xpath("//a[" + css_class("next") + "][@href]")
     next_url = None
     if next_links:
-        next_url = urljoin(url, next_links[0].get("href"))
-        parsed = urlsplit(next_url)
-        query = parse_qs(parsed.query)
-        if (
-            parsed.scheme != "https"
-            or parsed.netloc != "s.weibo.com"
-            or parsed.path != "/weibo"
-            or query.get("q") != [term]
-            or not re.fullmatch(r"[1-9][0-9]{0,3}", query.get("page", [""])[0])
-        ):
+        next_url = _search_link(
+            next_links[0].get("href", ""), url, term, view_all=False
+        )
+        if next_url is None:
             return SearchPage("search_pagination_incompatible", tuple(items))
     return SearchPage("results", tuple(items), next_url)

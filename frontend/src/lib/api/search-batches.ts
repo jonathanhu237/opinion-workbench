@@ -7,6 +7,7 @@ import {
   searchPlatformSchema,
   searchRunSummarySchema,
   searchResultSchema,
+  searchTermDiagnosticSchema,
   type SearchPlatform,
   type SearchResultFilter,
 } from '@/lib/api/search-runs'
@@ -77,6 +78,7 @@ const searchBatchItemSchema = z
     created_at: isoDateSchema,
     started_at: isoDateSchema.nullable(),
     finished_at: isoDateSchema.nullable(),
+    incomplete_terms: z.array(searchTermDiagnosticSchema).max(20).optional(),
   })
   .superRefine((value, context) => {
     const runStatus = value.latest_attempt?.run.status
@@ -190,7 +192,10 @@ const searchBatchDetailSchema = z
         value.finished_at !== null) ||
       (value.status === 'completed_with_failures' &&
         allTerminal &&
-        value.items.some((item) => item.status !== 'completed') &&
+        (value.items.some((item) => item.status !== 'completed') ||
+          value.items.some(
+            (item) => (item.incomplete_terms?.length ?? 0) > 0,
+          )) &&
         value.finished_at !== null) ||
       (value.status === 'cancelled' &&
         allTerminal &&
@@ -205,6 +210,18 @@ const searchBatchDetailSchema = z
       value.items.some((item, index) => item.position !== index) ||
       new Set(value.items.map((item) => item.platform)).size !==
         value.items.length ||
+      value.items.some((item) => {
+        const diagnostics = item.incomplete_terms ?? []
+        return (
+          new Set(diagnostics.map((diagnostic) => diagnostic.position)).size !==
+            diagnostics.length ||
+          diagnostics.some(
+            (diagnostic) =>
+              diagnostic.position >= value.terms.length ||
+              value.terms[diagnostic.position] !== diagnostic.term,
+          )
+        )
+      }) ||
       !ordered ||
       !validAggregateState ||
       (value.current_item_position !== null &&
