@@ -245,7 +245,7 @@ function SettingsForm({ saved }: { saved: Settings }) {
                       data-disabled={pending !== null}
                       className="pointer-events-none absolute inset-y-0 left-2.5 flex items-center text-base text-foreground select-none data-[disabled=true]:opacity-50 md:text-sm"
                     >
-                      ****
+                      ********************
                     </span>
                   )}
                 </div>
