@@ -70,6 +70,17 @@ def test_omission_text_in_a_post_does_not_trigger_recovery():
     assert parsed.view_all_url is None
 
 
+def test_unrelated_visible_notice_does_not_trigger_recovery():
+    term = "龙田街道"
+    url = "https://s.weibo.com/weibo?" + urlencode({"q": term})
+    page = omitted_page(term).replace(
+        'class="search-result-summary"', 'class="sidebar-promo"'
+    )
+    parsed = read_search_page(url, page, 200, term)
+    assert parsed.state == "pending"
+    assert parsed.view_all_url is None
+
+
 class BrowserFixture:
     """The external browser returns DOM, not pre-parsed collection results."""
 

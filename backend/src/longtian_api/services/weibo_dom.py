@@ -168,24 +168,21 @@ def _view_all_search_url(root, url: str, term: str) -> str | None:
     omission = re.compile(
         r"找到\s*[0-9,]+\s*条结果[，,、\s]*部分相似结果已省略"
     )
-    links = root.xpath(
-        "//a[@href and contains(normalize-space(.), '查看全部搜索结果')]"
-    )
-    for link in links:
-        target = _search_link(link.get("href", ""), url, term, view_all=True)
-        if target is None:
+    summaries = root.xpath("//*[" + css_class("search-result-summary") + "]")
+    for summary in summaries:
+        # Keep the scope inside the platform's rendered result summary.  A
+        # sidebar, footer or user-authored post can contain the same words and
+        # must not authorize a navigation target.
+        value = text_of(summary)
+        if len(value) > 400 or not omission.search(value):
             continue
-        current = link
-        for _ in range(8):
-            value = text_of(current)
-            # Keep the scope local to the result notice.  In particular, do
-            # not let a page-wide or user-authored post mention trigger this
-            # recovery branch merely because a link happens to be nearby.
-            if len(value) <= 400 and omission.search(value):
+        links = summary.xpath(
+            ".//a[@href and contains(normalize-space(.), '查看全部搜索结果')]"
+        )
+        for link in links:
+            target = _search_link(link.get("href", ""), url, term, view_all=True)
+            if target is not None:
                 return target
-            current = current.getparent()
-            if current is None:
-                break
     return None
 
 
