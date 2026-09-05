@@ -335,6 +335,12 @@ class WeiboEnricher:
                             candidate.position: {
                                 "status": "unavailable",
                                 "issue_code": "media_limit",
+                                "diagnostic": _worker_diagnostic(
+                                    "media_limit",
+                                    stage="media",
+                                    basis="upstream_exception",
+                                    asset_position=candidate.position,
+                                ).model_dump(),
                             }
                             for candidate in inventory.candidates
                             if candidate.asset_id not in checkpoint
@@ -472,7 +478,13 @@ def _diagnostic(value):
         return None
 
 
-def _worker_diagnostic(outcome, *, stage="detail", basis="upstream_exception"):
+def _worker_diagnostic(
+    outcome,
+    *,
+    stage="detail",
+    basis="upstream_exception",
+    asset_position=None,
+):
     allowed_outcomes = {
         "access_denied",
         "asset_blocked",
@@ -486,8 +498,11 @@ def _worker_diagnostic(outcome, *, stage="detail", basis="upstream_exception"):
         "platform_blocked_or_rate_limited",
         "structure_changed",
     }
+    stage = stage if stage in ("detail", "media", "browser") else "detail"
+    if type(asset_position) is not int or not 0 <= asset_position <= 24:
+        asset_position = None
     return AcquisitionDiagnostic(
-        stage=stage if stage in ("detail", "media", "browser") else "detail",
+        stage=stage,
         outcome=outcome if outcome in allowed_outcomes else "parser_failed",
         status_code=None,
         basis=basis
@@ -502,8 +517,8 @@ def _worker_diagnostic(outcome, *, stage="detail", basis="upstream_exception"):
             "transport",
         }
         else "upstream_exception",
-        asset_position=None,
-        target="selected_post",
+        asset_position=asset_position,
+        target="media_asset" if asset_position is not None else "selected_post",
     )
 
 

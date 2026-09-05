@@ -644,11 +644,18 @@ class CaptureJob:
                 )
                 return
         if self.pause_reason is not None:
+            diagnostic = self.pause_diagnostic
+            if isinstance(diagnostic, dict):
+                diagnostic = {
+                    **diagnostic,
+                    "asset_position": position,
+                    "target": "media_asset",
+                }
             self._emit_media(
                 position=position,
                 status="unavailable",
                 issue_code="asset_blocked",
-                diagnostic=self.pause_diagnostic,
+                diagnostic=diagnostic,
             )
             return
         if url.startswith("ytdl:"):

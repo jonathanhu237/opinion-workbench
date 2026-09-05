@@ -238,12 +238,20 @@ async def transfer_media(
     assets = list(inventory.assets)
     issues = [issue for issue in inventory.issues if issue.asset_position is None]
     pause = None
+    pause_error = None
     allowance = TransferAllowance(
         budget.max_total_bytes - sum(len(data) for _, data in checkpoint.values()),
         time.monotonic() + 100,
     )
     for candidate in inventory.candidates:
         if pause is not None:
+            assets[candidate.position] = missing_asset(candidate, "asset_blocked")
+            diagnostics[candidate.position] = _media_diagnostic(
+                candidate.position,
+                pause,
+                status_code=pause_error.status_code if pause_error else None,
+                basis=pause_error.basis if pause_error else None,
+            )
             continue
         try:
             prefetched_value = prefetched.get(candidate.position)
@@ -304,6 +312,8 @@ async def transfer_media(
                 )
         except MediaPause as error:
             pause = error.outcome
+            pause_error = error
+            assets[candidate.position] = missing_asset(candidate, "asset_blocked")
             diagnostics[candidate.position] = _media_diagnostic(
                 candidate.position,
                 error.outcome,

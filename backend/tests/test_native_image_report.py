@@ -161,7 +161,7 @@ def test_unsafe_or_invalid_image_keeps_body_but_never_fabricates_media(
         assert json.loads(message)["source"]["body"] == "龙田正文仍然可用"
 
 
-def test_media_challenge_keeps_text_and_downloaded_image_until_explicit_continue(
+def test_media_challenge_keeps_text_and_diagnoses_deferred_images_until_continue(
     tmp_path,
 ):
     resolved = False
@@ -174,12 +174,14 @@ def test_media_challenge_keeps_text_and_downloaded_image_until_explicit_continue
                     "ok": 1,
                     "id": 3600375418559878,
                     "idstr": "3600375418559878",
-                    "text": "龙田两张现场图",
+                    "text": "龙田三张现场图",
                     "created_at": "Thu Sep 03 10:00:00 +0800 2026",
-                    "pic_ids": ["one", "two"],
+                    "pic_ids": ["one", "two", "three"],
                     "pic_infos": {
-                        name: {"largest": {"url": f"https://wx1.sinaimg.cn/{name}.png"}}
-                        for name in ("one", "two")
+                        name: {
+                            "largest": {"url": f"https://wx1.sinaimg.cn/{name}.png"}
+                        }
+                        for name in ("one", "two", "three")
                     },
                 },
             )
@@ -202,11 +204,21 @@ def test_media_challenge_keeps_text_and_downloaded_image_until_explicit_continue
         with service.repository.database.connect() as connection:
             material = json.loads(
                 connection.execute(
-                    "SELECT input_json FROM content_materials"
+                    "SELECT content_json FROM content_materials"
                 ).fetchone()[0]
             )
-            assert material["text"]["body"] == "龙田两张现场图"
+            assert material["text"]["body"] == "龙田三张现场图"
             assert material["assets"][0]["status"] == "ready"
+            assert [asset["issue_code"] for asset in material["assets"][1:]] == [
+                "asset_blocked",
+                "asset_blocked",
+            ]
+            assert [
+                issue["asset_position"]
+                for issue in material["issues"]
+                if issue.get("diagnostic", {}).get("outcome")
+                == "manual_challenge_required"
+            ] == [1, 2]
         resolved = True
         response = client.post(
             f"/api/v1/report-generations/{result['id']}/continue",
@@ -223,6 +235,7 @@ def test_media_challenge_keeps_text_and_downloaded_image_until_explicit_continue
             "/one.png",
             "/two.png",
             "/two.png",
+            "/three.png",
         ]
         assert model.counts["initial"] == 1
 
