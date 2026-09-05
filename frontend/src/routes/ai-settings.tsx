@@ -29,6 +29,7 @@ const emptySettings: Settings = {
   has_api_key: false,
   revision: 0,
 }
+const savedKeyMask = '********************'
 
 function canonicalEndpoint(value: string) {
   try {
@@ -74,8 +75,10 @@ function formSchema(saved: Settings) {
         .regex(/^[!-~]+$/u, '模型名称不能包含空白或控制字符。'),
     })
     .superRefine((value, context) => {
+      const replacingKey =
+        value.api_key !== '' && value.api_key !== savedKeyMask
       if (
-        !value.api_key &&
+        !replacingKey &&
         (!saved.has_api_key ||
           canonicalEndpoint(value.base_url) !== saved.base_url)
       ) {
@@ -100,7 +103,7 @@ function SettingsForm({ saved }: { saved: Settings }) {
   const form = useForm({
     resolver: zodResolver(schema),
     defaultValues: {
-      api_key: '',
+      api_key: saved.has_api_key ? savedKeyMask : '',
       base_url: saved.base_url ?? '',
       model: saved.model ?? '',
     },
@@ -118,7 +121,7 @@ function SettingsForm({ saved }: { saved: Settings }) {
 
   useEffect(() => {
     reset({
-      api_key: '',
+      api_key: saved.has_api_key ? savedKeyMask : '',
       base_url: saved.base_url ?? '',
       model: saved.model ?? '',
     })
@@ -136,13 +139,15 @@ function SettingsForm({ saved }: { saved: Settings }) {
         {
           base_url: values.base_url,
           model: values.model,
-          ...(values.api_key ? { api_key: values.api_key } : {}),
+          ...(values.api_key && values.api_key !== savedKeyMask
+            ? { api_key: values.api_key }
+            : {}),
         },
         controller.signal,
       )
       if (controller.signal.aborted) return
       reset({
-        api_key: '',
+        api_key: result.has_api_key ? savedKeyMask : '',
         base_url: result.base_url ?? '',
         model: result.model ?? '',
       })
@@ -172,7 +177,10 @@ function SettingsForm({ saved }: { saved: Settings }) {
     } finally {
       values.api_key = ''
       if (!controller.signal.aborted) {
-        resetField('api_key', { defaultValue: '', keepError: true })
+        resetField('api_key', {
+          defaultValue: saved.has_api_key ? savedKeyMask : '',
+          keepError: true,
+        })
         setPending(null)
       }
       request.current = null
@@ -227,27 +235,33 @@ function SettingsForm({ saved }: { saved: Settings }) {
                   <Input
                     {...field}
                     id="ai-api-key"
-                    type="password"
+                    type={
+                      saved.has_api_key &&
+                      !apiKeyFocused &&
+                      field.value === savedKeyMask
+                        ? 'text'
+                        : 'password'
+                    }
                     autoComplete="off"
                     spellCheck={false}
                     className="min-h-11"
                     aria-invalid={fieldState.invalid}
                     aria-describedby="ai-key-help ai-key-error"
-                    onFocus={() => setApiKeyFocused(true)}
+                    onFocus={() => {
+                      setApiKeyFocused(true)
+                      if (field.value === savedKeyMask)
+                        form.setValue('api_key', '', { shouldDirty: false })
+                    }}
                     onBlur={() => {
                       field.onBlur()
                       setApiKeyFocused(false)
+                      if (saved.has_api_key && form.getValues('api_key') === '')
+                        resetField('api_key', {
+                          defaultValue: savedKeyMask,
+                          keepError: true,
+                        })
                     }}
                   />
-                  {saved.has_api_key && !field.value && !apiKeyFocused && (
-                    <span
-                      aria-hidden="true"
-                      data-disabled={pending !== null}
-                      className="pointer-events-none absolute inset-y-0 left-2.5 flex items-center text-base text-foreground select-none data-[disabled=true]:opacity-50 md:text-sm"
-                    >
-                      ********************
-                    </span>
-                  )}
                 </div>
                 <FieldDescription id="ai-key-help">
                   {saved.has_api_key
