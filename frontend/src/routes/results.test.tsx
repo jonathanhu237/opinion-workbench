@@ -179,6 +179,8 @@ describe('报告生成页面', () => {
     expect(
       await screen.findByRole('table', { name: '舆情内容表格' }),
     ).toBeVisible()
+    expect(screen.getByRole('button', { name: '刷新舆情内容' })).toBeVisible()
+    expect(screen.queryByRole('region', { name: '报告操作' })).toBeNull()
     expect(screen.getByText('内容摘要')).toBeVisible()
     expect(screen.queryByText('筛选')).toBeNull()
 
@@ -313,6 +315,7 @@ describe('报告生成页面', () => {
   it('shows report records as a separate route without the former analysis panels', async () => {
     renderResults('/results?view=records')
     expect(await screen.findByText('报告列表')).toBeVisible()
+    expect(screen.getByRole('button', { name: '刷新报告记录' })).toBeVisible()
     expect(await screen.findByText('尚未启动报告生成任务。')).toBeVisible()
     expect(screen.queryByText('自动分析设置')).toBeNull()
     expect(screen.queryByText('报告筛选')).toBeNull()

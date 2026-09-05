@@ -166,11 +166,15 @@ function ContentLibrary({
   selectedIds,
   onSelectionChange,
   onOpen,
+  onRefresh,
+  refreshing,
 }: {
   actions: ReactNode
   selectedIds: number[]
   onSelectionChange: (ids: number[]) => void
   onOpen: (id: number) => void
+  onRefresh: () => void
+  refreshing: boolean
 }) {
   const [params, setParams] = useSearchParams()
   const offset = readOffset(params.get('offset'))
@@ -234,9 +238,29 @@ function ContentLibrary({
             </span>
           </CardDescription>
         </div>
-        <span className="hidden self-start text-sm whitespace-nowrap text-muted-foreground sm:block">
-          共 {results.data?.total ?? '—'} 条 · 每页 {RESULT_PAGE_SIZE} 条
-        </span>
+        <div className="flex min-w-0 flex-wrap items-center justify-between gap-2 sm:col-start-2 sm:row-span-2 sm:row-start-1 sm:justify-end">
+          <span className="text-sm whitespace-nowrap text-muted-foreground">
+            共 {results.data?.total ?? '—'} 条 · 每页 {RESULT_PAGE_SIZE} 条
+          </span>
+          <Button
+            type="button"
+            variant="outline"
+            className="min-h-10"
+            aria-label="刷新舆情内容"
+            onClick={onRefresh}
+            disabled={refreshing || results.isFetching}
+          >
+            <RefreshCw
+              className={
+                refreshing || results.isFetching
+                  ? 'animate-spin motion-reduce:animate-none'
+                  : undefined
+              }
+              aria-hidden
+            />
+            刷新
+          </Button>
+        </div>
       </CardHeader>
       <CardContent className="flex min-w-0 flex-col gap-4">
         {actions}
@@ -385,6 +409,8 @@ export function Results({ mode }: { mode?: 'compose' | 'records' } = {}) {
       isActiveGeneration(item.status),
     ),
   )
+  const refreshing =
+    settings.isFetching || provider.isFetching || activeGenerations.isFetching
   useEffect(() => {
     writeSelectionDraft(selectedIds)
   }, [selectedIds])
@@ -422,17 +448,6 @@ export function Results({ mode }: { mode?: 'compose' | 'records' } = {}) {
   }
   return (
     <div className="space-y-5">
-      <section aria-label="报告操作" className="flex justify-end">
-        <Button
-          variant="outline"
-          className="min-h-10 shrink-0 self-start sm:self-auto"
-          onClick={refresh}
-          disabled={settings.isFetching || provider.isFetching}
-        >
-          <RefreshCw aria-hidden />
-          刷新
-        </Button>
-      </section>
       {activeMode === 'compose' ? (
         <div className="space-y-5">
           {(settings.isError || provider.isError) && (
@@ -466,6 +481,8 @@ export function Results({ mode }: { mode?: 'compose' | 'records' } = {}) {
             selectedIds={selectedIds}
             onSelectionChange={setSelectedIds}
             onOpen={openResult}
+            onRefresh={refresh}
+            refreshing={refreshing}
           />
         </div>
       ) : (
@@ -501,6 +518,8 @@ export function Results({ mode }: { mode?: 'compose' | 'records' } = {}) {
                 return next
               })
             }}
+            onRefresh={refresh}
+            refreshing={refreshing}
           />
           {legacyReportId !== null && (
             <div className="mt-5">

@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { RefreshCw } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
 
@@ -437,11 +438,15 @@ export function ReportGenerations({
   onSelect,
   onSelectReport,
   autoSelectLatest = true,
+  onRefresh,
+  refreshing,
 }: {
   selectedId: number | null
   onSelect: (id: number | null) => void
   onSelectReport?: (id: number) => void
   autoSelectLatest?: boolean
+  onRefresh: () => void
+  refreshing: boolean
 }) {
   const [beforeId, setBeforeId] = useState<number | undefined>()
   const [params, setParams] = useSearchParams()
@@ -500,8 +505,34 @@ export function ReportGenerations({
         ? 1000
         : false,
   })
+  const isRefreshing =
+    refreshing ||
+    history.isFetching ||
+    legacyHistory.isFetching ||
+    selected.isFetching
   return (
     <Card>
+      <CardHeader className="flex flex-row items-center justify-between gap-3 border-b">
+        <h2 className="font-display text-xl">报告记录</h2>
+        <Button
+          type="button"
+          variant="outline"
+          className="min-h-10"
+          aria-label="刷新报告记录"
+          onClick={onRefresh}
+          disabled={isRefreshing}
+        >
+          <RefreshCw
+            className={
+              isRefreshing
+                ? 'animate-spin motion-reduce:animate-none'
+                : undefined
+            }
+            aria-hidden
+          />
+          刷新
+        </Button>
+      </CardHeader>
       <CardContent className="flex flex-col gap-4">
         {selectedId !== null &&
           (selected.isError ? (
