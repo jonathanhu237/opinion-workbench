@@ -192,3 +192,87 @@ def test_upstream_component_preserves_request_context_and_downloads_media():
     assert requests[0].headers["Origin"] == "https://weibo.com"
     assert "SUB=session-only" in requests[0].headers["Cookie"]
     assert "Cookie" not in requests[1].headers
+
+
+def test_upstream_media_resume_downloads_only_pending_files_without_detail_lookup():
+    requests = []
+
+    async def request(value):
+        requests.append(value)
+        return UpstreamResponse(
+            status_code=200,
+            url=value.url,
+            headers={"content-type": "image/png"},
+            body=PNG,
+        )
+
+    result = asyncio.run(
+        GalleryComponent().acquire_media(
+            "3600375418559878",
+            post={"idstr": "3600375418559878", "text": "已保存正文"},
+            files=[
+                {
+                    "url": "https://wx1.sinaimg.cn/large/pending.png",
+                    "metadata": {
+                        "extension": "png",
+                        "filename": "pending.png",
+                        "num": 2,
+                    },
+                }
+            ],
+            cookies={"SUB": "session-only"},
+            request_fetch=request,
+            max_media_bytes=len(PNG),
+        )
+    )
+
+    assert result["post"]["idstr"] == "3600375418559878"
+    assert result["downloads"][1]["status"] == "ready"
+    assert [value.stage for value in requests] == ["media"]
+
+
+def test_upstream_media_count_budget_prevents_excluded_downloads():
+    requests = []
+
+    async def request(value):
+        requests.append(value)
+        if value.stage == "detail":
+            return UpstreamResponse(
+                status_code=200,
+                url=value.url,
+                headers={"content-type": "application/json"},
+                body={
+                    "ok": 1,
+                    "id": 3600375418559878,
+                    "idstr": "3600375418559878",
+                    "text": "两张现场图",
+                    "created_at": "Thu Sep 03 10:00:00 +0800 2026",
+                    "pic_ids": ["one", "two"],
+                    "pic_infos": {
+                        "one": {
+                            "largest": {"url": "https://wx1.sinaimg.cn/large/one.png"}
+                        },
+                        "two": {
+                            "largest": {"url": "https://wx2.sinaimg.cn/large/two.png"}
+                        },
+                    },
+                },
+            )
+        return UpstreamResponse(
+            status_code=200,
+            url=value.url,
+            headers={"content-type": "image/png"},
+            body=PNG,
+        )
+
+    result = asyncio.run(
+        GalleryComponent().extract(
+            "3600375418559878",
+            cookies={"SUB": "session-only"},
+            request_fetch=request,
+            max_images=1,
+        )
+    )
+
+    assert len([value for value in requests if value.stage == "media"]) == 1
+    assert len(result["files"]) == 2

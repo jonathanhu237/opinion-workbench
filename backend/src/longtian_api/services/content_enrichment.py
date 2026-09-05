@@ -25,6 +25,7 @@ from longtian_api.services.collector_contracts import (
     EnrichmentWorkerUnsettledError,
 )
 from longtian_api.services.enrichment_models import (
+    AcquisitionDiagnostic,
     EnrichedContent,
     EnrichmentBudget,
     EnrichmentOutcome,
@@ -87,6 +88,7 @@ class EnrichmentItem:
     input_fingerprint: str | None = None
     media: tuple[ValidatedMedia, ...] = field(default=(), repr=False)
     preview: bool = False
+    diagnostic: AcquisitionDiagnostic | None = field(default=None, repr=False)
 
     @property
     def ready(self) -> bool:
@@ -141,6 +143,7 @@ class EnrichmentItem:
             ),
             media=(),
             preview=True,
+            diagnostic=self.diagnostic,
         )
 
 
@@ -414,7 +417,9 @@ class EnrichmentSession:
             if result.outcome != "completed" and not paused_with_material:
                 if result.content is not None or result.manifest is not None:
                     raise EnrichmentValidationError
-                return EnrichmentItem(source, result.outcome)
+                return EnrichmentItem(
+                    source, result.outcome, diagnostic=result.diagnostic
+                )
             if (result.content is None) == (result.manifest is None):
                 raise EnrichmentValidationError
             if result.manifest is not None:
@@ -438,7 +443,12 @@ class EnrichmentSession:
             if self._cancel_requested or self._closed:
                 return EnrichmentItem(source, "cancelled")
             return EnrichmentItem(
-                source, result.outcome, content, evidence_fingerprint(content), media
+                source,
+                result.outcome,
+                content,
+                evidence_fingerprint(content),
+                media,
+                diagnostic=result.diagnostic,
             )
         except MediaStagingError:
             await self._service._worker.discard_session()

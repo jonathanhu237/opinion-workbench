@@ -62,11 +62,12 @@ class UpstreamResponse:
 
 
 class ComponentError(Exception):
-    def __init__(self, code, *, status_code: int | None = None, stage=None):
+    def __init__(self, code, *, status_code: int | None = None, stage=None, basis=None):
         super().__init__(code)
         self.code = code
         self.status_code = status_code
         self.stage = stage
+        self.basis = basis
 
 
 def _json_body(value):
@@ -147,6 +148,74 @@ def _decode_download(message):
     return position, {"status": "unavailable", "issue_code": issue_code}
 
 
+def _decode_diagnostic(value):
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ComponentError("invalid_output")
+    allowed = {
+        "stage",
+        "outcome",
+        "status_code",
+        "basis",
+        "asset_position",
+        "target",
+    }
+    if set(value) - allowed:
+        raise ComponentError("invalid_output")
+    if value.get("stage") not in ("detail", "media", "browser"):
+        raise ComponentError("invalid_output")
+    if value.get("outcome") not in {
+        "access_denied",
+        "asset_blocked",
+        "asset_unavailable",
+        "content_unavailable",
+        "login_required",
+        "manual_challenge_required",
+        "media_limit",
+        "media_redirect",
+        "parser_failed",
+        "platform_blocked_or_rate_limited",
+        "structure_changed",
+    }:
+        raise ComponentError("invalid_output")
+    if value.get("basis") not in {
+        "http_status",
+        "explicit_platform_evidence",
+        "login_redirect",
+        "platform_payload",
+        "browser_dom_evidence",
+        "upstream_exception",
+        "transport",
+    }:
+        raise ComponentError("invalid_output")
+    if value.get("target") not in {
+        "selected_post",
+        "media_asset",
+        "search_page",
+    }:
+        raise ComponentError("invalid_output")
+    for key in ("stage", "outcome", "basis", "target"):
+        if not isinstance(value.get(key), str) or len(value[key]) > 64:
+            raise ComponentError("invalid_output")
+    status_code = value.get("status_code")
+    if status_code is not None and (
+        type(status_code) is not int or not 100 <= status_code <= 599
+    ):
+        raise ComponentError("invalid_output")
+    position = value.get("asset_position")
+    if position is not None and (type(position) is not int or not 0 <= position <= 24):
+        raise ComponentError("invalid_output")
+    return {
+        "stage": value["stage"],
+        "outcome": value["outcome"],
+        "status_code": status_code,
+        "basis": value["basis"],
+        "asset_position": position,
+        "target": value["target"],
+    }
+
+
 def _safe_media_url(url):
     try:
         parts = urlsplit(url)
@@ -180,6 +249,8 @@ class GalleryComponent:
         request_fetch=None,
         cookies=None,
         max_media_bytes=MAX_MEDIA_BYTES,
+        max_images=24,
+        max_videos=1,
     ):
         if not re.fullmatch(r"[1-9][0-9]{5,23}", content_id):
             raise ComponentError("invalid_identity")
@@ -197,11 +268,87 @@ class GalleryComponent:
             or not 1 <= max_media_bytes <= MAX_MEDIA_BYTES
         ):
             raise ComponentError("invalid_budget")
+        if type(max_images) is not int or not 1 <= max_images <= 24:
+            raise ComponentError("invalid_budget")
+        if type(max_videos) is not int or max_videos != 1:
+            raise ComponentError("invalid_budget")
         return await self._extract_upstream(
             content_id,
             request_fetch=request_fetch,
             cookies=cookies,
             max_media_bytes=max_media_bytes,
+            max_images=max_images,
+            max_videos=max_videos,
+        )
+
+    async def acquire_media(
+        self,
+        content_id,
+        *,
+        post,
+        files,
+        request_fetch,
+        cookies=None,
+        max_media_bytes=MAX_MEDIA_BYTES,
+        max_images=24,
+        max_videos=1,
+    ):
+        """Resume upstream media downloads without repeating the detail lookup."""
+        if not re.fullmatch(r"[1-9][0-9]{5,23}", content_id):
+            raise ComponentError("invalid_identity")
+        if request_fetch is None or not isinstance(cookies, Mapping):
+            raise ComponentError("invalid_credentials")
+        if (
+            not isinstance(post, Mapping)
+            or str(post.get("idstr", post.get("id"))) != content_id
+            or not isinstance(files, list)
+            or len(files) > 128
+        ):
+            raise ComponentError("invalid_resume_input")
+        checked_files = []
+        for item in files:
+            if not isinstance(item, Mapping):
+                raise ComponentError("invalid_resume_input")
+            url = item.get("url")
+            metadata = item.get("metadata")
+            if not isinstance(url, str) or len(url) > 4096:
+                raise ComponentError("invalid_resume_input")
+            if not isinstance(metadata, Mapping):
+                raise ComponentError("invalid_resume_input")
+            checked = {}
+            for key in ("extension", "filename", "num", "width", "height"):
+                value = metadata.get(key)
+                if not (isinstance(value, (str, int, float, bool)) or value is None):
+                    raise ComponentError("invalid_resume_input")
+                checked[key] = value
+            number = checked.get("num")
+            if type(number) is not int or not 1 <= number <= 128:
+                raise ComponentError("invalid_resume_input")
+            checked_files.append({"url": url, "metadata": checked})
+        cookies = {
+            name: value
+            for name, value in cookies.items()
+            if name in ("SUB", "SUBP") and isinstance(value, str) and len(value) <= 4096
+        }
+        if (
+            type(max_media_bytes) is not int
+            or not 1 <= max_media_bytes <= MAX_MEDIA_BYTES
+        ):
+            raise ComponentError("invalid_budget")
+        if type(max_images) is not int or not 1 <= max_images <= 24:
+            raise ComponentError("invalid_budget")
+        if type(max_videos) is not int or max_videos != 1:
+            raise ComponentError("invalid_budget")
+        return await self._extract_upstream(
+            content_id,
+            request_fetch=request_fetch,
+            cookies=cookies,
+            max_media_bytes=max_media_bytes,
+            mode="upstream_media",
+            post=dict(post),
+            files=checked_files,
+            max_images=max_images,
+            max_videos=max_videos,
         )
 
     async def _start(self):
@@ -263,6 +410,7 @@ class GalleryComponent:
                             message.get("code", "parser_failed"),
                             status_code=message.get("status_code"),
                             stage=message.get("stage"),
+                            basis=message.get("basis"),
                         )
                     else:
                         raise ComponentError("invalid_output")
@@ -272,7 +420,17 @@ class GalleryComponent:
             await settle(self._stop(process))
 
     async def _extract_upstream(
-        self, content_id, *, request_fetch, cookies, max_media_bytes
+        self,
+        content_id,
+        *,
+        request_fetch,
+        cookies,
+        max_media_bytes,
+        mode="upstream",
+        post=None,
+        files=None,
+        max_images=24,
+        max_videos=1,
     ):
         process = await self._start()
         downloads = {}
@@ -280,15 +438,17 @@ class GalleryComponent:
         request_count = 0
         try:
             async with asyncio.timeout(120):
-                await self._send(
-                    process,
-                    {
-                        "content_id": content_id,
-                        "mode": "upstream",
-                        "cookies": dict(cookies),
-                        "max_media_bytes": max_media_bytes,
-                    },
-                )
+                startup = {
+                    "content_id": content_id,
+                    "mode": mode,
+                    "cookies": dict(cookies),
+                    "max_media_bytes": max_media_bytes,
+                    "max_images": max_images,
+                    "max_videos": max_videos,
+                }
+                if mode == "upstream_media":
+                    startup.update({"post": post, "files": files})
+                await self._send(process, startup)
                 while True:
                     message = await self._read(process)
                     kind = message.get("kind")
@@ -328,12 +488,16 @@ class GalleryComponent:
                         result = self._result(message, content_id)
                         result["downloads"] = downloads
                         result["pause_reason"] = message.get("pause_reason")
+                        result["diagnostic"] = _decode_diagnostic(
+                            message.get("diagnostic")
+                        )
                         return result
                     elif kind == "error":
                         raise ComponentError(
                             message.get("code", "parser_failed"),
                             status_code=message.get("status_code"),
                             stage=message.get("stage"),
+                            basis=message.get("basis"),
                         )
                     else:
                         raise ComponentError("invalid_output")

@@ -13,6 +13,7 @@ from uuid import UUID
 
 from longtian_api.search_platforms import SearchPlatform
 from longtian_api.services.enrichment_models import (
+    AcquisitionDiagnostic,
     EnrichedContent,
     EnrichmentBudget,
     EnrichmentOutcome,
@@ -168,6 +169,7 @@ class EnrichmentWorkerResult:
     outcome: EnrichmentOutcome
     content: EnrichedContent | None = field(default=None, repr=False)
     manifest: ManifestDescriptor | None = None
+    diagnostic: AcquisitionDiagnostic | None = field(default=None, repr=False)
 
 
 class SearchCollector(Protocol):

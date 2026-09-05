@@ -421,6 +421,7 @@ class ContentAnalysisService:
                                     "timed_out": "acquisition_timed_out",
                                 }.get(acquired.outcome, "acquisition_failed"),
                             ),
+                            diagnostic=acquired.diagnostic,
                         ),
                     )
                     return

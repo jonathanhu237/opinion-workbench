@@ -2,6 +2,7 @@
 
 import asyncio
 from collections import deque
+from types import SimpleNamespace
 from urllib.parse import quote_plus, urlencode
 
 import pytest
@@ -14,7 +15,7 @@ from longtian_api.services.ai_settings import AISettingsService
 from longtian_api.services.monitoring_rules import MonitoringRuleService
 from longtian_api.services.native_weibo import NativeWeiboCollector
 from longtian_api.services.platform_connections import PlatformConnectionService
-from longtian_api.services.weibo_dom import read_search_page
+from longtian_api.services.weibo_dom import barrier, document, read_search_page
 
 CARD = """<div class="card-wrap" action-type="feed_list_item" mid="3501756485200075">
   <div class="content"><a class="name" href="//weibo.com/1234567890">样本发布者</a>
@@ -83,6 +84,39 @@ def test_unrelated_visible_notice_does_not_trigger_recovery():
     parsed = read_search_page(url, page, 200, term)
     assert parsed.state == "pending"
     assert parsed.view_all_url is None
+
+
+def test_plain_browser_403_is_not_security_verification_without_evidence():
+    url = "https://s.weibo.com/weibo?q=" + quote_plus("龙田街道")
+    assert barrier(document("<main>暂时无法访问</main>"), url, 403) == (
+        "search_context_unavailable"
+    )
+    assert read_search_page(url, "", 403, "龙田街道").state == (
+        "search_context_unavailable"
+    )
+    challenge = "<title>安全验证</title>"
+    assert barrier(document(challenge), url, 403) == "manual_challenge_required"
+
+
+def test_manual_report_recovery_opens_the_affected_post_context():
+    async def run():
+        browser = BrowserFixture([EMPTY])
+        browser.page_present = False
+        target = "https://m.weibo.cn/detail/3501756485200075"
+        collector = NativeWeiboCollector(
+            browser=browser,
+            enricher=SimpleNamespace(manual_target_url=target),
+        )
+        result = await collector.manual_page(
+            request_id="request",
+            platform="wb",
+            action="show",
+        )
+        return result, browser
+
+    result, browser = asyncio.run(run())
+    assert result.outcome == "opened_homepage"
+    assert browser.visits == ["https://m.weibo.cn/detail/3501756485200075"]
 
 
 class BrowserFixture:
@@ -407,9 +441,12 @@ def test_incomplete_keyword_remains_visible_after_later_manual_pause_and_resume(
         ]
         control = _control(client, identity)
         browser.html = EMPTY
-        assert client.post(
-            f"/api/v1/search-batches/{identity}/continue", json=control
-        ).status_code == 202
+        assert (
+            client.post(
+                f"/api/v1/search-batches/{identity}/continue", json=control
+            ).status_code
+            == 202
+        )
         finished = _wait_for_batch(client, identity, {"completed_with_failures"})
         assert finished["items"][0]["status"] == "completed"
         assert finished["items"][0]["incomplete_terms"][0]["term"] == "龙田街道"

@@ -281,6 +281,14 @@ def test_plain_403_is_a_neutral_item_failure_and_never_requests_manual_verificat
         ).json()["items"][0]
         assert item["error"]["code"] == "source_access_denied"
         assert item["status"] == "input_incomplete"
+        assert item["error"]["diagnostic"] == {
+            "stage": "detail",
+            "outcome": "access_denied",
+            "status_code": 403,
+            "basis": "http_status",
+            "asset_position": None,
+            "target": "selected_post",
+        }
         assert model.calls == []
         assert browser.shown == 0
         assert len(requests) == 1

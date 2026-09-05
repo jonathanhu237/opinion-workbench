@@ -10,7 +10,11 @@ from longtian_api.schemas.ai_settings import AIErrorCode
 from longtian_api.schemas.search_runs import SearchRunStatus
 from longtian_api.search_platforms import SearchPlatform
 from longtian_api.services.ai_client import MAX_USAGE_TOKENS, AIUsage
-from longtian_api.services.enrichment_models import IssueCode, valid_source_url
+from longtian_api.services.enrichment_models import (
+    AcquisitionDiagnostic,
+    IssueCode,
+    valid_source_url,
+)
 from longtian_api.services.monitoring_rules import MAX_TERMS_PER_RULE
 
 PositiveId = Annotated[int, Field(ge=1, le=9_223_372_036_854_775_807)]
@@ -88,6 +92,9 @@ class SummaryFailure(StrictModel):
     stage: FailureStage
     code: FailureCode
     message: str
+    diagnostic: AcquisitionDiagnostic | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
 
 TokenUsage = AIUsage

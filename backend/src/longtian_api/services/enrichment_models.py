@@ -58,6 +58,29 @@ IssueCode = Literal[
 ]
 Modality = Literal["text", "image", "video", "audio", "unknown"]
 MediaMime = Literal["image/jpeg", "image/png", "image/webp", "video/mp4"]
+AcquisitionDiagnosticStage = Literal["detail", "media", "browser"]
+AcquisitionDiagnosticOutcome = Literal[
+    "access_denied",
+    "asset_blocked",
+    "asset_unavailable",
+    "content_unavailable",
+    "login_required",
+    "manual_challenge_required",
+    "media_limit",
+    "media_redirect",
+    "parser_failed",
+    "platform_blocked_or_rate_limited",
+    "structure_changed",
+]
+AcquisitionDiagnosticBasis = Literal[
+    "http_status",
+    "explicit_platform_evidence",
+    "login_redirect",
+    "platform_payload",
+    "browser_dom_evidence",
+    "upstream_exception",
+    "transport",
+]
 
 
 class EnrichmentValidationError(Exception):
@@ -66,6 +89,17 @@ class EnrichmentValidationError(Exception):
 
 class _StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+
+
+class AcquisitionDiagnostic(_StrictModel):
+    """Bounded, secret-free evidence for one acquisition failure or pause."""
+
+    stage: AcquisitionDiagnosticStage
+    outcome: AcquisitionDiagnosticOutcome
+    status_code: int | None = Field(default=None, ge=100, le=599)
+    basis: AcquisitionDiagnosticBasis
+    asset_position: int | None = Field(default=None, ge=0, le=24)
+    target: Literal["selected_post", "media_asset", "search_page"]
 
 
 class EnrichmentBudget(_StrictModel):
@@ -96,6 +130,9 @@ class EnrichmentText(_StrictModel):
 class EnrichmentIssue(_StrictModel):
     code: IssueCode
     asset_position: int | None = Field(ge=0, le=24)
+    diagnostic: AcquisitionDiagnostic | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
 
 class EnrichmentAsset(_StrictModel):
@@ -324,6 +361,8 @@ def decode_json_object(data: bytes) -> dict[str, object]:
 def evidence_fingerprint(content: EnrichedContent) -> str:
     data = content.model_dump()
     del data["acquired_at"]
+    for issue in data["issues"]:
+        issue.pop("diagnostic", None)
     for asset in data["assets"]:
         del asset["asset_id"]
         del asset["blob_ref"]

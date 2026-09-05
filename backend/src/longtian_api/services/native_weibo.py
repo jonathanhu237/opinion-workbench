@@ -210,8 +210,14 @@ class NativeWeiboCollector:
             if action == "close":
                 await self.browser.close_page()
                 return ManualPageWorkerResult("closed")
-            existing = self.browser.available
+            existing = getattr(self.browser, "page_present", self.browser.available)
             await self.browser.show()
+            target = getattr(self.enricher, "manual_target_url", None)
+            if target and hasattr(self.browser, "page_present"):
+                # The target originates from the validated selected result, not
+                # from an untrusted redirect or response body.
+                await self.browser.navigate(target)
+                await self.browser.bring_to_front()
             return ManualPageWorkerResult(
                 "opened_existing" if existing else "opened_homepage"
             )

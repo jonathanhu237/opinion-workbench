@@ -73,6 +73,35 @@ const failureMessages = {
   storage_unavailable: '分析结果暂时无法读取或保存，请稍后重试。',
 } as const
 
+const acquisitionDiagnosticSchema = z.strictObject({
+  stage: z.enum(['detail', 'media', 'browser']),
+  outcome: z.enum([
+    'access_denied',
+    'asset_blocked',
+    'asset_unavailable',
+    'content_unavailable',
+    'login_required',
+    'manual_challenge_required',
+    'media_limit',
+    'media_redirect',
+    'parser_failed',
+    'platform_blocked_or_rate_limited',
+    'structure_changed',
+  ]),
+  status_code: z.number().int().min(100).max(599).nullable(),
+  basis: z.enum([
+    'http_status',
+    'explicit_platform_evidence',
+    'login_redirect',
+    'platform_payload',
+    'browser_dom_evidence',
+    'upstream_exception',
+    'transport',
+  ]),
+  asset_position: z.number().int().min(0).max(24).nullable(),
+  target: z.enum(['selected_post', 'media_asset', 'search_page']),
+})
+
 const failureSchema = z
   .strictObject({
     stage: z.enum([
@@ -89,6 +118,7 @@ const failureSchema = z
       ],
     ),
     message: z.string().max(1000),
+    diagnostic: acquisitionDiagnosticSchema.nullable().optional(),
   })
   .transform((failure): typeof failure => ({
     ...failure,

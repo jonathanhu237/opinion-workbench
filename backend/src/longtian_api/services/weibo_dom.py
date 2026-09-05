@@ -100,6 +100,11 @@ def barrier(root, url, status):
         return "platform_blocked_or_rate_limited"
     if status == 401 or host in ("passport.weibo.com", "passport.weibo.cn"):
         return "login_required"
+    # A bare 403 is an access refusal, not proof that a verification widget is
+    # present.  Keep the neutral search-context outcome so callers do not ask
+    # the user to solve a CAPTCHA that the rendered page never showed.
+    if status == 403 and root is None:
+        return "search_context_unavailable"
     if root is None:
         return None
     titles = " ".join(root.xpath("//title/text()"))
@@ -129,7 +134,7 @@ def barrier(root, url, status):
     ):
         return "login_required"
     if status == 403:
-        return "manual_challenge_required"
+        return "search_context_unavailable"
     return None
 
 
@@ -165,9 +170,7 @@ def _search_link(value: str, base: str, term: str, *, view_all: bool) -> str | N
 
 def _view_all_search_url(root, url: str, term: str) -> str | None:
     """Find a view-all link only when it is attached to the omission notice."""
-    omission = re.compile(
-        r"找到\s*[0-9,]+\s*条结果[，,、\s]*部分相似结果已省略"
-    )
+    omission = re.compile(r"找到\s*[0-9,]+\s*条结果[，,、\s]*部分相似结果已省略")
     result_areas = root.xpath(
         "//*[@id='pl_feedlist_index' or " + css_class("pl_feedlist_index") + "]"
     )

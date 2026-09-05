@@ -1,7 +1,12 @@
 """Constant-only public admission and durable summary failures."""
 
-from longtian_api.schemas.ai_summaries import FailureCode, FailureStage, SummaryFailure
+from longtian_api.schemas.ai_summaries import (
+    FailureCode,
+    FailureStage,
+    SummaryFailure,
+)
 from longtian_api.services.ai_errors import AI_ERROR_CONTRACTS
+from longtian_api.services.enrichment_models import AcquisitionDiagnostic
 
 SUMMARY_ERRORS = {
     "search_run_not_found": (404, "采集任务不存在。"),
@@ -68,5 +73,15 @@ class SummaryError(Exception):
         self.status_code, self.message = SUMMARY_ERRORS[code]
 
 
-def failure(stage: FailureStage, code: FailureCode) -> SummaryFailure:
-    return SummaryFailure(stage=stage, code=code, message=FAILURE_MESSAGES[code])
+def failure(
+    stage: FailureStage,
+    code: FailureCode,
+    *,
+    diagnostic: AcquisitionDiagnostic | None = None,
+) -> SummaryFailure:
+    return SummaryFailure(
+        stage=stage,
+        code=code,
+        message=FAILURE_MESSAGES[code],
+        diagnostic=diagnostic,
+    )

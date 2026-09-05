@@ -50,6 +50,11 @@ class ManagedChrome:
     def available(self):
         return self._browser is not None and self._browser.is_connected()
 
+    @property
+    def page_present(self):
+        """Whether the managed browser currently owns a usable page."""
+        return self._page is not None and not self._page.is_closed() and self.available
+
     async def _bounded(self, operation):
         async with asyncio.timeout(self._control_timeout):
             return await operation

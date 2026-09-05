@@ -23,6 +23,15 @@ MAX_MEDIA_COUNT = 128
 MEDIA_HOSTS = ("sinaimg.cn", "weibocdn.com")
 
 
+def media_kind(metadata):
+    extension = str(metadata.get("extension", "")).lower()
+    if extension in ("jpg", "jpeg", "png", "webp", "gif"):
+        return "image"
+    if extension in ("mp4", "mov", "m3u8", "webm"):
+        return "video"
+    return None
+
+
 def emit(message):
     payload = json.dumps(message, ensure_ascii=True, separators=(",", ":"))
     if len(payload.encode("utf-8")) > FRAME_LIMIT:
@@ -326,6 +335,33 @@ def _classify_response(response, *, stage):
     return "parser_failed"
 
 
+def _classification_basis(response, *, code):
+    if response is None:
+        return "upstream_exception"
+    if code == "manual_challenge_required":
+        return "explicit_platform_evidence"
+    if code == "login_required" and response.history:
+        return "login_redirect"
+    if code in ("content_unavailable", "asset_unavailable", "structure_changed"):
+        return "platform_payload" if response.status_code == 200 else "http_status"
+    if response.status_code >= 400:
+        return "http_status"
+    return "upstream_exception"
+
+
+def _diagnostic_payload(
+    *, stage, outcome, response=None, basis=None, asset_position=None
+):
+    return {
+        "stage": stage,
+        "outcome": outcome,
+        "status_code": response.status_code if response is not None else None,
+        "basis": basis or _classification_basis(response, code=outcome),
+        "asset_position": asset_position,
+        "target": "media_asset" if stage == "media" else "selected_post",
+    }
+
+
 def _filtered_post(metadata):
     return {
         key: value
@@ -352,7 +388,16 @@ def _filtered_post(metadata):
 class CaptureJob:
     """DownloadJob adapter that captures upstream files in memory."""
 
-    def __init__(self, extractor, tempdir, emit_media, session):
+    def __init__(
+        self,
+        extractor,
+        tempdir,
+        emit_media,
+        session,
+        *,
+        max_images=24,
+        max_videos=1,
+    ):
         from gallery_dl.job import DownloadJob
 
         class _Job(DownloadJob):
@@ -367,6 +412,10 @@ class CaptureJob:
         self.post = None
         self.files = []
         self.pause_reason = None
+        self.pause_diagnostic = None
+        self.max_images = max_images
+        self.max_videos = max_videos
+        self._media_counts = {"image": 0, "video": 0}
 
     @property
     def extractor(self):
@@ -390,10 +439,36 @@ class CaptureJob:
             key, previous(key, default)
         )
 
-    def run(self):
+    def _init_job(self):
         self._configure()
         self._job._init()
+
+    def run(self):
+        self._init_job()
         self._job.dispatch(self._job.extractor)
+
+    def run_files(self, post, files):
+        """Run the upstream downloader for files already extracted earlier.
+
+        A paused report must not perform a second detail lookup.  Feeding the
+        original post metadata and only the unfinished files through the same
+        gallery-dl ``DownloadJob`` preserves the upstream downloader/session
+        semantics while keeping resume work scoped to the pending assets.
+        """
+        from gallery_dl.extractor.message import Message
+
+        self._init_job()
+        directory = _filtered_post(post)
+
+        def messages():
+            yield Message.Directory, "", directory
+            for index, item in enumerate(files, 1):
+                metadata = dict(item.get("metadata") or {})
+                metadata.setdefault("num", index)
+                metadata["status"] = directory
+                yield Message.Url, item["url"], metadata
+
+        self._job.dispatch(messages())
 
     def handle_directory(self, metadata):
         if self.post is not None:
@@ -420,6 +495,12 @@ class CaptureJob:
                 },
             }
         )
+        kind = media_kind(metadata)
+        if kind is not None:
+            self._media_counts[kind] += 1
+            limit = self.max_images if kind == "image" else self.max_videos
+            if self._media_counts[kind] > limit:
+                return
         if self.pause_reason is not None:
             self._emit_media(
                 position=position,
@@ -494,6 +575,12 @@ class CaptureJob:
                 "platform_blocked_or_rate_limited",
             ):
                 self.pause_reason = reason
+                self.pause_diagnostic = _diagnostic_payload(
+                    stage="media",
+                    outcome=reason,
+                    response=response,
+                    asset_position=position,
+                )
             self._emit_media(
                 position=position, status="unavailable", issue_code=_media_issue(reason)
             )
@@ -532,6 +619,84 @@ def _media_issue(reason):
         "media_limit": "media_limit",
         "access_denied": "asset_blocked",
     }.get(reason, "download_failed")
+
+
+def _upstream_context(identity, startup):
+    from importlib.metadata import version
+
+    from gallery_dl.extractor.weibo import WeiboStatusExtractor
+
+    if version("gallery-dl") != "1.32.10":
+        raise ValueError("unreviewed parser version")
+    cookies = startup.get("cookies")
+    if not isinstance(cookies, dict):
+        raise ValueError("invalid credentials")
+    max_media_bytes = startup.get("max_media_bytes", MAX_MEDIA_BYTES)
+    if type(max_media_bytes) is not int or not 1 <= max_media_bytes <= MAX_MEDIA_BYTES:
+        raise ValueError("invalid media budget")
+    max_images = startup.get("max_images", 24)
+    max_videos = startup.get("max_videos", 1)
+    if type(max_images) is not int or not 1 <= max_images <= 24:
+        raise ValueError("invalid image budget")
+    if type(max_videos) is not int or max_videos != 1:
+        raise ValueError("invalid video budget")
+
+    extractor = WeiboStatusExtractor.from_url(f"https://m.weibo.cn/detail/{identity}")
+    options = {
+        "text": True,
+        "retweets": True,
+        "videos": True,
+        "movies": True,
+        "livephoto": False,
+        "retries": 0,
+        "proxy-env": False,
+        "write-pages": False,
+        "input": False,
+        "netrc": False,
+        "browser": "firefox",
+    }
+    extractor.config = lambda key, default=None: options.get(key, default)
+    extractor.cache = lambda *args, **kwargs: None
+    extractor._init_options()
+    extractor._init_session()
+    defaults = dict(extractor.session.headers)
+    bridge = BridgeSession(cookies, defaults, max_media_bytes)
+    extractor.session = bridge
+    extractor.cookies = bridge.cookies
+    extractor.log = logging.Logger("isolated-weibo-acquisition", level=logging.CRITICAL)
+    return extractor, bridge, max_media_bytes, max_images, max_videos
+
+
+def _media_resume_input(identity, startup):
+    post = startup.get("post")
+    files = startup.get("files")
+    if (
+        not isinstance(post, dict)
+        or str(post.get("idstr", post.get("id"))) != identity
+        or not isinstance(files, list)
+        or len(files) > MAX_MEDIA_COUNT
+    ):
+        raise ValueError("invalid resume input")
+    checked = []
+    for item in files:
+        if not isinstance(item, dict):
+            raise ValueError("invalid resume input")
+        url = item.get("url")
+        metadata = item.get("metadata")
+        if not isinstance(url, str) or len(url) > 4096:
+            raise ValueError("invalid resume input")
+        if not isinstance(metadata, dict):
+            metadata = {}
+        safe = {}
+        for key in ("extension", "filename", "num", "width", "height"):
+            value = metadata.get(key)
+            if isinstance(value, (str, int, float, bool)) or value is None:
+                safe[key] = value
+        number = safe.get("num")
+        if type(number) is not int or not 1 <= number <= MAX_MEDIA_COUNT:
+            raise ValueError("invalid resume input")
+        checked.append({"url": url, "metadata": safe})
+    return post, checked
 
 
 def _run_legacy(identity):
@@ -595,43 +760,21 @@ def _run_legacy(identity):
 
 
 def _run_upstream(identity, startup):
-    from importlib.metadata import version
-
     from gallery_dl import exception
-    from gallery_dl.extractor.weibo import WeiboStatusExtractor
 
-    if version("gallery-dl") != "1.32.10":
-        raise ValueError("unreviewed parser version")
-    cookies = startup.get("cookies")
-    if not isinstance(cookies, dict):
-        raise ValueError("invalid credentials")
-    max_media_bytes = startup.get("max_media_bytes", MAX_MEDIA_BYTES)
-    if type(max_media_bytes) is not int or not 1 <= max_media_bytes <= MAX_MEDIA_BYTES:
-        raise ValueError("invalid media budget")
-
-    extractor = WeiboStatusExtractor.from_url(f"https://m.weibo.cn/detail/{identity}")
-    options = {
-        "text": True,
-        "retweets": True,
-        "videos": True,
-        "movies": True,
-        "livephoto": False,
-        "retries": 0,
-        "proxy-env": False,
-        "write-pages": False,
-        "input": False,
-        "netrc": False,
-        "browser": "firefox",
-    }
-    extractor.config = lambda key, default=None: options.get(key, default)
-    extractor.cache = lambda *args, **kwargs: None
-    extractor._init_options()
-    extractor._init_session()
-    defaults = dict(extractor.session.headers)
-    bridge = BridgeSession(cookies, defaults, max_media_bytes)
-    extractor.session = bridge
-    extractor.cookies = bridge.cookies
-    extractor.log = logging.Logger("isolated-weibo-acquisition", level=logging.CRITICAL)
+    mode = startup.get("mode", "upstream")
+    resume_post = resume_files = None
+    if mode == "upstream_media":
+        resume_post, resume_files = _media_resume_input(identity, startup)
+    elif mode != "upstream":
+        raise ValueError("invalid mode")
+    (
+        extractor,
+        bridge,
+        max_media_bytes,
+        max_images,
+        max_videos,
+    ) = _upstream_context(identity, startup)
 
     tempdir = tempfile.mkdtemp(prefix="longtian-gallery-")
     try:
@@ -648,25 +791,43 @@ def _run_upstream(identity, startup):
                 message["mime_type"] = mime_type
             emit(message)
 
-        capture = CaptureJob(extractor, tempdir, emit_media, bridge)
+        capture = CaptureJob(
+            extractor,
+            tempdir,
+            emit_media,
+            bridge,
+            max_images=max_images,
+            max_videos=max_videos,
+        )
         try:
-            capture.run()
+            if mode == "upstream_media":
+                capture.run_files(resume_post, resume_files)
+            else:
+                capture.run()
         except exception.NotFoundError:
             response = bridge.last_response
+            stage = "media" if mode == "upstream_media" else "detail"
+            code = (
+                _classify_response(response, stage=stage)
+                if response is not None
+                else (
+                    "asset_unavailable" if stage == "media" else "content_unavailable"
+                )
+            )
             emit(
                 {
                     "kind": "error",
-                    "code": _classify_response(response, stage="detail")
-                    if response is not None
-                    else "content_unavailable",
+                    "code": code,
                     "status_code": response.status_code if response else None,
-                    "stage": "detail",
+                    "stage": stage,
+                    "basis": _classification_basis(response, code=code),
                 }
             )
             return
         except exception.GalleryDLException as error:
             response = getattr(error, "response", None) or bridge.last_response
-            code = _classify_response(response, stage="detail")
+            stage = "media" if mode == "upstream_media" else "detail"
+            code = _classify_response(response, stage=stage)
             if isinstance(error, exception.ChallengeError):
                 code = "manual_challenge_required"
             emit(
@@ -674,14 +835,16 @@ def _run_upstream(identity, startup):
                     "kind": "error",
                     "code": code,
                     "status_code": response.status_code if response else None,
-                    "stage": "detail",
+                    "stage": stage,
+                    "basis": _classification_basis(response, code=code),
                 }
             )
             return
         except Exception:
             response = bridge.last_response
+            stage = "media" if mode == "upstream_media" else "detail"
             code = (
-                _classify_response(response, stage="detail")
+                _classify_response(response, stage=stage)
                 if response
                 else "parser_failed"
             )
@@ -690,12 +853,25 @@ def _run_upstream(identity, startup):
                     "kind": "error",
                     "code": code,
                     "status_code": response.status_code if response else None,
-                    "stage": "detail",
+                    "stage": stage,
+                    "basis": _classification_basis(response, code=code),
                 }
             )
             return
         if capture.post is None:
-            emit({"kind": "error", "code": "content_unavailable", "stage": "detail"})
+            code = (
+                "asset_unavailable"
+                if mode == "upstream_media"
+                else "content_unavailable"
+            )
+            emit(
+                {
+                    "kind": "error",
+                    "code": code,
+                    "stage": "media" if mode == "upstream_media" else "detail",
+                    "basis": "upstream_exception",
+                }
+            )
             return
         emit(
             {
@@ -703,6 +879,7 @@ def _run_upstream(identity, startup):
                 "post": capture.post,
                 "files": capture.files,
                 "pause_reason": capture.pause_reason,
+                "diagnostic": capture.pause_diagnostic,
             }
         )
     finally:
@@ -719,7 +896,7 @@ def main():
             or not identity.isdigit()
         ):
             raise ValueError("invalid identity")
-        if startup.get("mode", "legacy") == "upstream":
+        if startup.get("mode", "legacy") in ("upstream", "upstream_media"):
             _run_upstream(identity, startup)
         else:
             _run_legacy(identity)
