@@ -35,9 +35,11 @@ def card(mid: str, body: str, *, next_url: str | None = None) -> str:
 
 def omitted_page(term: str) -> str:
     encoded = quote_plus(term)
-    return f"""<div class="search-result-summary">
+    return f"""<div id="pl_feedlist_index" class="main-full">
+      <div class="m-error">
       找到 40 条结果，部分相似结果已省略
       <a href="https://s.weibo.com/weibo?q={encoded}&amp;nodup=1">查看全部搜索结果</a>
+      </div>
     </div>"""
 
 
@@ -74,7 +76,7 @@ def test_unrelated_visible_notice_does_not_trigger_recovery():
     term = "龙田街道"
     url = "https://s.weibo.com/weibo?" + urlencode({"q": term})
     page = omitted_page(term).replace(
-        'class="search-result-summary"', 'class="sidebar-promo"'
+        'id="pl_feedlist_index" class="main-full"', 'class="sidebar-promo"'
     )
     parsed = read_search_page(url, page, 200, term)
     assert parsed.state == "pending"

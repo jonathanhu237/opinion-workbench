@@ -168,21 +168,31 @@ def _view_all_search_url(root, url: str, term: str) -> str | None:
     omission = re.compile(
         r"找到\s*[0-9,]+\s*条结果[，,、\s]*部分相似结果已省略"
     )
-    summaries = root.xpath("//*[" + css_class("search-result-summary") + "]")
-    for summary in summaries:
-        # Keep the scope inside the platform's rendered result summary.  A
-        # sidebar, footer or user-authored post can contain the same words and
-        # must not authorize a navigation target.
-        value = text_of(summary)
-        if len(value) > 400 or not omission.search(value):
-            continue
-        links = summary.xpath(
-            ".//a[@href and contains(normalize-space(.), '查看全部搜索结果')]"
+    result_areas = root.xpath(
+        "//*[@id='pl_feedlist_index' or " + css_class("pl_feedlist_index") + "]"
+    )
+    for result_area in result_areas:
+        summaries = result_area.xpath(
+            ".//*["
+            + css_class("m-error")
+            + " or "
+            + css_class("search-result-summary")
+            + "]"
         )
-        for link in links:
-            target = _search_link(link.get("href", ""), url, term, view_all=True)
-            if target is not None:
-                return target
+        for summary in summaries:
+            # Keep the scope inside the platform's rendered result summary. A
+            # sidebar, footer or user-authored post can contain the same words
+            # and must not authorize a navigation target.
+            value = text_of(summary)
+            if len(value) > 400 or not omission.search(value):
+                continue
+            links = summary.xpath(
+                ".//a[@href and contains(normalize-space(.), '查看全部搜索结果')]"
+            )
+            for link in links:
+                target = _search_link(link.get("href", ""), url, term, view_all=True)
+                if target is not None:
+                    return target
     return None
 
 
