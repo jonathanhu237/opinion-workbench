@@ -405,7 +405,11 @@ def _classify_response(response, *, stage):
     if status == 401:
         return "login_required"
     if status == 403:
-        return _challenge_from_response(response) or "access_denied"
+        return _challenge_from_response(response) or (
+            "manual_challenge_required"
+            if _redirect_kind(response) == "challenge"
+            else "access_denied"
+        )
     redirect_kind = _redirect_kind(response)
     if redirect_kind == "login":
         return "login_required"
