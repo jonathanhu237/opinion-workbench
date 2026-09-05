@@ -2,8 +2,9 @@
 
 The upstream extractor owns request construction and media download.  The
 parent process owns the network boundary, credentials, budgets and result
-handoff.  The legacy ``fetch`` mode remains for parser-only fixtures; the
-product uses ``request_fetch`` so request options are preserved.
+handoff.  Every product request uses the same brokered acquisition protocol;
+there is no parser-only fallback that can silently drop upstream request
+options.
 """
 
 import asyncio
@@ -62,12 +63,21 @@ class UpstreamResponse:
 
 
 class ComponentError(Exception):
-    def __init__(self, code, *, status_code: int | None = None, stage=None, basis=None):
+    def __init__(
+        self,
+        code,
+        *,
+        status_code: int | None = None,
+        stage=None,
+        basis=None,
+        asset_position=None,
+    ):
         super().__init__(code)
         self.code = code
         self.status_code = status_code
         self.stage = stage
         self.basis = basis
+        self.asset_position = asset_position
 
 
 def _json_body(value):
@@ -145,7 +155,11 @@ def _decode_download(message):
         }
     if status != "unavailable" or not isinstance(issue_code, str):
         raise ComponentError("invalid_output")
-    return position, {"status": "unavailable", "issue_code": issue_code}
+    value = {"status": "unavailable", "issue_code": issue_code}
+    diagnostic = _decode_diagnostic(message.get("diagnostic"))
+    if diagnostic is not None:
+        value["diagnostic"] = diagnostic
+    return position, value
 
 
 def _decode_diagnostic(value):
@@ -245,8 +259,7 @@ class GalleryComponent:
         self,
         content_id,
         *,
-        fetch=None,
-        request_fetch=None,
+        request_fetch,
         cookies=None,
         max_media_bytes=MAX_MEDIA_BYTES,
         max_images=24,
@@ -254,8 +267,6 @@ class GalleryComponent:
     ):
         if not re.fullmatch(r"[1-9][0-9]{5,23}", content_id):
             raise ComponentError("invalid_identity")
-        if request_fetch is None:
-            return await self._extract_legacy(content_id, fetch=fetch)
         if not isinstance(cookies, Mapping):
             raise ComponentError("invalid_credentials")
         cookies = {
@@ -377,48 +388,6 @@ class GalleryComponent:
             await settle(finish_starting())
             raise
 
-    async def _extract_legacy(self, content_id, *, fetch):
-        if fetch is None:
-            raise ComponentError("invalid_fetcher")
-        process = await self._start()
-        try:
-            async with asyncio.timeout(30):
-                await self._send(process, {"content_id": content_id, "mode": "legacy"})
-                requests = 0
-                expected = (
-                    "https://weibo.com/ajax/statuses/show?id="
-                    + content_id
-                    + "&isGetLongText=true"
-                )
-                while True:
-                    message = await self._read(process)
-                    if message.get("kind") == "request":
-                        if requests >= 2 or message.get("url") != expected:
-                            raise ComponentError("lookup_out_of_scope")
-                        requests += 1
-                        body = fetch(message["url"])
-                        if inspect.isawaitable(body):
-                            body = await body
-                        await self._send(
-                            process,
-                            {"kind": "response", "body": _json_body(body)},
-                        )
-                    elif message.get("kind") == "result":
-                        return self._result(message, content_id)
-                    elif message.get("kind") == "error":
-                        raise ComponentError(
-                            message.get("code", "parser_failed"),
-                            status_code=message.get("status_code"),
-                            stage=message.get("stage"),
-                            basis=message.get("basis"),
-                        )
-                    else:
-                        raise ComponentError("invalid_output")
-        except (ValueError, OSError, asyncio.IncompleteReadError):
-            raise ComponentError("invalid_output") from None
-        finally:
-            await settle(self._stop(process))
-
     async def _extract_upstream(
         self,
         content_id,
@@ -498,6 +467,7 @@ class GalleryComponent:
                             status_code=message.get("status_code"),
                             stage=message.get("stage"),
                             basis=message.get("basis"),
+                            asset_position=message.get("asset_position"),
                         )
                     else:
                         raise ComponentError("invalid_output")

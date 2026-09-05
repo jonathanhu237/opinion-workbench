@@ -142,13 +142,11 @@ class WeiboEnricher:
                         request.url,
                         headers=headers,
                         content=request.body,
-                        # The upstream detail call may follow the platform's
-                        # login redirect so it can be classified from history;
-                        # media redirects are intentionally kept at the CDN
-                        # boundary and recorded as a missing asset.
-                        follow_redirects=request.allow_redirects
-                        if request.stage == "detail"
-                        else False,
+                        # Redirects must return through the broker as a
+                        # response. Following them inside httpx would hide
+                        # hops from the request budget and could cross the
+                        # credential boundary before classification.
+                        follow_redirects=False,
                     ) as response:
                         limit = (
                             1024 * 1024
@@ -272,6 +270,7 @@ class WeiboEnricher:
                 follow_redirects=False,
                 trust_env=False,
             ) as client:
+                media_diagnostics = {}
                 result_inventory, pause = await transfer_media(
                     inventory,
                     client=client,
@@ -281,8 +280,11 @@ class WeiboEnricher:
                     checkpoint=checkpoint,
                     on_progress=save_progress,
                     prefetched=prefetched,
+                    diagnostics=media_diagnostics,
                 )
             pause = pause or acquisition_pause
+            if acquisition_diagnostic is None and media_diagnostics:
+                acquisition_diagnostic = next(iter(media_diagnostics.values()))
             content = project_text(
                 parsed,
                 content_id,
@@ -381,6 +383,11 @@ def _component_diagnostic(error):
         if type(error.status_code) is int and 100 <= error.status_code <= 599
         else None
     )
+    asset_position = (
+        error.asset_position
+        if type(error.asset_position) is int and 0 <= error.asset_position <= 24
+        else None
+    )
     basis = (
         error.basis
         if error.basis
@@ -400,7 +407,7 @@ def _component_diagnostic(error):
         outcome=outcome,
         status_code=status_code,
         basis=basis,
-        asset_position=None,
+        asset_position=asset_position,
         target="media_asset" if stage == "media" else "selected_post",
     )
 

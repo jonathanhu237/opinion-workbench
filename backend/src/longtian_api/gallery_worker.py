@@ -15,7 +15,7 @@ import sys
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 FRAME_LIMIT = 12 * 1024 * 1024
 MAX_MEDIA_BYTES = 6 * 1024 * 1024
@@ -260,7 +260,22 @@ def _challenge_from_response(response):
 
     if util.detect_challenge(response):
         return "manual_challenge_required"
-    body = response.content[: 256 * 1024].decode("utf-8", errors="ignore").lower()
+    raw = response.content[: 256 * 1024]
+    content_type = response.headers.get("content-type", "").split(";", 1)[0]
+    if content_type.strip().lower() == "application/json":
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (ValueError, UnicodeError):
+            payload = None
+        if isinstance(payload, dict):
+            body = " ".join(
+                str(payload.get(key, ""))
+                for key in ("msg", "message", "error", "reason", "code")
+            ).lower()
+        else:
+            body = ""
+    else:
+        body = raw.decode("utf-8", errors="ignore").lower()
     headers = " ".join(
         f"{key}:{value}" for key, value in response.headers.items()
     ).lower()
@@ -283,6 +298,50 @@ def _challenge_from_response(response):
     return None
 
 
+def _trusted_redirect_kind(url):
+    """Classify only known platform authentication/verification destinations."""
+
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return None
+    host = (parts.hostname or "").lower()
+    if (
+        parts.scheme != "https"
+        or parts.username is not None
+        or parts.password is not None
+        or parts.port not in (None, 443)
+    ):
+        return None
+    path = parts.path.lower()
+    if host in {"passport.weibo.com", "passport.weibo.cn", "login.sina.com.cn"}:
+        return "login"
+    if host in {"security.weibo.com", "security.weibo.cn"}:
+        return "challenge"
+    if host in {"weibo.com", "www.weibo.com", "m.weibo.cn"} and (
+        path == "/login" or path.startswith("/login/")
+    ):
+        return "login"
+    return None
+
+
+def _redirect_kind(response):
+    if response is None:
+        return None
+    targets = []
+    for item in response.history:
+        if item.url:
+            targets.append(item.url)
+    location = response.headers.get("location")
+    if location:
+        targets.append(urljoin(response.url, location))
+    for target in targets:
+        kind = _trusted_redirect_kind(target)
+        if kind is not None:
+            return kind
+    return None
+
+
 def _classify_response(response, *, stage):
     if response is None:
         return "parser_failed"
@@ -295,6 +354,13 @@ def _classify_response(response, *, stage):
         return "login_required"
     if status == 403:
         return _challenge_from_response(response) or "access_denied"
+    redirect_kind = _redirect_kind(response)
+    if redirect_kind == "login":
+        return "login_required"
+    if redirect_kind == "challenge":
+        return "manual_challenge_required"
+    if 300 <= status < 400:
+        return "media_redirect" if stage == "media" else "access_denied"
     if stage == "detail" and status == 200:
         try:
             payload = response.json()
@@ -315,15 +381,10 @@ def _classify_response(response, *, stage):
                 return "structure_changed"
             if payload.get("ok") == 1:
                 return "content_unavailable"
-    if response.history:
-        urls = [item.url for item in response.history] + [response.url]
-        if any(
-            "login.sina.com" in url
-            or "passport.weibo.com" in url
-            or "/login" in url.lower()
-            for url in urls
-        ):
-            return "login_required"
+    if response.history and any(
+        _trusted_redirect_kind(item.url) == "login" for item in response.history
+    ):
+        return "login_required"
     if stage == "detail" and status in (404, 410):
         return "content_unavailable"
     if stage == "media" and status in (404, 410):
@@ -340,11 +401,11 @@ def _classification_basis(response, *, code):
         return "upstream_exception"
     if code == "manual_challenge_required":
         return "explicit_platform_evidence"
-    if code == "login_required" and response.history:
+    if code == "login_required" and _redirect_kind(response) == "login":
         return "login_redirect"
     if code in ("content_unavailable", "asset_unavailable", "structure_changed"):
         return "platform_payload" if response.status_code == 200 else "http_status"
-    if response.status_code >= 400:
+    if response.status_code >= 300:
         return "http_status"
     return "upstream_exception"
 
@@ -360,6 +421,21 @@ def _diagnostic_payload(
         "asset_position": asset_position,
         "target": "media_asset" if stage == "media" else "selected_post",
     }
+
+
+def _diagnostic_outcome(code):
+    return {
+        "access_denied": "access_denied",
+        "asset_blocked": "access_denied",
+        "asset_unavailable": "asset_unavailable",
+        "media_limit": "media_limit",
+        "media_redirect": "media_redirect",
+        "login_required": "login_required",
+        "manual_challenge_required": "manual_challenge_required",
+        "platform_blocked_or_rate_limited": "platform_blocked_or_rate_limited",
+        "content_unavailable": "content_unavailable",
+        "structure_changed": "structure_changed",
+    }.get(code, "parser_failed")
 
 
 def _filtered_post(metadata):
@@ -500,12 +576,23 @@ class CaptureJob:
             self._media_counts[kind] += 1
             limit = self.max_images if kind == "image" else self.max_videos
             if self._media_counts[kind] > limit:
+                self._emit_media(
+                    position=position,
+                    status="unavailable",
+                    issue_code="media_limit",
+                    diagnostic=_diagnostic_payload(
+                        stage="media",
+                        outcome="media_limit",
+                        asset_position=position,
+                    ),
+                )
                 return
         if self.pause_reason is not None:
             self._emit_media(
                 position=position,
                 status="unavailable",
                 issue_code="asset_blocked",
+                diagnostic=self.pause_diagnostic,
             )
             return
         if url.startswith("ytdl:"):
@@ -513,16 +600,37 @@ class CaptureJob:
                 position=position,
                 status="unavailable",
                 issue_code="unsupported_transport",
+                diagnostic=_diagnostic_payload(
+                    stage="media",
+                    outcome="parser_failed",
+                    basis="upstream_exception",
+                    asset_position=position,
+                ),
             )
             return
         if self._session.media_bytes >= self._session.max_media_bytes:
             self._emit_media(
-                position=position, status="unavailable", issue_code="media_limit"
+                position=position,
+                status="unavailable",
+                issue_code="media_limit",
+                diagnostic=_diagnostic_payload(
+                    stage="media",
+                    outcome="media_limit",
+                    asset_position=position,
+                ),
             )
             return
         if not allowed_media_url(url):
             self._emit_media(
-                position=position, status="unavailable", issue_code="unsafe_media_url"
+                position=position,
+                status="unavailable",
+                issue_code="unsafe_media_url",
+                diagnostic=_diagnostic_payload(
+                    stage="media",
+                    outcome="parser_failed",
+                    basis="upstream_exception",
+                    asset_position=position,
+                ),
             )
             return
 
@@ -540,6 +648,12 @@ class CaptureJob:
                         position=position,
                         status="unavailable",
                         issue_code="media_limit",
+                        diagnostic=_diagnostic_payload(
+                            stage="media",
+                            outcome="media_limit",
+                            response=self._session.last_response,
+                            asset_position=position,
+                        ),
                     )
                 else:
                     self._emit_media(
@@ -569,6 +683,12 @@ class CaptureJob:
                     reason = "unsupported_media_type"
                 elif reason == "parser_failed":
                     reason = "invalid_media"
+            diagnostic = _diagnostic_payload(
+                stage="media",
+                outcome=_diagnostic_outcome(reason),
+                response=response,
+                asset_position=position,
+            )
             if reason in (
                 "login_required",
                 "manual_challenge_required",
@@ -582,7 +702,10 @@ class CaptureJob:
                     asset_position=position,
                 )
             self._emit_media(
-                position=position, status="unavailable", issue_code=_media_issue(reason)
+                position=position,
+                status="unavailable",
+                issue_code=_media_issue(reason),
+                diagnostic=diagnostic,
             )
             path.unlink(missing_ok=True)
         finally:
@@ -699,66 +822,6 @@ def _media_resume_input(identity, startup):
     return post, checked
 
 
-def _run_legacy(identity):
-    from gallery_dl import exception
-    from gallery_dl.extractor.message import Message
-    from gallery_dl.extractor.weibo import WeiboStatusExtractor
-    from requests.cookies import RequestsCookieJar
-
-    extractor = WeiboStatusExtractor.from_url(f"https://m.weibo.cn/detail/{identity}")
-    options = {
-        "text": True,
-        "retweets": True,
-        "videos": True,
-        "movies": True,
-        "livephoto": False,
-        "retries": 0,
-        "proxy-env": False,
-        "write-pages": False,
-        "input": False,
-        "netrc": False,
-    }
-    extractor.config = lambda key, default=None: options.get(key, default)
-    extractor.cache = lambda *args, **kwargs: None
-    extractor.session = SimpleNamespace(cookies=RequestsCookieJar())
-    extractor.log = logging.Logger("isolated-weibo-parser", level=logging.CRITICAL)
-
-    def request(url, **kwargs):
-        if kwargs.get("method", "GET") != "GET":
-            raise exception.HttpError("unsupported lookup")
-        emit({"kind": "request", "url": url})
-        reply = receive()
-        if reply.get("kind") != "response":
-            raise ValueError("lookup rejected")
-        return SimpleNamespace(text=json.dumps(_body_from_reply(reply)))
-
-    extractor.request = request
-    post, files = None, []
-    for kind, url, metadata in extractor:
-        if kind == Message.Directory:
-            if post is not None:
-                raise ValueError("unexpected second post")
-            post = _filtered_post(metadata)
-        elif kind == Message.Url:
-            files.append(
-                {
-                    "url": url,
-                    "metadata": {
-                        key: value
-                        for key, value in metadata.items()
-                        if key not in ("status", "user", "date")
-                    },
-                }
-            )
-        else:
-            raise ValueError("recursive extraction is not supported")
-        if len(files) > MAX_MEDIA_COUNT:
-            raise ValueError("inventory limit")
-    if post is None:
-        raise exception.NotFoundError("status")
-    emit({"kind": "result", "post": post, "files": files})
-
-
 def _run_upstream(identity, startup):
     from gallery_dl import exception
 
@@ -779,13 +842,23 @@ def _run_upstream(identity, startup):
     tempdir = tempfile.mkdtemp(prefix="longtian-gallery-")
     try:
 
-        def emit_media(*, position, status, issue_code=None, data=None, mime_type=None):
+        def emit_media(
+            *,
+            position,
+            status,
+            issue_code=None,
+            data=None,
+            mime_type=None,
+            diagnostic=None,
+        ):
             message = {
                 "kind": "media",
                 "position": position,
                 "status": status,
                 "issue_code": issue_code,
             }
+            if diagnostic is not None:
+                message["diagnostic"] = diagnostic
             if status == "ready":
                 message["data"] = base64.b64encode(data).decode("ascii")
                 message["mime_type"] = mime_type
@@ -821,6 +894,7 @@ def _run_upstream(identity, startup):
                     "status_code": response.status_code if response else None,
                     "stage": stage,
                     "basis": _classification_basis(response, code=code),
+                    "asset_position": bridge.media_index if stage == "media" else None,
                 }
             )
             return
@@ -837,6 +911,7 @@ def _run_upstream(identity, startup):
                     "status_code": response.status_code if response else None,
                     "stage": stage,
                     "basis": _classification_basis(response, code=code),
+                    "asset_position": bridge.media_index if stage == "media" else None,
                 }
             )
             return
@@ -855,6 +930,7 @@ def _run_upstream(identity, startup):
                     "status_code": response.status_code if response else None,
                     "stage": stage,
                     "basis": _classification_basis(response, code=code),
+                    "asset_position": bridge.media_index if stage == "media" else None,
                 }
             )
             return
@@ -896,10 +972,9 @@ def main():
             or not identity.isdigit()
         ):
             raise ValueError("invalid identity")
-        if startup.get("mode", "legacy") in ("upstream", "upstream_media"):
-            _run_upstream(identity, startup)
-        else:
-            _run_legacy(identity)
+        if startup.get("mode", "upstream") not in ("upstream", "upstream_media"):
+            raise ValueError("invalid mode")
+        _run_upstream(identity, startup)
     except Exception:
         # Never forward exception text, platform payloads or parser logs.
         try:

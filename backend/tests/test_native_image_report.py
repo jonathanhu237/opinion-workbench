@@ -260,6 +260,24 @@ def test_plain_media_403_is_a_missing_asset_and_does_not_pause_report(tmp_path):
         ).json()["items"][0]
         assert attempt["input"]["status"] == "partial"
         assert attempt["input"]["assets"][0]["issue_code"] == "asset_blocked"
+        with app.state.report_generation_service.repository.database.connect() as db:
+            material = db.execute(
+                "SELECT content_json FROM content_materials WHERE content_id=?",
+                (1,),
+            ).fetchone()
+        issue = next(
+            issue
+            for issue in json.loads(material["content_json"])["issues"]
+            if issue.get("asset_position") == 0
+        )
+        assert issue["diagnostic"] == {
+            "stage": "media",
+            "outcome": "access_denied",
+            "status_code": 403,
+            "basis": "http_status",
+            "asset_position": 0,
+            "target": "media_asset",
+        }
         assert model.counts["initial"] == 1
         assert browser.shown == 0
         assert len(requests) == 2
