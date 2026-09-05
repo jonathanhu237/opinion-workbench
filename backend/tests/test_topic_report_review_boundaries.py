@@ -186,7 +186,7 @@ def test_interval_uses_latest_eligible_success_but_never_revives_new_input_failu
             successful = initial.repository.items(first_job.id).items[0]
             if changed_input:
                 worker.body = "已经变化的完整原文，不能复活旧输入的成功分析。"
-            model.answers["initial"] = ["not valid JSON"]
+            model.answers["initial"] = ["not valid JSON"] * 2
             second = await initial.create(
                 request(db, kind="reanalysis", result_ids=[1], force_refresh=True)
             )

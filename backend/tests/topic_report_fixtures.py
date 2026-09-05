@@ -31,7 +31,7 @@ class TextPipelineClient:
         self.entered = asyncio.Event()
         self.gate = asyncio.Event()
         self.closed = False
-        self.failed_override = False
+        self.failed_override = 0
 
     async def test_connection(self, configuration):
         raise AssertionError("report must not run a connection test")
@@ -96,9 +96,9 @@ class TextPipelineClient:
         if (
             stage == "leaf"
             and "验收：失败一次" in messages[0]["content"]
-            and not self.failed_override
+            and self.failed_override < 2
         ):
-            self.failed_override = True
+            self.failed_override += 1
             answer = {
                 "overview": "合成失败",
                 "items": [{"text": "合成无效引用", "source_ids": [9007199254740991]}],

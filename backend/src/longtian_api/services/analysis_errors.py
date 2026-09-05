@@ -27,7 +27,7 @@ ERRORS = {
     "report_generation_active": (409, "已有报告正在生成，请等待当前任务结束后再提交。"),
     "no_eligible_contents": (
         409,
-        "当前没有符合所选规则的待分析内容，请刷新后重新选择。",
+        "当前没有符合所选规则的内容，请刷新后重新选择。",
     ),
     "result_not_found": (404, "未找到采集内容。"),
     "content_analysis_not_found": (404, "未找到初步分析记录。"),

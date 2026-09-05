@@ -32,6 +32,50 @@ class OwnedSession(BrowserFixture):
         return {"SUB": "synthetic-weibo-session"}
 
 
+def test_browser_unavailable_stops_after_first_acquisition(tmp_path):
+    from longtian_api.services.native_browser_contracts import BrowserUnavailable
+
+    app, browser, model, requests = native_environment(
+        tmp_path, response=lambda request: None
+    )
+    seed_run(Database(tmp_path / "api.sqlite3"), 1, start=3600375418559880)
+    calls = []
+
+    async def unavailable():
+        calls.append(True)
+        raise BrowserUnavailable()
+
+    browser.weibo_cookies = unavailable
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        saved(client)
+        ids = [
+            item["id"]
+            for item in client.get("/api/v1/results?limit=100").json()["items"]
+        ]
+        assert len(ids) > 1
+        response = client.post(
+            "/api/v1/report-generations", json=generation_request(ids)
+        )
+        assert response.status_code == 202, response.text
+        client.portal.call(finish, app.state.report_generation_service)
+        result = client.get(
+            f"/api/v1/report-generations/{response.json()['id']}"
+        ).json()
+        assert result["status"] == "interrupted"
+        assert result["report"] is None
+        assert result["analysis"]["counts"]["failed"] == 1
+        assert result["analysis"]["counts"]["interrupted"] == len(ids) - 1
+        items = client.get(
+            f"/api/v1/content-analysis-jobs/{result['analysis']['id']}/items"
+        ).json()["items"]
+        assert (
+            next(item for item in items if item["status"] == "failed")["error"]["code"]
+            == "browser_unavailable"
+        )
+    assert calls == [True]
+    assert not requests
+
+
 def native_environment(tmp_path, *, response):
     database = Database(tmp_path / "api.sqlite3")
     database.initialize()
@@ -275,7 +319,7 @@ def test_plain_403_is_a_neutral_item_failure_and_never_requests_manual_verificat
         ).json()
         client.portal.call(finish, app.state.report_generation_service)
         value = client.get(f"/api/v1/report-generations/{created['id']}").json()
-        assert value["status"] in ("completed", "empty")
+        assert value["status"] == "failed"
         item = client.get(
             f"/api/v1/content-analysis-jobs/{created['analysis']['id']}/items"
         ).json()["items"][0]

@@ -60,6 +60,7 @@ Modality = Literal["text", "image", "video", "audio", "unknown"]
 MediaMime = Literal["image/jpeg", "image/png", "image/webp", "video/mp4"]
 AcquisitionDiagnosticStage = Literal["detail", "media", "browser"]
 AcquisitionDiagnosticOutcome = Literal[
+    "browser_unavailable",
     "access_denied",
     "asset_blocked",
     "asset_unavailable",

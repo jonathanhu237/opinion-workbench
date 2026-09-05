@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import {
   analysisProvider,
+  analysisJobFixture,
   analysisSettingsFixture,
   resultFixture,
 } from '@/lib/api/analysis-fixtures'
@@ -17,10 +18,17 @@ import {
   fetchReportRecordByReport,
   fetchReportGenerations,
   fetchReportRecords,
+  fetchReportGeneration,
   previewReportSelection,
 } from '@/lib/api/report-generations'
 import { fetchResults } from '@/lib/api/results'
 import { ReportHub } from '@/routes/reports-page'
+import { fetchAnalysisJobItems } from '@/lib/api/content-analyses'
+
+vi.mock('@/lib/api/content-analyses', async (original) => ({
+  ...(await original<typeof import('@/lib/api/content-analyses')>()),
+  fetchAnalysisJobItems: vi.fn(),
+}))
 
 vi.mock('@/lib/api/ai-settings', async (original) => ({
   ...(await original<typeof import('@/lib/api/ai-settings')>()),
@@ -41,6 +49,7 @@ vi.mock('@/lib/api/report-generations', async (original) => ({
   fetchReportRecordByReport: vi.fn(),
   fetchReportGenerations: vi.fn(),
   fetchReportRecords: vi.fn(),
+  fetchReportGeneration: vi.fn(),
   previewReportSelection: vi.fn(),
 }))
 
@@ -119,6 +128,74 @@ beforeEach(() => {
 })
 
 describe('舆情报告统一页面', () => {
+  it('shows failed historic empty generations as failures without a report action', async () => {
+    vi.mocked(fetchReportRecords).mockResolvedValue({
+      items: [
+        {
+          ...record,
+          status: 'empty',
+          report_id: 2,
+          selection_count: 17,
+          failed_count: 17,
+          active_count: 0,
+          processed_count: 17,
+        },
+      ],
+      next_offset: null,
+    })
+    renderPage()
+    expect(await screen.findByText('生成失败')).toBeVisible()
+    expect(screen.queryByRole('button', { name: '查看报告' })).toBeNull()
+    expect(screen.getByRole('button', { name: '查看处理' })).toBeVisible()
+  })
+
+  it('shows analysis failures even when no report was created', async () => {
+    const job = analysisJobFixture()
+    vi.mocked(fetchReportRecords).mockResolvedValue({
+      items: [{ ...record, status: 'failed', active_count: 0 }],
+      next_offset: null,
+    })
+    vi.mocked(fetchReportGeneration).mockResolvedValue({
+      id: 8,
+      name: record.name,
+      status: 'failed',
+      created_at: record.created_at,
+      pause_reason: null,
+      report: null,
+      analysis: {
+        ...job,
+        counts: {
+          ...job.counts,
+          total: 2,
+          queued: 0,
+          failed: 1,
+          interrupted: 1,
+          completed: 0,
+        },
+      },
+    } as never)
+    vi.mocked(fetchAnalysisJobItems).mockResolvedValue({
+      items: [
+        {
+          id: 1,
+          source: resultFixture().source,
+          error: {
+            code: 'invalid_schema',
+            message: '模型返回的格式不正确',
+            validation_issues: ['summary: string_type'],
+          },
+        },
+      ],
+      total: 1,
+      offset: 0,
+      limit: 20,
+    } as never)
+    const user = userEvent.setup()
+    renderPage()
+    await user.click(await screen.findByRole('button', { name: '查看处理' }))
+    expect(await screen.findByText('模型返回的格式不正确')).toBeVisible()
+    expect(screen.getByText('summary: string_type')).toBeVisible()
+  })
   it('renders one report table and opens the preparation dialog on demand', async () => {
     const user = userEvent.setup()
     renderPage()

@@ -245,7 +245,11 @@ def _historical_report_projection(database):
     with database.connect() as connection:
         return {
             table: [
-                tuple(row)
+                tuple(
+                    value
+                    for name, value in dict(row).items()
+                    if name not in {"retry_attempted", "retry_usage_json"}
+                )
                 for row in connection.execute(f'SELECT * FROM "{table}" ORDER BY rowid')
             ]
             for table in (

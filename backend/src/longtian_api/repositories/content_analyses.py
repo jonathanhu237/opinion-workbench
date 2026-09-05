@@ -34,6 +34,7 @@ from longtian_api.services.ai_analysis import MODEL_INPUT_VERSION
 from longtian_api.services.ai_client import MAX_USAGE_TOKENS
 from longtian_api.services.ai_errors import AIError
 from longtian_api.services.analysis_errors import AnalysisError
+from longtian_api.services.model_retry import combined_usage, usage_records
 from longtian_api.services.summary_errors import failure
 
 ACTIVE_ATTEMPTS = ("queued", "acquiring", "analysing")
@@ -122,19 +123,21 @@ class ContentAnalysisRepository(AnalysisRepository):
         counts["reused"] = 0
         attempted = accounted = prompt = completion = total_tokens = 0
         for item in connection.execute(
-            """SELECT status,reused_from_attempt_id,attempted,usage_json FROM
+            """SELECT status,reused_from_attempt_id,attempted,usage_json,
+              retry_attempted,retry_usage_json FROM
               content_analysis_attempts WHERE job_id=? ORDER BY position""",
             (job_id,),
         ):
             counts[item["status"]] += 1
             counts["reused"] += int(item["reused_from_attempt_id"] is not None)
-            attempted += item["attempted"]
-            if item["usage_json"] is not None:
-                usage = TokenUsage.model_validate_json(item["usage_json"])
-                accounted += 1
-                prompt += usage.prompt_tokens
-                completion += usage.completion_tokens
-                total_tokens += usage.total_tokens
+            for record in usage_records(item):
+                attempted += record["attempted"]
+                if record["usage_json"] is not None:
+                    usage = TokenUsage.model_validate_json(record["usage_json"])
+                    accounted += 1
+                    prompt += usage.prompt_tokens
+                    completion += usage.completion_tokens
+                    total_tokens += usage.total_tokens
         unknown = (attempted > 0 and accounted == 0) or total_tokens > MAX_USAGE_TOKENS
         event = connection.execute(
             "SELECT id FROM analysis_completion_events WHERE job_id=?", (job_id,)
@@ -209,9 +212,7 @@ class ContentAnalysisRepository(AnalysisRepository):
             input_fingerprint=row["input_fingerprint"],
             reused_from_attempt_id=row["reused_from_attempt_id"],
             attempted=bool(row["attempted"]),
-            usage=TokenUsage.model_validate_json(row["usage_json"])
-            if row["usage_json"]
-            else None,
+            usage=combined_usage(row),
             error=SummaryFailure.model_validate_json(row["error_json"])
             if row["error_json"]
             else None,
@@ -891,6 +892,17 @@ class ContentAnalysisRepository(AnalysisRepository):
                 (attempt_id,),
             )
 
+    def mark_retry(self, attempt_id, usage):
+        with self.connection(write=True) as connection:
+            row = self._active(connection, attempt_id)
+            if row["status"] != "analysing" or row["retry_attempted"]:
+                raise AnalysisError("content_analysis_selection_conflict")
+            connection.execute(
+                """UPDATE content_analysis_attempts SET retry_attempted=1,
+                  usage_json=? WHERE id=?""",
+                (usage.model_dump_json() if usage else None, attempt_id),
+            )
+
     def finish_attempt(
         self, attempt_id, status, *, output=None, error=None, usage=None
     ):
@@ -900,12 +912,16 @@ class ContentAnalysisRepository(AnalysisRepository):
             self._active(connection, attempt_id)
             connection.execute(
                 """UPDATE content_analysis_attempts SET
-                  status=?,output_json=?,error_json=?,usage_json=?,finished_at=?
+                  status=?,output_json=?,error_json=?,
+                  usage_json=CASE WHEN retry_attempted=0 THEN ? ELSE usage_json END,
+                  retry_usage_json=CASE WHEN retry_attempted=1 THEN ? ELSE NULL END,
+                  finished_at=?
                   WHERE id=?""",
                 (
                     status,
                     output.model_dump_json() if output else None,
                     error.model_dump_json() if error else None,
+                    usage.model_dump_json() if usage else None,
                     usage.model_dump_json() if usage else None,
                     timestamp(),
                     attempt_id,

@@ -37,6 +37,7 @@ FailureCode = Literal[
     "source_changed",
     "source_active",
     "browser_operation_active",
+    "browser_unavailable",
     "acquisition_failed",
     "source_access_denied",
     "source_content_unavailable",
@@ -92,6 +93,9 @@ class SummaryFailure(StrictModel):
     stage: FailureStage
     code: FailureCode
     message: str
+    validation_issues: list[Annotated[str, Field(max_length=200)]] | None = Field(
+        default=None, max_length=8, exclude_if=lambda value: value is None
+    )
     diagnostic: AcquisitionDiagnostic | None = Field(
         default=None, exclude_if=lambda value: value is None
     )

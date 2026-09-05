@@ -245,9 +245,9 @@ def test_smoke_normal_handoff_cross_page_citations_and_report_only_override_retr
         assert failed_calls == {
             **baseline,
             "synthetic_judgment_calls": 206,
-            "synthetic_leaf_calls": 26,
-            "synthetic_composition_calls": 29,
-            "synthetic_model_calls": 338,
+            "synthetic_leaf_calls": 27,
+            "synthetic_composition_calls": 30,
+            "synthetic_model_calls": 339,
         }
         replay = client.post(f"/api/v1/topic-reports/{report_id}/retry", json=intent)
         assert replay.status_code == 202 and replay.json() == failed
@@ -273,10 +273,10 @@ def test_smoke_normal_handoff_cross_page_citations_and_report_only_override_retr
         after = counters(client)
         assert after == {
             **failed_calls,
-            "synthetic_leaf_calls": 27,
+            "synthetic_leaf_calls": 28,
             "synthetic_overview_calls": 6,
-            "synthetic_composition_calls": 33,
-            "synthetic_model_calls": 342,
+            "synthetic_composition_calls": 34,
+            "synthetic_model_calls": 343,
         }
         assert client.get("/api/v1/analysis-settings").json() == defaults
         assert client.get(f"/api/v1/topic-reports/{report_id}").json() == original

@@ -4,7 +4,7 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
-CURRENT_DATABASE_VERSION = 28
+CURRENT_DATABASE_VERSION = 29
 DEFAULT_RULE_NAME = "龙田街道及四个社区"
 DEFAULT_RULE_TERMS = (
     "龙田街道",
@@ -134,8 +134,32 @@ class Database:
                 version = 27
             if version < 28:
                 _migrate_to_version_28(connection)
+            if version < 29:
+                _migrate_to_version_29(connection)
         finally:
             connection.close()
+
+
+def _migrate_to_version_29(connection: sqlite3.Connection) -> None:
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        version = _read_user_version(connection)
+        if version >= 29:
+            connection.rollback()
+            return
+        if version != 28:
+            raise DatabaseVersionError("Unsupported database migration source version.")
+        for table in ("content_analysis_attempts", "topic_report_nodes"):
+            connection.execute(
+                f"ALTER TABLE {table} ADD COLUMN retry_attempted INTEGER NOT NULL "
+                "DEFAULT 0 CHECK (retry_attempted IN (0,1))"
+            )
+            connection.execute(f"ALTER TABLE {table} ADD COLUMN retry_usage_json TEXT")
+        connection.execute("PRAGMA user_version = 29")
+        connection.commit()
+    except BaseException:
+        connection.rollback()
+        raise
 
 
 def _read_user_version(connection: sqlite3.Connection) -> int:

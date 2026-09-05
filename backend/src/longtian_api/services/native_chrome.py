@@ -9,6 +9,7 @@ Weibo session in memory; only coordination files are read from the profile.
 import asyncio
 import os
 import re
+import socket
 import stat
 import sys
 from pathlib import Path
@@ -111,13 +112,68 @@ class ManagedChrome:
             ):
                 raise BrowserUnavailable()
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            for name in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
-                if os.path.lexists(self.profile / name):
-                    raise BrowserUnavailable()
+            self._clear_stale_chrome_locks()
         except BaseException:
             os.close(fd)
             raise
         self._lease = fd
+
+    def _stale_chrome_lock(self):
+        """Only a demonstrably dead local owner qualifies for automatic cleanup."""
+        lock = self.profile / "SingletonLock"
+        if not lock.is_symlink():
+            return False
+        try:
+            host, pid = os.readlink(lock).rsplit("-", 1)
+            if host != socket.gethostname() or not pid.isdecimal() or int(pid) <= 0:
+                return False
+            try:
+                os.kill(int(pid), 0)
+            except ProcessLookupError:
+                return True
+            return False
+        except (OSError, ValueError):
+            return False
+
+    def _clear_stale_chrome_locks(self):
+        # Called under the application profile lease. Remove only these links,
+        # never the socket targets, credential files or application lease file.
+        links = []
+        for name in ("SingletonCookie", "SingletonSocket", "SingletonLock"):
+            path = self.profile / name
+            if os.path.lexists(path):
+                meta = path.lstat()
+                if not stat.S_ISLNK(meta.st_mode) or meta.st_uid != os.getuid():
+                    raise BrowserUnavailable()
+                links.append((path, meta, os.readlink(path)))
+        if not links:
+            return
+        if not self._stale_chrome_lock():
+            raise BrowserUnavailable()
+        socket_link = self.profile / "SingletonSocket"
+        if socket_link.is_symlink():
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as probe:
+                probe.settimeout(0.2)
+                try:
+                    probe.connect(str(socket_link.resolve()))
+                except (FileNotFoundError, ConnectionRefusedError):
+                    pass
+                except OSError:
+                    raise BrowserUnavailable() from None
+                else:
+                    raise BrowserUnavailable()
+        # Check all identities before mutating; retain ambiguous/live owners.
+        for path, meta, target in links:
+            current = path.lstat()
+            if (current.st_dev, current.st_ino) != (
+                meta.st_dev,
+                meta.st_ino,
+            ) or os.readlink(path) != target:
+                raise BrowserUnavailable()
+        if not self._stale_chrome_lock():
+            raise BrowserUnavailable()
+        for path, _, _ in links:
+            path.unlink()
 
     def _endpoint_record(self):
         try:

@@ -104,7 +104,9 @@ it('uses the library preview for bulk selection including previous failures', as
       />
     </QueryClientProvider>,
   )
-  await user.click(screen.getByRole('button', { name: '选中全部未分析内容' }))
+  await user.click(
+    screen.getByRole('button', { name: '选中全部未纳入报告的内容' }),
+  )
   await waitFor(() => expect(screen.getByText('已选 3 条')).toBeVisible())
   expect(previewReportSelection).toHaveBeenCalledWith({
     kind: 'library',
@@ -131,7 +133,7 @@ it('shows the combined backlog and selected retry count before submission', asyn
     await screen.findByText(
       (_, element) =>
         element?.textContent?.replace(/\s+/g, ' ').trim() ===
-        '未分析共 29 · 其中曾失败 1',
+        '未纳入报告共 29 · 其中曾失败 1',
     ),
   ).toBeVisible()
   await user.click(screen.getByRole('button', { name: '生成报告' }))

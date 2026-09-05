@@ -11,6 +11,7 @@ dependencies = [
     "playwright>=1.60,<1.62",
     "gallery-dl==1.32.10",
     "pillow>=12.3.0,<13",
+    "json-repair==0.63.4",
 ]
 
 [build-system]

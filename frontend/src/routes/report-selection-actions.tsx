@@ -232,10 +232,10 @@ export function ReportSelectionActions({
             disabled={bulk.isPending || Boolean(currentIntent)}
             onClick={() => bulk.mutate()}
           >
-            {bulk.isPending ? '正在形成选材快照…' : '选中全部未分析内容'}
+            {bulk.isPending ? '正在形成选材快照…' : '选中全部未纳入报告的内容'}
           </Button>
           <span className="w-full shrink-0 text-sm whitespace-nowrap text-muted-foreground sm:w-auto">
-            未分析共{' '}
+            未纳入报告共{' '}
             {eligibility.data
               ? eligibility.data.pending + eligibility.data.failed
               : '—'}{' '}
@@ -272,7 +272,7 @@ export function ReportSelectionActions({
         </div>
       </div>
       <p className="text-xs leading-5 text-muted-foreground">
-        批量选材会固定点击当时的条目；选材可跨页保留，提交前仍可移除。曾失败的条目会随未分析内容一并重试。
+        选中尚未被成功报告引用的内容，排除正在处理的条目；已成功的总结会复用，失败的总结会重试。
       </p>
       {bulk.isError && (
         <p role="alert" className="text-sm text-destructive">

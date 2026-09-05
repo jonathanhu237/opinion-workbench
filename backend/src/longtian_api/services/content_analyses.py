@@ -31,8 +31,13 @@ from longtian_api.services.manual_content import (
     ManualAcquisitionPause,
     ManualContentSession,
 )
+from longtian_api.services.model_retry import RETRYABLE_OUTPUT_ERRORS
 from longtian_api.services.settled_tasks import database_call, settle
 from longtian_api.services.summary_errors import FAILURE_MESSAGES, failure
+
+
+class BrowserAcquisitionStopped(Exception):
+    """A shared browser failure must not fan out to every selected item."""
 
 
 class ContentAnalysisService:
@@ -238,6 +243,8 @@ class ContentAnalysisService:
                     # The parent excludes this job until an explicit Continue.
                     # Release the AI lease so stored-only work can proceed.
                     pass
+                except BrowserAcquisitionStopped:
+                    await database_call(self.repository.finish, job.id, "interrupted")
                 except AIError as error:
                     if error.code == "ai_operation_active":
                         await database_call(
@@ -365,6 +372,14 @@ class ContentAnalysisService:
                 result_id=source.result_id,
                 expected_source=expected,
             ) as acquired:
+                if acquired.outcome == "browser_unavailable":
+                    await database_call(
+                        self.repository.finish_attempt,
+                        attempt.id,
+                        "failed",
+                        error=failure("acquisition", "browser_unavailable"),
+                    )
+                    raise BrowserAcquisitionStopped()
                 if acquired.detail_analysis_eligible:
                     candidate = acquired
                     saved_input = SavedInput.from_content(acquired.content)
@@ -431,14 +446,26 @@ class ContentAnalysisService:
                     )
                 )
                 await database_call(self.repository.mark_attempt, attempt.id)
-                completion = await self._ai.complete(
-                    configuration,
-                    messages=messages,
-                    max_tokens=ANALYSIS_MAX_TOKENS,
-                    deadline=MODEL_DEADLINE_SECONDS,
-                )
-                usage = completion.usage
-                output = parse_understanding(completion, api_key=configuration.api_key)
+                for attempt_number in range(2):
+                    usage = None
+                    completion = await self._ai.complete(
+                        configuration,
+                        messages=messages,
+                        max_tokens=ANALYSIS_MAX_TOKENS,
+                        deadline=MODEL_DEADLINE_SECONDS,
+                    )
+                    usage = completion.usage
+                    try:
+                        output = parse_understanding(
+                            completion, api_key=configuration.api_key
+                        )
+                        break
+                    except AIAnalysisError as error:
+                        if attempt_number or error.code not in RETRYABLE_OUTPUT_ERRORS:
+                            raise
+                        await database_call(
+                            self.repository.mark_retry, attempt.id, usage
+                        )
                 await database_call(
                     self.repository.finish_attempt,
                     attempt.id,
@@ -457,7 +484,9 @@ class ContentAnalysisService:
                 attempt.id,
                 status,
                 error=failure(
-                    "input" if error.stage == "input" else "analysis", error.code
+                    "input" if error.stage == "input" else "analysis",
+                    error.code,
+                    validation_issues=error.validation_issues,
                 ),
                 usage=error.usage or usage,
             )

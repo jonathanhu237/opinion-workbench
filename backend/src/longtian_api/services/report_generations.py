@@ -184,6 +184,14 @@ class ReportGenerationService:
                         )
                         continue
                     try:
+                        current = await database_call(
+                            self.repository.read_generation, value.id
+                        )
+                        if current.analysis.counts.completed == 0:
+                            await database_call(
+                                self.repository.finish_generation, value.id, "failed"
+                            )
+                            continue
                         await database_call(self.repository.admit_report, value.id)
                     except AnalysisError:
                         current = await database_call(

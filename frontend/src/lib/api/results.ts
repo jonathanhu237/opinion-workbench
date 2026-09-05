@@ -124,9 +124,10 @@ export type ResultFilters = {
 export async function fetchResults(
   filters: ResultFilters,
   signal: AbortSignal,
+  limit = RESULT_PAGE_SIZE,
 ) {
   const query = new URLSearchParams({
-    limit: String(RESULT_PAGE_SIZE),
+    limit: String(limit),
     offset: String(filters.offset),
   })
   for (const key of [
@@ -142,7 +143,7 @@ export async function fetchResults(
       await analysisRequest(`/results?${query}`, { signal }),
     ),
     filters.offset,
-    RESULT_PAGE_SIZE,
+    limit,
   )
   if (
     data.items.some(

@@ -67,6 +67,22 @@ def test_invalid_output_fails_without_repair_and_preserves_usage(changed):
     assert error.value.code == "invalid_schema" and error.value.usage == USAGE
 
 
+def test_validation_diagnostics_keep_field_categories_without_model_text():
+    value = {
+        **UNDERSTANDING,
+        "summary": [],
+        "private-arbitrary-field": "secret-content",
+    }
+    with pytest.raises(AIAnalysisError) as caught:
+        parse_understanding(
+            AICompletion(json.dumps(value), USAGE), api_key=CONFIGURATION.api_key
+        )
+    assert "summary: string_type" in caught.value.validation_issues
+    assert "unknown_field: extra_forbidden" in caught.value.validation_issues
+    assert "private-arbitrary-field" not in str(caught.value.validation_issues)
+    assert "secret-content" not in str(caught.value.validation_issues)
+
+
 @pytest.mark.parametrize(
     "text",
     [

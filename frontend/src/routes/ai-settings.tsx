@@ -7,7 +7,6 @@ import { z } from 'zod'
 import { Button } from '@/components/ui/button'
 import {
   Field,
-  FieldDescription,
   FieldError,
   FieldGroup,
   FieldLabel,
@@ -110,7 +109,7 @@ function SettingsForm({ saved }: { saved: Settings }) {
     shouldUnregister: true,
   })
   const { reset, resetField } = form
-  const [apiKeyFocused, setApiKeyFocused] = useState(false)
+  const [replacingKey, setReplacingKey] = useState(false)
   const [pending, setPending] = useState<'save' | 'test' | null>(null)
   const [feedback, setFeedback] = useState<{
     error: boolean
@@ -120,12 +119,13 @@ function SettingsForm({ saved }: { saved: Settings }) {
   const dirty = form.formState.isDirty
 
   useEffect(() => {
+    setReplacingKey(false)
     reset({
       api_key: saved.has_api_key ? savedKeyMask : '',
       base_url: saved.base_url ?? '',
       model: saved.model ?? '',
     })
-  }, [saved.base_url, saved.model, saved.revision, reset])
+  }, [saved.base_url, saved.model, saved.revision, saved.has_api_key, reset])
   useEffect(() => () => request.current?.abort(), [])
 
   async function save(values: z.infer<typeof schema>) {
@@ -181,6 +181,7 @@ function SettingsForm({ saved }: { saved: Settings }) {
           defaultValue: saved.has_api_key ? savedKeyMask : '',
           keepError: true,
         })
+        setReplacingKey(false)
         setPending(null)
       }
       request.current = null
@@ -231,43 +232,45 @@ function SettingsForm({ saved }: { saved: Settings }) {
             render={({ field, fieldState }) => (
               <Field data-invalid={fieldState.invalid}>
                 <FieldLabel htmlFor="ai-api-key">API Key</FieldLabel>
-                <div className="relative">
+                <div className="flex items-center gap-2">
                   <Input
                     {...field}
                     id="ai-api-key"
                     type={
-                      saved.has_api_key &&
-                      !apiKeyFocused &&
-                      field.value === savedKeyMask
-                        ? 'text'
-                        : 'password'
+                      saved.has_api_key && !replacingKey ? 'text' : 'password'
                     }
                     autoComplete="off"
                     spellCheck={false}
                     className="min-h-11"
                     aria-invalid={fieldState.invalid}
-                    aria-describedby="ai-key-help ai-key-error"
-                    onFocus={() => {
-                      setApiKeyFocused(true)
-                      if (field.value === savedKeyMask)
-                        form.setValue('api_key', '', { shouldDirty: false })
+                    aria-describedby="ai-key-error"
+                    onFocus={(event) => {
+                      if (saved.has_api_key && !replacingKey)
+                        event.target.select()
+                    }}
+                    onClick={(event) => {
+                      if (saved.has_api_key && !replacingKey)
+                        event.currentTarget.select()
+                    }}
+                    onChange={(event) => {
+                      setReplacingKey(true)
+                      field.onChange(event)
                     }}
                     onBlur={() => {
                       field.onBlur()
-                      setApiKeyFocused(false)
-                      if (saved.has_api_key && form.getValues('api_key') === '')
+                      if (
+                        saved.has_api_key &&
+                        form.getValues('api_key') === ''
+                      ) {
                         resetField('api_key', {
                           defaultValue: savedKeyMask,
                           keepError: true,
                         })
+                        setReplacingKey(false)
+                      }
                     }}
                   />
                 </div>
-                <FieldDescription id="ai-key-help">
-                  {saved.has_api_key
-                    ? '已配置，留空即可保留；更换服务地址时请重新输入。'
-                    : '密钥只保存在本机，不会显示。'}
-                </FieldDescription>
                 <FieldError id="ai-key-error" errors={[fieldState.error]} />
               </Field>
             )}

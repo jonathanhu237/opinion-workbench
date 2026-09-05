@@ -25,6 +25,10 @@ FAILURE_MESSAGES: dict[FailureCode, str] = {
     "source_changed": "原始内容已更新，请重新生成汇总。",
     "source_active": "采集任务重新开始，暂未读取这条内容。",
     "browser_operation_active": "浏览器正在执行其他操作，请结束后重新生成汇总。",
+    "browser_unavailable": (
+        "专用浏览器不可用，本次任务已停止。"
+        "请在平台账号中检查浏览器后重新生成。"
+    ),
     "acquisition_failed": "原文暂时无法读取，请检查平台登录或验证状态。",
     "source_access_denied": "平台暂时拒绝访问，未能读取原文；未判定为安全验证。",
     "source_content_unavailable": "原帖已删除或不可读取，未使用搜索摘要代替正文。",
@@ -78,10 +82,12 @@ def failure(
     code: FailureCode,
     *,
     diagnostic: AcquisitionDiagnostic | None = None,
+    validation_issues: list[str] | None = None,
 ) -> SummaryFailure:
     return SummaryFailure(
         stage=stage,
         code=code,
         message=FAILURE_MESSAGES[code],
         diagnostic=diagnostic,
+        validation_issues=validation_issues,
     )

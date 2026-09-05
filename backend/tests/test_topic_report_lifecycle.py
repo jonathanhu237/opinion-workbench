@@ -496,17 +496,18 @@ def test_invalid_transport_usage_stays_unknown_and_history_readable(
         usage.prompt_tokens_details["text_tokens"] = 21
         model.usage = {"prompt_tokens": 20} if wrong_type else usage
         if not valid_output:
-            model.answers["judgment"] = ["{}"]
+            model.answers["judgment"] = ["{}"] * 2
         await reports.initial_analysis_finished(admitted.job.id)
         await finish(reports)
         report = reports.repository.list().reports[0]
         assert report.status == ("completed" if valid_output else "failed")
-        assert report.usage.total.attempted_requests == (2 if valid_output else 1)
+        assert report.usage.total.attempted_requests == 2
         assert report.usage.total.accounted_requests == 0
         assert (
             report.usage.total.total_tokens is None and not report.usage.total.complete
         )
-        assert model.counts["initial"] == model.counts["judgment"] == 1
+        assert model.counts["initial"] == 1
+        assert model.counts["judgment"] == (1 if valid_output else 2)
         assert model.counts["leaf"] == int(valid_output)
         with db.connect() as connection:
             rows = connection.execute(

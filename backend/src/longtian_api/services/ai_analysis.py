@@ -25,7 +25,6 @@ from longtian_api.services.ai_client import (
     AICompletion,
     AIConfiguration,
     AIUsage,
-    decode_model_json,
     encode_completion_request,
     normalize_base_url,
 )
@@ -39,6 +38,7 @@ from longtian_api.services.enrichment_models import (
     preview_fingerprint,
     validate_content,
 )
+from longtian_api.services.json_output import decode_answer
 from longtian_api.services.monitoring_rules import MAX_TERMS_PER_RULE
 
 ANALYSIS_PROMPT_VERSION = "opinion-analysis-v1"
@@ -85,9 +85,11 @@ class AIAnalysisError(Exception):
         stage: AnalysisErrorStage,
         code: AnalysisErrorCode,
         usage: AIUsage | None = None,
+        validation_issues: list[str] | None = None,
     ) -> None:
         super().__init__(code)
         self.stage, self.code, self.usage = stage, code, usage
+        self.validation_issues = validation_issues
 
 
 class _Strict(BaseModel):
@@ -425,7 +427,7 @@ def answer_object(completion: AICompletion, api_key: SecretStr) -> object:
         text = text.strip()
         if fenced := _JSON_FENCE.fullmatch(text):
             text = fenced[1]
-        return decode_model_json(text)
+        return decode_answer(text)
     except (ValueError, TypeError, UnicodeError, RecursionError):
         raise AIAnalysisError("json", "invalid_json", usage) from None
 

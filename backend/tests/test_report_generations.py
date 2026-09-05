@@ -64,7 +64,7 @@ def test_report_records_projection_keeps_manual_child_in_one_row(tmp_path):
 def test_one_start_reuses_three_summaries_and_analyses_seven_saved_bodies(tmp_path):
     app, _, model, media = api_environment(tmp_path, count=11)
     media.media = False
-    model.answers["initial"] = [UNDERSTANDING] * 3 + ["invalid"] * 7
+    model.answers["initial"] = [UNDERSTANDING] * 3 + ["invalid"] * 14
     with TestClient(app, base_url="http://127.0.0.1") as client:
         saved(client)
         ids = list(range(1, 11))
@@ -103,7 +103,7 @@ def test_new_report_retries_each_failed_source_once_and_clears_eligibility(
     app, database, model, media = api_environment(tmp_path, count=2)
     save_body(database, 1)
     save_body(database, 2)
-    model.answers["initial"] = ["invalid", UNDERSTANDING]
+    model.answers["initial"] = ["invalid", "invalid", UNDERSTANDING]
     with TestClient(app, base_url="http://127.0.0.1") as client:
         saved(client)
         first = client.post(
@@ -133,7 +133,7 @@ def test_new_report_retries_each_failed_source_once_and_clears_eligibility(
         assert second_result["analysis"]["counts"]["reused"] == 1
         assert second_result["analysis"]["counts"]["completed"] == 2
         assert second_result["analysis"]["counts"]["failed"] == 0
-        assert model.counts["initial"] == 3
+        assert model.counts["initial"] == 4
         assert client.get("/api/v1/report-generations/eligibility").json() == {
             "pending": 0,
             "failed": 0,
@@ -143,7 +143,7 @@ def test_new_report_retries_each_failed_source_once_and_clears_eligibility(
             client.post("/api/v1/report-generations", json=second_intent).json()
             == second_result
         )
-        assert model.counts["initial"] == 3
+        assert model.counts["initial"] == 4
         assert not media.calls
 
 
@@ -159,13 +159,13 @@ def test_url_only_without_stored_body_does_not_access_legacy_accounts(tmp_path):
         result = client.get(
             f"/api/v1/report-generations/{response.json()['id']}"
         ).json()
-        assert result["status"] == "empty", result
+        assert result["status"] == "failed", result
         assert result["analysis"]["counts"]["input_incomplete"] == 1
         items = client.get(
             f"/api/v1/content-analysis-jobs/{result['analysis']['id']}/items"
         ).json()
         assert items["items"][0]["error"]["code"] == "stored_content_unavailable"
-        assert result["report"]["empty_reason"] == "no_ready_sources"
+        assert result["report"] is None
         assert not media.calls and not model.calls
 
 

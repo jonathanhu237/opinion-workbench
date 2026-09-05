@@ -53,6 +53,7 @@ import {
 import {
   CONTENT_ANALYSES_QUERY_KEY,
   CONTENT_ANALYSIS_JOBS_QUERY_KEY,
+  fetchAnalysisJobItems,
 } from '@/lib/api/content-analyses'
 import {
   fetchReportGeneration,
@@ -76,7 +77,6 @@ import {
   isActiveResult,
   readId,
   readOffset,
-  RESULT_PAGE_SIZE,
   RESULTS_QUERY_KEY,
   type SharedResult,
 } from '@/lib/api/results'
@@ -102,6 +102,7 @@ import { searchPlatformPresenters } from '@/routes/search-run-presenters'
 import { cn } from '@/lib/utils'
 
 const selectionDraftKey = 'longtian:report-selection-draft:v1'
+const selectionPageSize = 5
 const pendingIntentKey = 'longtian:report-generation:pending-intent:v1'
 
 const recordStatusLabels: Record<ReportRecord['status'], string> = {
@@ -275,8 +276,14 @@ function SelectionLibrary({
 }) {
   const [offset, setOffset] = useState(0)
   const results = useQuery({
-    queryKey: [...RESULTS_QUERY_KEY, 'report-wizard', offset],
-    queryFn: ({ signal }) => fetchResults({ offset }, signal),
+    queryKey: [
+      ...RESULTS_QUERY_KEY,
+      'report-wizard',
+      selectionPageSize,
+      offset,
+    ],
+    queryFn: ({ signal }) =>
+      fetchResults({ offset }, signal, selectionPageSize),
     enabled: open,
     retry: false,
     refetchInterval: (query) => (query.state.data?.active_count ? 1000 : false),
@@ -345,80 +352,84 @@ function SelectionLibrary({
       )}
       {page && items.length > 0 && (
         <>
-          <Table aria-label="报告选材内容表格">
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-10">
-                  <Checkbox
-                    aria-label="选择当前页"
-                    checked={allSelected}
-                    indeterminate={someSelected && !allSelected}
-                    disabled={pageIds.length === 0}
-                    onCheckedChange={(checked) => togglePage(checked === true)}
-                  />
-                </TableHead>
-                <TableHead>内容</TableHead>
-                <TableHead>平台</TableHead>
-                <TableHead>时间</TableHead>
-                <TableHead>状态</TableHead>
-                <TableHead className="text-right">操作</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {items.map((item) => (
-                <TableRow
-                  key={item.id}
-                  data-state={selected.has(item.id) ? 'selected' : undefined}
-                >
-                  <TableCell>
+          <div className="max-h-[40dvh] overflow-y-auto rounded-lg border">
+            <Table aria-label="报告选材内容表格">
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-10">
                     <Checkbox
-                      aria-label={`选择内容：${item.source.title}`}
-                      checked={selected.has(item.id)}
-                      disabled={isActiveResult(item)}
+                      aria-label="选择当前页"
+                      checked={allSelected}
+                      indeterminate={someSelected && !allSelected}
+                      disabled={pageIds.length === 0}
                       onCheckedChange={(checked) =>
-                        toggle(item.id, checked === true)
+                        togglePage(checked === true)
                       }
                     />
-                  </TableCell>
-                  <TableCell className="max-w-[28rem] whitespace-normal">
-                    <p className="line-clamp-2 font-medium [overflow-wrap:anywhere]">
-                      {resultSummary(item)}
-                    </p>
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant="outline">
-                      {platformLabel(item.source.platform)}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {item.source.published_at_text || '未知'}
-                  </TableCell>
-                  <TableCell>
-                    <Badge variant={resultStateVariant(item)}>
-                      {resultStateLabel(item)}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <div className="flex flex-wrap justify-end gap-1">
-                      <Button
-                        variant="outline"
-                        className="min-h-9"
-                        onClick={() => onOpenResult(item.id)}
-                        aria-label={`查看内容详情：${item.source.title}`}
-                      >
-                        查看详情
-                      </Button>
-                      <ResultSourceLink source={item.source} />
-                    </div>
-                  </TableCell>
+                  </TableHead>
+                  <TableHead>内容</TableHead>
+                  <TableHead>平台</TableHead>
+                  <TableHead>时间</TableHead>
+                  <TableHead>状态</TableHead>
+                  <TableHead className="text-right">操作</TableHead>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {items.map((item) => (
+                  <TableRow
+                    key={item.id}
+                    data-state={selected.has(item.id) ? 'selected' : undefined}
+                  >
+                    <TableCell>
+                      <Checkbox
+                        aria-label={`选择内容：${item.source.title}`}
+                        checked={selected.has(item.id)}
+                        disabled={isActiveResult(item)}
+                        onCheckedChange={(checked) =>
+                          toggle(item.id, checked === true)
+                        }
+                      />
+                    </TableCell>
+                    <TableCell className="max-w-[28rem] whitespace-normal">
+                      <p className="line-clamp-2 font-medium [overflow-wrap:anywhere]">
+                        {resultSummary(item)}
+                      </p>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="outline">
+                        {platformLabel(item.source.platform)}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-sm text-muted-foreground">
+                      {item.source.published_at_text || '未知'}
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={resultStateVariant(item)}>
+                        {resultStateLabel(item)}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex flex-wrap justify-end gap-1">
+                        <Button
+                          variant="outline"
+                          className="min-h-9"
+                          onClick={() => onOpenResult(item.id)}
+                          aria-label={`查看内容详情：${item.source.title}`}
+                        >
+                          查看详情
+                        </Button>
+                        <ResultSourceLink source={item.source} />
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
           <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-3">
             <span className="text-sm text-muted-foreground">
               {page.offset + 1}–
-              {Math.min(page.total, page.offset + RESULT_PAGE_SIZE)} /{' '}
+              {Math.min(page.total, page.offset + selectionPageSize)} /{' '}
               {page.total} 条
             </span>
             <div className="flex gap-2">
@@ -427,7 +438,7 @@ function SelectionLibrary({
                 className="min-h-9"
                 disabled={offset === 0 || results.isFetching}
                 onClick={() =>
-                  setOffset(Math.max(0, offset - RESULT_PAGE_SIZE))
+                  setOffset(Math.max(0, offset - selectionPageSize))
                 }
               >
                 <ChevronLeft aria-hidden /> 上一页
@@ -436,9 +447,9 @@ function SelectionLibrary({
                 variant="outline"
                 className="min-h-9"
                 disabled={
-                  page.total - offset <= RESULT_PAGE_SIZE || results.isFetching
+                  page.total - offset <= selectionPageSize || results.isFetching
                 }
-                onClick={() => setOffset(offset + RESULT_PAGE_SIZE)}
+                onClick={() => setOffset(offset + selectionPageSize)}
               >
                 下一页 <ChevronRight aria-hidden />
               </Button>
@@ -675,10 +686,12 @@ function ReportGenerationWizard({
                   disabled={bulk.isPending || intent !== null}
                   onClick={() => bulk.mutate()}
                 >
-                  {bulk.isPending ? '正在形成选材快照…' : '选中全部未分析内容'}
+                  {bulk.isPending
+                    ? '正在形成选材快照…'
+                    : '选中全部未纳入报告的内容'}
                 </Button>
                 <span className="text-sm text-muted-foreground">
-                  未分析{' '}
+                  未纳入报告{' '}
                   {eligibility.data
                     ? eligibility.data.pending + eligibility.data.failed
                     : '—'}{' '}
@@ -866,7 +879,7 @@ function ReportGenerationWizard({
               )}
             </div>
           )}
-          <DialogFooter>
+          <DialogFooter className="sticky -bottom-6 z-10 border-t bg-background py-3">
             {step > 1 && (
               <Button
                 variant="outline"
@@ -928,6 +941,19 @@ function GenerationProgress({
   onViewReport: (id: number) => void
 }) {
   const client = useQueryClient()
+  const [errorOffset, setErrorOffset] = useState(0)
+  const attempts = useQuery({
+    queryKey: [
+      ...CONTENT_ANALYSIS_JOBS_QUERY_KEY,
+      generation.analysis.id,
+      'progress-items',
+      errorOffset,
+    ],
+    queryFn: ({ signal }) =>
+      fetchAnalysisJobItems(generation.analysis.id, signal, errorOffset),
+    retry: false,
+    refetchInterval: isActiveGeneration(generation.status) ? 1000 : false,
+  })
   const provider = useQuery({
     queryKey: AI_SETTINGS_QUERY_KEY,
     queryFn: ({ signal }) => fetchAISettings(signal),
@@ -969,22 +995,21 @@ function GenerationProgress({
     },
   })
   const counts = generation.analysis.counts
-  const failed =
-    counts.failed +
-    counts.input_incomplete +
-    counts.unsupported +
-    counts.cancelled +
-    counts.interrupted
+  const failed = counts.failed + counts.input_incomplete + counts.unsupported
   const processed =
     counts.total - counts.queued - counts.acquiring - counts.analysing
   const canRetry =
     generation.report?.status === 'failed' ||
     generation.report?.status === 'configuration_blocked'
+  const allFailed =
+    generation.status === 'empty' && counts.completed === 0 && failed > 0
   return (
     <div className="space-y-4">
       <div>
         <p className="font-medium" role="status">
-          {recordStatusLabels[generation.status]}
+          {allFailed
+            ? '生成失败：没有内容完成分析'
+            : recordStatusLabels[generation.status]}
         </p>
         <p className="mt-1 text-sm text-muted-foreground">
           {generation.name} · 创建于 {formatEvidenceDate(generation.created_at)}
@@ -994,7 +1019,12 @@ function GenerationProgress({
         aria-label="内容处理进度"
         max={counts.total}
         value={Math.max(0, processed)}
-        className="h-2 w-full accent-primary"
+        className={cn(
+          'h-2 w-full',
+          failed + counts.interrupted + counts.cancelled > 0
+            ? 'accent-destructive'
+            : 'accent-primary',
+        )}
       />
       <dl className="grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
         <div>
@@ -1018,6 +1048,70 @@ function GenerationProgress({
           <dd className="text-lg font-medium">{failed}</dd>
         </div>
       </dl>
+      {counts.interrupted + counts.cancelled > 0 && (
+        <p className="text-sm">
+          其中 {counts.interrupted} 条中断、{counts.cancelled} 条取消。
+        </p>
+      )}
+      {attempts.isError && (
+        <p role="alert">
+          无法读取条目错误详情。
+          <Button variant="link" onClick={() => void attempts.refetch()}>
+            重试
+          </Button>
+        </p>
+      )}
+      {attempts.data && failed + counts.interrupted + counts.cancelled > 0 && (
+        <section
+          aria-label="条目处理详情"
+          className="space-y-2 rounded-lg border p-3"
+        >
+          <h3 className="font-medium">条目处理详情</h3>
+          {attempts.data.items.map(
+            (item) =>
+              item.error && (
+                <div key={item.id} className="border-t pt-2 text-sm">
+                  <p className="font-medium">{item.source.title}</p>
+                  <p>
+                    {item.error.diagnostic?.stage === 'browser' &&
+                    item.error.diagnostic.basis === 'transport'
+                      ? '专用浏览器不可用，未能获取原文。请在平台账号中检查浏览器。'
+                      : item.error.message}
+                  </p>
+                  {item.error.validation_issues?.map((issue) => (
+                    <p key={issue} className="text-muted-foreground">
+                      {issue}
+                    </p>
+                  ))}
+                  {item.error.code === 'invalid_schema' &&
+                    !item.error.validation_issues?.length && (
+                      <p className="text-muted-foreground">
+                        该历史记录未保存具体字段校验原因。
+                      </p>
+                    )}
+                </div>
+              ),
+          )}
+          {attempts.data.total > 20 && (
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                disabled={errorOffset === 0}
+                onClick={() => setErrorOffset(Math.max(0, errorOffset - 20))}
+              >
+                上一页
+              </Button>
+              <Button
+                variant="outline"
+                disabled={errorOffset + 20 >= attempts.data.total}
+                onClick={() => setErrorOffset(errorOffset + 20)}
+              >
+                下一页
+              </Button>
+            </div>
+          )}
+        </section>
+      )}
       {generation.analysis.queue_reason === 'browser_operation_active' && (
         <p className="rounded-lg border border-warning/40 bg-warning/5 p-3 text-sm">
           微博浏览器操作正在进行，其他依赖浏览器的任务会等待。
@@ -1098,6 +1192,7 @@ function GenerationProgress({
         </p>
       )}
       {generation.report &&
+        !allFailed &&
         ['completed', 'empty'].includes(generation.report.status) && (
           <Button onClick={() => onViewReport(generation.report!.id)}>
             查看报告
@@ -1458,7 +1553,11 @@ function ReportList({
             <TableBody>
               {records.data.items.map((record) => {
                 const active = isActiveRecord(record)
-                const canView = record.report_id !== null
+                const failedEmpty =
+                  record.status === 'empty' &&
+                  record.selection_count > 0 &&
+                  record.failed_count === record.selection_count
+                const canView = record.report_id !== null && !failedEmpty
                 return (
                   <TableRow key={`${record.record_type}:${record.record_id}`}>
                     <TableCell className="whitespace-normal">
@@ -1480,8 +1579,14 @@ function ReportList({
                     </TableCell>
                     <TableCell>
                       <div className="flex min-w-40 flex-col items-start gap-1">
-                        <Badge variant={recordStatusVariant(record.status)}>
-                          {recordStatusLabels[record.status]}
+                        <Badge
+                          variant={recordStatusVariant(
+                            failedEmpty ? 'failed' : record.status,
+                          )}
+                        >
+                          {failedEmpty
+                            ? '生成失败'
+                            : recordStatusLabels[record.status]}
                         </Badge>
                         <span className="text-xs text-muted-foreground">
                           {active

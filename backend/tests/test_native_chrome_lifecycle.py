@@ -1,6 +1,8 @@
 """Product entrypoint with fake OS/browser SDK only; real adapter and database."""
 
 import asyncio
+import os
+import socket
 
 import pytest
 from fastapi.testclient import TestClient
@@ -12,6 +14,91 @@ from longtian_api.services.monitoring_rules import MonitoringRuleService
 from longtian_api.services.native_chrome import ManagedChrome
 from longtian_api.services.native_weibo import NativeWeiboCollector
 from longtian_api.services.platform_connections import PlatformConnectionService
+
+
+@pytest.mark.parametrize("alive", [False, True])
+def test_local_chrome_lock_recovery_requires_dead_owner(tmp_path, monkeypatch, alive):
+    profile = tmp_path / "runtime/browser/managed-chrome"
+    profile.mkdir(parents=True, mode=0o700)
+    lock = profile / "SingletonLock"
+    lock.symlink_to(f"{socket.gethostname()}-12345")
+    browser = ManagedChrome(profile=profile)
+
+    def probe(pid, signal):
+        assert (pid, signal) == (12345, 0)
+        if not alive:
+            raise ProcessLookupError()
+
+    monkeypatch.setattr(os, "kill", probe)
+    from longtian_api.services.native_browser_contracts import BrowserUnavailable
+
+    if alive:
+        with pytest.raises(BrowserUnavailable):
+            browser._prepare_profile()
+    else:
+        browser._prepare_profile()
+        os.close(browser._lease)
+        browser._lease = None
+    assert lock.is_symlink() == alive
+
+
+def test_stale_cleanup_removes_only_links_and_retains_login_files(
+    tmp_path, monkeypatch
+):
+    profile = tmp_path / "runtime/browser/managed-chrome"
+    profile.mkdir(parents=True, mode=0o700)
+    (profile / "SingletonLock").symlink_to(f"{socket.gethostname()}-12345")
+    (profile / "SingletonCookie").symlink_to("cookie-marker")
+    (profile / "SingletonSocket").symlink_to("/tmp/longtian-test-nonexistent-socket")
+    marker = profile / "Login Data"
+    marker.write_text("retained-fixture")
+
+    def dead(pid, signal):
+        raise ProcessLookupError()
+
+    monkeypatch.setattr(os, "kill", dead)
+    browser = ManagedChrome(profile=profile)
+    browser._prepare_profile()
+    os.close(browser._lease)
+    browser._lease = None
+    assert not any(
+        os.path.lexists(profile / name)
+        for name in ("SingletonLock", "SingletonCookie", "SingletonSocket")
+    )
+    assert marker.read_text() == "retained-fixture"
+    assert (profile / ".longtian-browser-owner.lock").is_file()
+
+
+def test_live_socket_blocks_cleanup_even_if_lock_pid_is_dead(tmp_path, monkeypatch):
+    from longtian_api.services.native_browser_contracts import BrowserUnavailable
+
+    profile = tmp_path / "runtime/browser/managed-chrome"
+    profile.mkdir(parents=True, mode=0o700)
+    lock = profile / "SingletonLock"
+    lock.symlink_to(f"{socket.gethostname()}-12345")
+    (profile / "SingletonSocket").symlink_to("synthetic-socket")
+
+    def dead(pid, signal):
+        raise ProcessLookupError()
+
+    class LiveSocket:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def settimeout(self, value):
+            pass
+
+        def connect(self, path):
+            pass
+
+    monkeypatch.setattr(os, "kill", dead)
+    monkeypatch.setattr(socket, "socket", lambda *args: LiveSocket())
+    with pytest.raises(BrowserUnavailable):
+        ManagedChrome(profile=profile)._prepare_profile()
+    assert lock.is_symlink()
 
 
 def test_native_browser_refuses_daily_profile_without_starting_a_process(tmp_path):

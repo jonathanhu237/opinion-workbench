@@ -433,7 +433,7 @@ class WeiboEnricher:
             return EnrichmentWorkerResult(
                 "browser_unavailable",
                 diagnostic=_worker_diagnostic(
-                    "parser_failed", stage="browser", basis="transport"
+                    "browser_unavailable", stage="browser", basis="transport"
                 ),
             )
         except (TimeoutError, httpx.TimeoutException):
@@ -486,6 +486,7 @@ def _worker_diagnostic(
     asset_position=None,
 ):
     allowed_outcomes = {
+        "browser_unavailable",
         "access_denied",
         "asset_blocked",
         "asset_unavailable",

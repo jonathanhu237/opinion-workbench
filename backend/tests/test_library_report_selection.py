@@ -1,5 +1,8 @@
 """Library eligibility is neither page membership nor discovery novelty."""
 
+import asyncio
+
+import pytest
 from fastapi.testclient import TestClient
 from initial_analysis_fixtures import UNDERSTANDING
 from summary_fixtures import seed_run
@@ -12,7 +15,7 @@ def test_full_library_selection_includes_previous_failures_across_old_batches(tm
     app, database, model, media = api_environment(tmp_path, count=3)
     seed_run(database, 29, start=2000, rule_name="历史另一次采集")
     media.media = False
-    model.answers["initial"] = ["invalid", "invalid", UNDERSTANDING, UNDERSTANDING]
+    model.answers["initial"] = ["invalid"] * 4 + [UNDERSTANDING, UNDERSTANDING]
     for identity in range(5, 33):
         save_body(database, identity)
     with TestClient(app, base_url="http://127.0.0.1") as client:
@@ -38,7 +41,7 @@ def test_full_library_selection_includes_previous_failures_across_old_batches(tm
         baseline = model.counts.copy(), len(media.calls)
         stats = client.get("/api/v1/report-generations/eligibility")
         assert stats.status_code == 200, stats.text
-        assert stats.json() == {"pending": 28, "failed": 1, "active": 0}
+        assert stats.json() == {"pending": 31, "failed": 1, "active": 0}
         assert model.counts == baseline[0]
         intent = {
             **generation_request([1]),
@@ -46,7 +49,7 @@ def test_full_library_selection_includes_previous_failures_across_old_batches(tm
         }
         response = client.post("/api/v1/report-generations", json=intent)
         assert response.status_code == 202, response.text
-        expected = [1] + list(range(5, 33))
+        expected = list(range(1, 33))
         assert response.json()["selection"]["result_ids"] == expected
         client.portal.call(finish, app.state.report_generation_service)
         result = client.get(
@@ -54,7 +57,8 @@ def test_full_library_selection_includes_previous_failures_across_old_batches(tm
         ).json()
         assert result["status"] == "completed", result
         assert result["report"]["coverage"]["total"] == len(expected)
-        assert model.counts["initial"] == baseline[0]["initial"] + len(expected)
+        assert model.counts["initial"] == baseline[0]["initial"] + 29
+        assert result["analysis"]["counts"]["reused"] == 3
         assert len(media.calls) == baseline[1]
         assert client.post("/api/v1/report-generations", json=intent).json() == result
         assert client.get("/api/v1/report-generations/eligibility").json() == {
@@ -111,8 +115,8 @@ def test_library_selection_is_not_truncated_to_explicit_or_page_limits(tmp_path)
         result = client.get(
             f"/api/v1/report-generations/{response.json()['id']}"
         ).json()
-        assert result["status"] == "empty", result
-        assert result["report"]["coverage"]["unavailable"] == 1001
+        assert result["status"] == "failed", result
+        assert result["report"] is None
         assert not model.calls and not media.calls
 
 
@@ -180,3 +184,79 @@ def test_named_manual_report_rejects_a_second_active_submission(tmp_path):
         assert response.status_code == 409
         assert response.json()["detail"]["code"] == "report_generation_active"
         assert len(client.get("/api/v1/report-generations").json()["items"]) == 1
+
+
+@pytest.mark.parametrize("failed_report", [False, True])
+@pytest.mark.parametrize("count", [9, 10])
+def test_only_successful_report_citations_remove_library_members(
+    tmp_path, failed_report, count
+):
+    app, database, model, _ = api_environment(tmp_path, count=count)
+    for identity in range(1, count + 1):
+        save_body(database, identity)
+    # Exercise leaf and overview roots. The unrelated last source is selected
+    # and summarized but must not count as included in the report.
+    model.decisions[count] = "irrelevant"
+    if failed_report:
+        model.answers["leaf"] = ["invalid"] * 2
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        saved(client)
+        created = client.post(
+            "/api/v1/report-generations",
+            json=generation_request(list(range(1, count + 1))),
+        )
+        assert created.status_code == 202
+        client.portal.call(finish, app.state.report_generation_service)
+        report = client.get(f"/api/v1/report-generations/{created.json()['id']}").json()
+        assert report["status"] == ("failed" if failed_report else "completed")
+        expected = list(range(1, count + 1)) if failed_report else [count]
+        assert client.get("/api/v1/report-generations/eligibility").json() == {
+            "pending": len(expected),
+            "failed": 0,
+            "active": 0,
+        }
+        preview = client.post(
+            "/api/v1/report-generations/selection-preview", json={"kind": "library"}
+        )
+        assert preview.status_code == 200
+        assert preview.json()["selection"]["result_ids"] == expected
+        assert preview.json()["counts"]["already_summarized"] == len(expected)
+        # Explicit selection of previously cited content remains available.
+        assert (
+            client.post(
+                "/api/v1/report-generations/selection-preview",
+                json={"kind": "explicit", "result_ids": [1]},
+            ).status_code
+            == 200
+        )
+
+
+def test_active_report_excludes_summarized_sources_until_cancelled(tmp_path):
+    app, database, model, _ = api_environment(tmp_path, count=1)
+    save_body(database, 1)
+    model.block_stage = "judgment"
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        saved(client)
+        created = client.post(
+            "/api/v1/report-generations", json=generation_request([1])
+        )
+        assert created.status_code == 202
+        client.portal.call(asyncio.wait_for, model.entered.wait(), 5)
+        assert client.get("/api/v1/report-generations/eligibility").json() == {
+            "pending": 0,
+            "failed": 0,
+            "active": 1,
+        }
+        current = client.get(
+            f"/api/v1/report-generations/{created.json()['id']}"
+        ).json()
+        cancelled = client.post(
+            f"/api/v1/report-generations/{created.json()['id']}/cancel",
+            json={"expected_revision": current["control_revision"]},
+        )
+        assert cancelled.status_code == 200, cancelled.text
+        assert client.get("/api/v1/report-generations/eligibility").json() == {
+            "pending": 1,
+            "failed": 0,
+            "active": 0,
+        }

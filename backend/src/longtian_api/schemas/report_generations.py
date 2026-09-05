@@ -91,6 +91,8 @@ class SelectionPreview(StrictModel):
 
 
 class GenerationEligibility(StrictModel):
+    """Unreported inactive sources, split by latest analysis failure for the UI."""
+
     pending: Count
     failed: Count
     active: Count

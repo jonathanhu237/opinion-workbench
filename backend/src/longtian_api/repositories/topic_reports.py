@@ -53,6 +53,7 @@ from longtian_api.schemas.topic_reports import (
 from longtian_api.services.ai_analysis import AIAnalysisError
 from longtian_api.services.ai_client import MAX_USAGE_TOKENS, decode_model_json
 from longtian_api.services.analysis_errors import AnalysisError
+from longtian_api.services.model_retry import combined_usage, usage_records
 from longtian_api.services.summary_errors import failure
 from longtian_api.services.topic_report_engine import (
     ENGINE_VERSION,
@@ -127,7 +128,7 @@ def observed_usage(value):
 
 def aggregate_usage(rows):
     attempted = accounted = prompt = completion = total = 0
-    for row in rows:
+    for row in (record for item in rows for record in usage_records(item)):
         attempted += row["attempted"]
         if row["usage_json"] is not None:
             usage = TokenUsage.model_validate_json(row["usage_json"])
@@ -276,7 +277,8 @@ class TopicReportRepository:
         ):
             counts[self._source(connection, source).state] += 1
         nodes = connection.execute(
-            """SELECT kind,status,attempted,usage_json,reused_from_node_id FROM
+            """SELECT kind,status,attempted,usage_json,reused_from_node_id,
+              retry_attempted,retry_usage_json FROM
               topic_report_nodes
               WHERE report_id=? ORDER BY id""",
             (report_id,),
@@ -437,9 +439,7 @@ class TopicReportRepository:
                 for child in children
             ],
             attempted=bool(node["attempted"]),
-            usage=TokenUsage.model_validate_json(node["usage_json"])
-            if node["usage_json"]
-            else None,
+            usage=combined_usage(node),
             reused_from_node_id=node["reused_from_node_id"],
             error=saved_failure(node["error_json"]),
         )
@@ -1552,6 +1552,20 @@ class TopicReportRepository:
                 (timestamp(), node_id),
             )
 
+    def mark_retry(self, node_id, usage):
+        with self.connection(write=True) as connection:
+            row = connection.execute(
+                "SELECT * FROM topic_report_nodes WHERE id=?", (node_id,)
+            ).fetchone()
+            self._active(connection, row["report_id"])
+            if row["status"] != "running" or row["retry_attempted"]:
+                raise ValueError("invalid output retry")
+            connection.execute(
+                """UPDATE topic_report_nodes SET retry_attempted=1,usage_json=?
+                  WHERE id=?""",
+                (usage.model_dump_json() if usage else None, node_id),
+            )
+
     def finish_node(
         self, node_id, *, output=None, usage=None, error=None, reused_from=None
     ):
@@ -1569,12 +1583,15 @@ class TopicReportRepository:
                 raise ValueError("terminal node write")
             connection.execute(
                 """UPDATE topic_report_nodes SET status=?,output_json=?,
-                  output_hash=?,usage_json=?,
+                  output_hash=?,
+                  usage_json=CASE WHEN retry_attempted=0 THEN ? ELSE usage_json END,
+                  retry_usage_json=CASE WHEN retry_attempted=1 THEN ? ELSE NULL END,
               error_json=?,reused_from_node_id=?,finished_at=? WHERE id=?""",
                 (
                     "completed" if output else "failed",
                     output.output.model_dump_json() if output else None,
                     output.output_hash if output else None,
+                    usage.model_dump_json() if usage else None,
                     usage.model_dump_json() if usage else None,
                     error.model_dump_json() if error else None,
                     reused_from,

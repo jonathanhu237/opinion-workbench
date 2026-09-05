@@ -13,6 +13,7 @@ from longtian_api.services.ai_analysis import AIAnalysisError
 from longtian_api.services.ai_client import AICompletion, decode_model_json
 from longtian_api.services.ai_errors import MANUAL_SYSTEMIC_AI_FAILURES, AIError
 from longtian_api.services.analysis_errors import AnalysisError
+from longtian_api.services.model_retry import RETRYABLE_OUTPUT_ERRORS
 from longtian_api.services.settled_tasks import database_call, settle
 from longtian_api.services.summary_errors import FAILURE_MESSAGES, failure
 from longtian_api.services.topic_report_engine import (
@@ -340,8 +341,8 @@ class TopicReportService:
             )
             return
         await database_call(self.repository.stage, report.id, "composing")
-        # Plan all bounded leaves before the first composition request. A failed
-        # request never causes dynamic repartitioning or an implicit repair.
+        # Plan all bounded leaves before the first composition request.
+        # Output retries stay within the same node, never repartition evidence.
         offset = position = 0
         while offset < progress.coverage.relevant:
             candidates = await database_call(
@@ -499,21 +500,29 @@ class TopicReportService:
                     )
                     return
             await database_call(self.repository.mark_attempt, node_id)
-            completion = await self._ai.complete(
-                configuration,
-                messages=[
-                    {"role": "system", "content": call.system_text},
-                    {"role": "user", "content": call.user_text},
-                ],
-                max_tokens=call.max_tokens,
-                deadline=call.deadline_seconds,
-            )
-            usage = observed_usage(completion.usage)
-            output = parse_completion(
-                call,
-                AICompletion(completion.text, usage),
-                api_key=configuration.api_key,
-            )
+            for attempt_number in range(2):
+                usage = None
+                completion = await self._ai.complete(
+                    configuration,
+                    messages=[
+                        {"role": "system", "content": call.system_text},
+                        {"role": "user", "content": call.user_text},
+                    ],
+                    max_tokens=call.max_tokens,
+                    deadline=call.deadline_seconds,
+                )
+                usage = observed_usage(completion.usage)
+                try:
+                    output = parse_completion(
+                        call,
+                        AICompletion(completion.text, usage),
+                        api_key=configuration.api_key,
+                    )
+                    break
+                except AIAnalysisError as error:
+                    if attempt_number or error.code not in RETRYABLE_OUTPUT_ERRORS:
+                        raise
+                    await database_call(self.repository.mark_retry, node_id, usage)
             await database_call(
                 self.repository.finish_node, node_id, output=output, usage=usage
             )

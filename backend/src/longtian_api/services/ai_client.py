@@ -138,6 +138,21 @@ def encode_completion_request(
     }
     if include_usage:
         payload["stream_options"] = {"include_usage": True}
+    # Only the verified provider/model combination; arbitrary compatible
+    # endpoints and the plain-text connectivity probe retain their protocol.
+    if (
+        configuration.base_url.rstrip("/")
+        == "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        and configuration.model == "qwen3.5-omni-plus"
+        and any(
+            isinstance(message, dict)
+            and message.get("role") == "system"
+            and isinstance(message.get("content"), str)
+            and "json" in message["content"].lower()
+            for message in messages
+        )
+    ):
+        payload["response_format"] = {"type": "json_object"}
     try:
         data = json.dumps(
             payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False

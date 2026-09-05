@@ -6,7 +6,6 @@ from pathlib import Path
 import pytest
 
 import longtian_api.database as migrations
-from longtian_api.database import CURRENT_DATABASE_VERSION
 
 
 def _database_at_v27(path: Path) -> sqlite3.Connection:
@@ -43,7 +42,7 @@ def test_v28_adds_explicit_incomplete_status_without_losing_history(tmp_path: Pa
 
         assert (
             connection.execute("PRAGMA user_version").fetchone()[0]
-            == CURRENT_DATABASE_VERSION
+            == 28
         )
         connection.execute(
             "UPDATE search_runs SET status = 'completed_with_incomplete' WHERE id = ?",

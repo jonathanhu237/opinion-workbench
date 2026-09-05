@@ -42,6 +42,8 @@ const failureMessages = {
   source_changed: '原始内容已变化，请重新生成汇总。',
   source_active: '采集任务尚未结束，请结束后再试。',
   browser_operation_active: '谷歌浏览器正在执行其他操作，请结束后再试。',
+  browser_unavailable:
+    '专用浏览器不可用，本次任务已停止。请在平台账号中检查浏览器后重新生成。',
   acquisition_failed: '未能获取完整内容，请检查平台登录状态后重试。',
   source_access_denied: '平台暂时拒绝访问，未能读取原文；未判定为安全验证。',
   source_content_unavailable: '原帖已删除或不可读取，未使用搜索摘要代替正文。',
@@ -76,6 +78,7 @@ const failureMessages = {
 const acquisitionDiagnosticSchema = z.strictObject({
   stage: z.enum(['detail', 'media', 'browser']),
   outcome: z.enum([
+    'browser_unavailable',
     'access_denied',
     'asset_blocked',
     'asset_unavailable',
@@ -119,6 +122,11 @@ const failureSchema = z
     ),
     message: z.string().max(1000),
     diagnostic: acquisitionDiagnosticSchema.nullable().optional(),
+    validation_issues: z
+      .array(z.string().max(200))
+      .max(8)
+      .nullable()
+      .optional(),
   })
   .transform((failure): typeof failure => ({
     ...failure,

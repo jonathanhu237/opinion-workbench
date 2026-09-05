@@ -225,7 +225,7 @@ describe('报告生成页面', () => {
     })
     renderResults()
     await user.click(
-      await screen.findByRole('button', { name: '选中全部未分析内容' }),
+      await screen.findByRole('button', { name: '选中全部未纳入报告的内容' }),
     )
     await waitFor(() => expect(screen.getByText('已选 3 条')).toBeVisible())
     expect(createReportGeneration).not.toHaveBeenCalled()

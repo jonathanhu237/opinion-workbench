@@ -24,9 +24,9 @@ def test_two_failed_sources_do_not_block_other_eighteen_or_pollute_report_retry(
     app, database, model, media = api_environment(tmp_path, count=20)
     for identity in range(1, 21):
         save_body(database, identity)
-    model.answers["initial"] = ["invalid", "invalid"] + [UNDERSTANDING] * 18
+    model.answers["initial"] = ["invalid"] * 4 + [UNDERSTANDING] * 18
     if report_failure:
-        model.answers["leaf"] = ["invalid"]
+        model.answers["leaf"] = ["invalid"] * 2
     with TestClient(app, base_url="http://127.0.0.1") as client:
         saved(client)
         response = client.post(
@@ -116,6 +116,27 @@ def test_all_irrelevant_is_empty_not_a_failed_or_fabricated_report(tmp_path):
         assert result["report"]["empty_reason"] == "no_relevant_sources"
         assert result["analysis"]["counts"]["completed"] == 2
         assert not model.counts["leaf"] and not media.calls
+
+
+def test_all_failed_analysis_does_not_create_empty_report(tmp_path):
+    app, database, model, media = api_environment(tmp_path, count=2)
+    for identity in (1, 2):
+        save_body(database, identity)
+    model.answers["initial"] = ["invalid"] * 4
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        saved(client)
+        response = client.post(
+            "/api/v1/report-generations", json=generation_request([1, 2])
+        )
+        assert response.status_code == 202
+        client.portal.call(finish, app.state.report_generation_service)
+        result = client.get(
+            f"/api/v1/report-generations/{response.json()['id']}"
+        ).json()
+        assert result["status"] == "failed"
+        assert result["report"] is None
+        assert result["analysis"]["counts"]["failed"] == 2
+        assert not model.counts["leaf"]
 
 
 def test_partial_text_with_failed_image_keeps_its_gap_through_the_report(tmp_path):
@@ -216,7 +237,7 @@ def test_report_auth_failure_stops_queued_manual_work_but_keeps_completed_summar
 
 def test_saved_media_metadata_without_bytes_is_not_presented_as_seen_media(tmp_path):
     app, _, model, media = api_environment(tmp_path, count=1)
-    model.answers["initial"] = ["invalid"]
+    model.answers["initial"] = ["invalid"] * 2
     with TestClient(app, base_url="http://127.0.0.1") as client:
         saved(client)
         initial = client.post("/api/v1/content-analysis-jobs", json=body(client))

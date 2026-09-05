@@ -89,7 +89,7 @@ def test_failed_composition_retry_preserves_judgments_usage_and_evidence(
     async def run():
         db, initial, reports, ai, model, worker, _ = environment(tmp_path, count=9)
 
-        model.answers["leaf"] = ["invalid JSON"]
+        model.answers["leaf"] = ["invalid JSON"] * 2
         _, report = await analyse_all(db, initial, reports)
         assert report.status == "failed", report
         assert report.coverage.relevant == 9
@@ -97,7 +97,7 @@ def test_failed_composition_retry_preserves_judgments_usage_and_evidence(
             report.nodes.composition.failed == 1
             and report.nodes.composition.completed == 1
         )
-        assert report.usage.composition.accounted_requests == 2
+        assert report.usage.composition.accounted_requests == 3
         baseline = len(worker.calls), model.counts["initial"], model.counts["judgment"]
         retried = await reports.retry(report.id, retry_request(report))
         await finish(reports)
@@ -107,7 +107,7 @@ def test_failed_composition_retry_preserves_judgments_usage_and_evidence(
             model.counts["initial"],
             model.counts["judgment"],
         ) == baseline
-        assert model.counts["leaf"] == 3 and model.counts["overview"] == 1
+        assert model.counts["leaf"] == 4 and model.counts["overview"] == 1
         await initial.shutdown()
         await reports.shutdown()
         await ai.shutdown()
