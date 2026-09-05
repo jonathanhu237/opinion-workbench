@@ -134,6 +134,32 @@ class SearchRunRepositoryProtocol(Protocol):
     ) -> SearchResultOpenTargetRecord: ...
 
 
+async def _record_incomplete_terms(
+    repository: SearchRunRepositoryProtocol,
+    run_id: int,
+    start: int,
+    diagnostics: tuple[CollectorSearchTermDiagnostic, ...],
+) -> None:
+    """Persist keyword diagnostics when the repository supports the extension."""
+    if not diagnostics:
+        return
+    record_diagnostics = getattr(repository, "record_incomplete_terms", None)
+    if record_diagnostics is None:
+        return
+    await database_call(
+        record_diagnostics,
+        run_id,
+        tuple(
+            CollectorSearchTermDiagnostic(
+                position=start + diagnostic.position,
+                reason=diagnostic.reason,
+                result_count=diagnostic.result_count,
+            )
+            for diagnostic in diagnostics
+        ),
+    )
+
+
 class SearchRunError(Exception):
     """Expected product error translated by the HTTP route."""
 
@@ -512,21 +538,18 @@ class SearchRunService:
                     self._repository.complete_term, record.id, start + position, count
                 )
                 if incomplete_reason is not None:
-                    record_diagnostics = getattr(
-                        self._repository, "record_incomplete_terms", None
-                    )
-                    if record_diagnostics is not None:
-                        await database_call(
-                            record_diagnostics,
-                            record.id,
-                            (
-                                CollectorSearchTermDiagnostic(
-                                    position=start + position,
-                                    reason=incomplete_reason,
-                                    result_count=count,
-                                ),
+                    await _record_incomplete_terms(
+                        self._repository,
+                        record.id,
+                        start,
+                        (
+                            CollectorSearchTermDiagnostic(
+                                position=position,
+                                reason=incomplete_reason,
+                                result_count=count,
                             ),
-                        )
+                        ),
+                    )
 
             async def on_item(position: int, item: SearchWorkerItem) -> None:
                 observed_at = _timestamp_from_epoch_milliseconds(item.discovered_at)
@@ -557,23 +580,9 @@ class SearchRunService:
                     on_item=on_item,
                     on_term_completed=on_term_completed,
                 )
-            if result.incomplete_terms:
-                record_diagnostics = getattr(
-                    self._repository, "record_incomplete_terms", None
-                )
-                if record_diagnostics is not None:
-                    await database_call(
-                        record_diagnostics,
-                        record.id,
-                        tuple(
-                            CollectorSearchTermDiagnostic(
-                                position=start + diagnostic.position,
-                                reason=diagnostic.reason,
-                                result_count=diagnostic.result_count,
-                            )
-                            for diagnostic in result.incomplete_terms
-                        ),
-                    )
+            await _record_incomplete_terms(
+                self._repository, record.id, start, result.incomplete_terms
+            )
             projected = project_worker_outcome(result.outcome)
             terminal = projected.status
             failure_reason = projected.failure_reason
