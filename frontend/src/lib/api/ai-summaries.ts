@@ -43,6 +43,7 @@ const failureMessages = {
   source_active: '采集任务尚未结束，请结束后再试。',
   browser_operation_active: '谷歌浏览器正在执行其他操作，请结束后再试。',
   acquisition_failed: '未能获取完整内容，请检查平台登录状态后重试。',
+  source_access_denied: '平台暂时拒绝访问，未能读取原文；未判定为安全验证。',
   source_content_unavailable: '原帖已删除或不可读取，未使用搜索摘要代替正文。',
   platform_not_supported:
     '该采集结果尚未完成正文和媒体补全；已有内容及成功总结仍可使用。',

@@ -21,6 +21,7 @@ FAILURE_MESSAGES: dict[FailureCode, str] = {
     "source_active": "采集任务重新开始，暂未读取这条内容。",
     "browser_operation_active": "浏览器正在执行其他操作，请结束后重新生成汇总。",
     "acquisition_failed": "原文暂时无法读取，请检查平台登录或验证状态。",
+    "source_access_denied": "平台暂时拒绝访问，未能读取原文；未判定为安全验证。",
     "source_content_unavailable": "原帖已删除或不可读取，未使用搜索摘要代替正文。",
     "platform_not_supported": (
         "该采集结果尚未完成正文和媒体补全；已有内容及成功总结仍可使用。"

@@ -18,6 +18,7 @@ EnrichmentOutcome = Literal[
     "login_required",
     "manual_challenge_required",
     "platform_blocked_or_rate_limited",
+    "access_denied",
     "lookup_miss",
     "content_unavailable",
     "structure_changed",

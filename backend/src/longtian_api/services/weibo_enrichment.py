@@ -1,17 +1,22 @@
-"""Selected-post lookups owned by the project, with a network-free parser."""
+"""Selected-post lookups owned by the project and bounded upstream acquisition."""
 
 import asyncio
-import json
 import time
+from urllib.parse import urlsplit
 
 import httpx
 
 from longtian_api.services.collector_contracts import EnrichmentWorkerResult
 from longtian_api.services.enrichment_models import EnrichedContent
-from longtian_api.services.gallery_component import ComponentError, GalleryComponent
+from longtian_api.services.gallery_component import (
+    ComponentError,
+    GalleryComponent,
+    UpstreamRequest,
+    UpstreamResponse,
+)
 from longtian_api.services.media_inventory import media_inventory
 from longtian_api.services.native_browser_contracts import BrowserUnavailable
-from longtian_api.services.weibo_dom import barrier, document, text_of
+from longtian_api.services.weibo_dom import document, text_of
 from longtian_api.services.weibo_media import transfer_media
 
 
@@ -56,85 +61,140 @@ class WeiboEnricher:
         key = (content_id, content_url, budget)
         if self._checkpoint is not None and self._checkpoint[0] != key:
             self.reset()
+        from_checkpoint = self._checkpoint is not None
+        detail_payload = None
+        detail_checkpoint_saved = False
+        save_detail_checkpoint = None
         try:
             cookies = await self.browser.weibo_cookies()
             if not cookies.get("SUB"):
                 raise WeiboAccessError("login_required")
+            scoped_cookies = {
+                name: value
+                for name, value in cookies.items()
+                if name in ("SUB", "SUBP") and isinstance(value, str)
+            }
+
+            async def save_detail_checkpoint():
+                nonlocal detail_checkpoint_saved
+                if (
+                    from_checkpoint
+                    or detail_checkpoint_saved
+                    or detail_payload is None
+                    or on_content is None
+                ):
+                    return
+                partial_post = {
+                    key: value
+                    for key, value in detail_payload.items()
+                    if key
+                    not in {"pic_ids", "pic_infos", "page_info", "mix_media_info"}
+                }
+                partial = {"post": partial_post, "files": []}
+                await on_content(
+                    project_text(
+                        partial,
+                        content_id,
+                        content_url,
+                        budget,
+                        inventory=media_inventory(partial, budget),
+                    ),
+                    force=True,
+                )
+                detail_checkpoint_saved = True
+
             async with httpx.AsyncClient(
                 transport=self.transport,
                 timeout=httpx.Timeout(10, connect=5),
                 follow_redirects=False,
                 trust_env=False,
             ) as client:
-                # Only the corresponding Weibo cookies are given to the broker,
-                # not to the parser process, command line or a global cookie jar.
-                cookie_header = "; ".join(
-                    f"{name}={value}"
-                    for name, value in cookies.items()
-                    if name in ("SUB", "SUBP")
-                )
 
-                async def fetch(url):
+                async def request_fetch(request: UpstreamRequest):
+                    nonlocal detail_payload
                     expected = (
                         f"https://weibo.com/ajax/statuses/show?id={content_id}"
                         "&isGetLongText=true"
                     )
-                    if url != expected:
+                    if request.stage == "detail" and request.url != expected:
                         raise WeiboAccessError("structure_changed")
+                    headers = dict(request.headers)
+                    host = (urlsplit(request.url).hostname or "").lower()
+                    if request.stage == "media" and not (
+                        host == "weibo.com" or host.endswith(".weibo.com")
+                    ):
+                        headers.pop("Cookie", None)
+                        headers.pop("cookie", None)
                     await self.before_request()
                     async with client.stream(
-                        "GET",
-                        url,
-                        headers={
-                            "Cookie": cookie_header,
-                            "Accept": "application/json",
-                        },
+                        request.method,
+                        request.url,
+                        headers=headers,
+                        content=request.body,
+                        # The upstream detail call may follow the platform's
+                        # login redirect so it can be classified from history;
+                        # media redirects are intentionally kept at the CDN
+                        # boundary and recorded as a missing asset.
+                        follow_redirects=request.allow_redirects
+                        if request.stage == "detail"
+                        else False,
                     ) as response:
-                        if response.status_code in (401, 301, 302, 303, 307, 308):
-                            raise WeiboAccessError("login_required")
-                        if response.status_code == 403:
-                            raise WeiboAccessError("manual_challenge_required")
-                        if response.status_code == 429:
-                            raise WeiboAccessError("platform_blocked_or_rate_limited")
-                        if response.status_code in (404, 410):
-                            raise WeiboAccessError("content_unavailable")
-                        if response.status_code != 200:
-                            raise WeiboAccessError("internal_error")
-                        raw = bytearray()
-                        async for chunk in response.aiter_bytes():
-                            raw.extend(chunk)
-                            if len(raw) > 1024 * 1024:
-                                raise WeiboAccessError("structure_changed")
-                    try:
-                        value = json.loads(raw)
-                    except (ValueError, UnicodeError):
-                        state = barrier(
-                            document(raw.decode("utf-8", errors="replace")), url, 200
+                        limit = (
+                            1024 * 1024
+                            if request.stage == "detail"
+                            else budget.max_total_bytes
                         )
-                        raise WeiboAccessError(state or "structure_changed") from None
-                    if not isinstance(value, dict):
-                        raise WeiboAccessError("structure_changed")
-                    if "ok" not in value:
-                        raise WeiboAccessError("structure_changed")
-                    if value.get("ok") != 1:
-                        message = str(value.get("msg", value.get("message", "")))
-                        for words, outcome in (
-                            (("登录", "login"), "login_required"),
-                            (("频繁", "频次"), "platform_blocked_or_rate_limited"),
-                            (("验证", "异常访问"), "manual_challenge_required"),
-                        ):
-                            if any(word in message for word in words):
-                                raise WeiboAccessError(outcome)
-                    return value
+                        raw = bytearray()
+                        overflow = False
+                        async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
+                            if len(raw) + len(chunk) > limit:
+                                overflow = True
+                                break
+                            raw.extend(chunk)
+                        body = bytes(raw)
+                        response_headers = dict(response.headers)
+                        if overflow and response.status_code < 400:
+                            body = b""
+                            response_headers["x-longtian-error"] = (
+                                "detail_limit"
+                                if request.stage == "detail"
+                                else "media_limit"
+                            )
+                        value = body
+                        if request.stage == "detail" and response.status_code < 400:
+                            try:
+                                value = response.json()
+                            except (ValueError, UnicodeError):
+                                value = body
+                            if isinstance(value, dict):
+                                detail_payload = value
+                        return UpstreamResponse(
+                            status_code=response.status_code,
+                            url=str(response.url),
+                            headers=response_headers,
+                            body=value,
+                            history=tuple(
+                                (item.status_code, str(item.url))
+                                for item in response.history
+                            ),
+                            cookies=dict(response.cookies.items()),
+                        )
 
-                if self._checkpoint is None:
-                    parsed = await self.parser.extract(content_id, fetch=fetch)
+                if not from_checkpoint:
+                    parsed = await self.parser.extract(
+                        content_id,
+                        request_fetch=request_fetch,
+                        cookies=scoped_cookies,
+                        max_media_bytes=budget.max_total_bytes,
+                    )
                     inventory = media_inventory(parsed, budget)
                     checkpoint = {}
+                    prefetched = parsed.get("downloads", {})
                 else:
                     _, parsed, inventory, checkpoint = self._checkpoint
+                    prefetched = {}
 
-            async def save_progress(current_inventory):
+            async def save_progress(current_inventory, *, force=False):
                 if on_content is None:
                     return
                 await on_content(
@@ -144,12 +204,15 @@ class WeiboEnricher:
                         content_url,
                         budget,
                         inventory=current_inventory,
-                    )
+                    ),
+                    force=force,
                 )
 
-            await save_progress(inventory)
-            # A separate empty cookie jar prevents account credentials from
-            # being forwarded to CDN hosts, including cookies set by detail IO.
+            if not from_checkpoint:
+                await save_progress(inventory)
+            # A separate empty cookie jar is retained for recovery of old
+            # paused sessions. New acquisitions use the upstream downloader
+            # through ``prefetched`` and never need a second media request.
             async with httpx.AsyncClient(
                 transport=self.transport,
                 timeout=httpx.Timeout(15, connect=5),
@@ -164,7 +227,10 @@ class WeiboEnricher:
                     budget=budget,
                     checkpoint=checkpoint,
                     on_progress=save_progress,
+                    prefetched=prefetched,
                 )
+            if not from_checkpoint:
+                pause = pause or parsed.get("pause_reason")
             content = project_text(
                 parsed, content_id, content_url, budget, inventory=result_inventory
             )
@@ -172,11 +238,16 @@ class WeiboEnricher:
                 # One selected post, at most the media byte budget. Retain bytes
                 # only for explicit in-process continuation; originals become
                 # durable with the separate persistent-cache ticket.
-                self._checkpoint = (key, parsed, inventory, checkpoint)
+                self._checkpoint = (key, parsed, result_inventory, checkpoint)
             else:
                 self.reset()
             return EnrichmentWorkerResult(pause or "completed", content=content)
         except asyncio.CancelledError:
+            if detail_payload is not None and save_detail_checkpoint is not None:
+                try:
+                    await asyncio.shield(save_detail_checkpoint())
+                except (Exception, asyncio.CancelledError):
+                    pass
             self.reset()
             raise
         except WeiboAccessError as error:
@@ -186,10 +257,15 @@ class WeiboEnricher:
         except (TimeoutError, httpx.TimeoutException):
             return EnrichmentWorkerResult("timed_out")
         except ComponentError as error:
+            known = {
+                "content_unavailable",
+                "login_required",
+                "manual_challenge_required",
+                "platform_blocked_or_rate_limited",
+                "access_denied",
+            }
             return EnrichmentWorkerResult(
-                "content_unavailable"
-                if error.code == "content_unavailable"
-                else "structure_changed"
+                error.code if error.code in known else "structure_changed"
             )
         except (httpx.HTTPError, ValueError):
             return EnrichmentWorkerResult("structure_changed")

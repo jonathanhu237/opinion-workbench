@@ -182,6 +182,8 @@ def test_access_barrier_holds_task_and_browser_until_explicit_continue(
 
     def response(request):
         if not allowed:
+            if response_status == 403:
+                return httpx.Response(403, content="请完成安全验证".encode())
             return httpx.Response(response_status)
         return httpx.Response(
             200,
@@ -260,6 +262,30 @@ def test_access_barrier_holds_task_and_browser_until_explicit_continue(
         assert again.json()["control_revision"] == paused.control_revision + 1
 
 
+def test_plain_403_is_a_neutral_item_failure_and_never_requests_manual_verification(
+    tmp_path,
+):
+    app, browser, model, requests = native_environment(
+        tmp_path, response=lambda request: httpx.Response(403)
+    )
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        saved(client)
+        created = client.post(
+            "/api/v1/report-generations", json=generation_request([1])
+        ).json()
+        client.portal.call(finish, app.state.report_generation_service)
+        value = client.get(f"/api/v1/report-generations/{created['id']}").json()
+        assert value["status"] in ("completed", "empty")
+        item = client.get(
+            f"/api/v1/content-analysis-jobs/{created['analysis']['id']}/items"
+        ).json()["items"][0]
+        assert item["error"]["code"] == "source_access_denied"
+        assert item["status"] == "input_incomplete"
+        assert model.calls == []
+        assert browser.shown == 0
+        assert len(requests) == 1
+
+
 @pytest.mark.parametrize(
     "status,body,code",
     [
@@ -290,7 +316,8 @@ def test_unreadable_posts_have_specific_failures_and_never_use_search_preview(
 
 def test_old_continue_cannot_resume_a_new_challenge_and_restart_never_retries(tmp_path):
     app, _, model, requests = native_environment(
-        tmp_path, response=lambda request: httpx.Response(403)
+        tmp_path,
+        response=lambda request: httpx.Response(403, content="请完成安全验证".encode()),
     )
     with TestClient(app, base_url="http://127.0.0.1") as client:
         saved(client)

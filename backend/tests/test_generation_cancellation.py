@@ -167,7 +167,8 @@ def test_cancel_stops_model_stage_without_starting_later_members_or_reports(
 
 def test_cancel_paused_child_also_settles_parent_and_releases_browser(tmp_path):
     app, _, model, requests = native_environment(
-        tmp_path, response=lambda request: httpx.Response(403)
+        tmp_path,
+        response=lambda request: httpx.Response(403, content="安全验证".encode()),
     )
     with TestClient(app, base_url="http://127.0.0.1") as client:
         saved(client)

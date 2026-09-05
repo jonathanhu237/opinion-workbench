@@ -355,8 +355,8 @@ class EnrichmentSession:
             if self._cancel_requested or self._closed:
                 return EnrichmentItem(source, "cancelled")
 
-            async def observe_content(value):
-                if on_content is not None and not self._cancel_requested:
+            async def observe_content(value, *, force=False):
+                if on_content is not None and (force or not self._cancel_requested):
                     checked = validate_content(
                         value.model_dump(),
                         platform=source.platform,

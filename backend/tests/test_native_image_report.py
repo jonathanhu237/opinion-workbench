@@ -184,7 +184,7 @@ def test_media_challenge_keeps_text_and_downloaded_image_until_explicit_continue
                 },
             )
         if request.url.path == "/two.png" and not resolved:
-            return httpx.Response(403)
+            return httpx.Response(403, content="安全验证".encode())
         return httpx.Response(200, content=PNG, headers={"content-type": "image/png"})
 
     app, _, model, requests = native_environment(tmp_path, response=response)
@@ -225,6 +225,44 @@ def test_media_challenge_keeps_text_and_downloaded_image_until_explicit_continue
             "/two.png",
         ]
         assert model.counts["initial"] == 1
+
+
+def test_plain_media_403_is_a_missing_asset_and_does_not_pause_report(tmp_path):
+    def response(request):
+        if request.url.host == "weibo.com":
+            return httpx.Response(
+                200,
+                json={
+                    "ok": 1,
+                    "id": 3600375418559878,
+                    "idstr": "3600375418559878",
+                    "text": "龙田正文仍然可用",
+                    "created_at": "Thu Sep 03 10:00:00 +0800 2026",
+                    "pic_ids": ["one"],
+                    "pic_infos": {
+                        "one": {"largest": {"url": "https://wx1.sinaimg.cn/one.png"}}
+                    },
+                },
+            )
+        return httpx.Response(403)
+
+    app, browser, model, requests = native_environment(tmp_path, response=response)
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        saved(client)
+        result = client.post(
+            "/api/v1/report-generations", json=generation_request([1])
+        ).json()
+        client.portal.call(finish, app.state.report_generation_service)
+        value = client.get(f"/api/v1/report-generations/{result['id']}").json()
+        assert value["status"] == "completed"
+        attempt = client.get(
+            f"/api/v1/content-analysis-jobs/{result['analysis']['id']}/items"
+        ).json()["items"][0]
+        assert attempt["input"]["status"] == "partial"
+        assert attempt["input"]["assets"][0]["issue_code"] == "asset_blocked"
+        assert model.counts["initial"] == 1
+        assert browser.shown == 0
+        assert len(requests) == 2
 
 
 def test_failed_bytes_still_consume_the_selected_post_download_budget(tmp_path):

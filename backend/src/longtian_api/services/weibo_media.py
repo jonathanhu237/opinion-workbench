@@ -113,14 +113,35 @@ async def download_media(candidate, *, client, before_request, allowance, probe)
             candidate.url,
             headers={"Accept": "image/*" if candidate.kind == "image" else "video/mp4"},
         ) as response:
-            if response.status_code in (401, 403, 429):
+            if response.status_code in (401, 429):
                 raise MediaPause(
                     {
                         401: "login_required",
-                        403: "manual_challenge_required",
                         429: "platform_blocked_or_rate_limited",
                     }[response.status_code]
                 )
+            if response.status_code == 403:
+                sample = (
+                    (await response.aread())[: 256 * 1024]
+                    .decode("utf-8", errors="ignore")
+                    .lower()
+                )
+                if any(
+                    word in sample
+                    for word in (
+                        "安全验证",
+                        "请完成验证",
+                        "滑动验证",
+                        "拖动滑块",
+                        "验证码",
+                        "captcha",
+                        "challenge",
+                        "异常访问",
+                        "访问异常",
+                    )
+                ):
+                    raise MediaPause("manual_challenge_required")
+                raise MediaFailure("asset_blocked")
             if 300 <= response.status_code < 400:
                 raise MediaFailure("media_redirect")
             if response.status_code in (404, 410):
@@ -162,8 +183,10 @@ async def transfer_media(
     checkpoint,
     probe=None,
     on_progress=None,
+    prefetched=None,
 ):
     probe = probe or VideoProbe()
+    prefetched = prefetched or {}
     assets = list(inventory.assets)
     issues = [issue for issue in inventory.issues if issue.asset_position is None]
     pause = None
@@ -175,7 +198,28 @@ async def transfer_media(
         if pause is not None:
             continue
         try:
-            if candidate.asset_id in checkpoint:
+            prefetched_value = prefetched.get(candidate.position)
+            if prefetched_value is not None:
+                if prefetched_value.get("status") != "ready":
+                    assets[candidate.position] = missing_asset(
+                        candidate, prefetched_value.get("issue_code", "download_failed")
+                    )
+                    continue
+                data = prefetched_value.get("data")
+                mime_type = prefetched_value.get("mime_type")
+                if not isinstance(data, bytes) or not isinstance(mime_type, str):
+                    raise MediaFailure("invalid_media")
+                allowance.charge(len(data))
+                if candidate.kind == "image":
+                    asset = await settle(
+                        asyncio.to_thread(image_asset, candidate, data, mime_type)
+                    )
+                else:
+                    if mime_type != "video/mp4":
+                        raise MediaFailure("unsupported_media_type")
+                    asset = await probe.inspect(candidate, data)
+                checkpoint[candidate.asset_id] = (asset, data)
+            elif candidate.asset_id in checkpoint:
                 asset, data = checkpoint[candidate.asset_id]
             else:
                 asset, data = await download_media(

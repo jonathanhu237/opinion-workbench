@@ -187,9 +187,12 @@ def test_video_challenge_requires_continue_and_does_not_repeat_finished_image(
     allowed = False
 
     def response(request):
-        return video_response(
+        result = video_response(
             video_samples["valid"], image=True, status=200 if allowed else 403
         )(request)
+        if request.url.path.endswith(".mp4") and not allowed:
+            return httpx.Response(403, content="安全验证".encode())
+        return result
 
     app, _, model, requests = native_environment(tmp_path, response=response)
     with TestClient(app, base_url="http://127.0.0.1") as client:

@@ -369,7 +369,11 @@ class ContentAnalysisService:
                     candidate = acquired
                     saved_input = SavedInput.from_content(acquired.content)
                     input_fingerprint = acquired.input_fingerprint
-                elif allow_preview and acquired.preview_analysis_eligible:
+                elif (
+                    allow_preview
+                    and acquired.outcome != "access_denied"
+                    and acquired.preview_analysis_eligible
+                ):
                     # The stored search title/snippet is a safe, immutable
                     # fallback when detail acquisition cannot produce a
                     # document. It is explicitly labelled preview evidence
@@ -412,6 +416,7 @@ class ContentAnalysisService:
                                 {
                                     "content_unavailable": "source_content_unavailable",
                                     "lookup_miss": "source_content_unavailable",
+                                    "access_denied": "source_access_denied",
                                     "structure_changed": "source_structure_changed",
                                     "timed_out": "acquisition_timed_out",
                                 }.get(acquired.outcome, "acquisition_failed"),

@@ -2,7 +2,9 @@
 
 import asyncio
 
-from longtian_api.services.gallery_component import GalleryComponent
+from enrichment_fixtures import PNG
+
+from longtian_api.services.gallery_component import GalleryComponent, UpstreamResponse
 
 
 def test_single_text_post_uses_the_selected_identity_and_no_recursive_requests():
@@ -139,3 +141,54 @@ def test_media_urls_form_a_bounded_inventory_not_ready_files():
     limited = media_inventory(parsed, EnrichmentBudget(max_images=1))
     assert len(limited.assets) == 2
     assert any(issue.code == "image_limit" for issue in limited.issues)
+
+
+def test_upstream_component_preserves_request_context_and_downloads_media():
+    requests = []
+
+    async def request(value):
+        requests.append(value)
+        if value.stage == "detail":
+            return UpstreamResponse(
+                status_code=200,
+                url=value.url,
+                headers={"content-type": "application/json"},
+                body={
+                    "ok": 1,
+                    "id": 3600375418559878,
+                    "idstr": "3600375418559878",
+                    "text": "龙田现场图片",
+                    "created_at": "Thu Sep 03 10:00:00 +0800 2026",
+                    "pic_ids": ["one"],
+                    "pic_infos": {
+                        "one": {
+                            "largest": {"url": "https://wx1.sinaimg.cn/large/one.png"}
+                        }
+                    },
+                },
+            )
+        return UpstreamResponse(
+            status_code=200,
+            url=value.url,
+            headers={"content-type": "image/png"},
+            body=PNG,
+        )
+
+    result = asyncio.run(
+        GalleryComponent().extract(
+            "3600375418559878",
+            cookies={"SUB": "session-only"},
+            request_fetch=request,
+            max_media_bytes=len(PNG),
+        )
+    )
+
+    assert result["post"]["text"] == "龙田现场图片"
+    assert result["downloads"] == {
+        0: {"data": PNG, "mime_type": "image/png", "status": "ready"}
+    }
+    assert [value.stage for value in requests] == ["detail", "media"]
+    assert requests[0].headers["Referer"] == "https://weibo.com/"
+    assert requests[0].headers["Origin"] == "https://weibo.com"
+    assert "SUB=session-only" in requests[0].headers["Cookie"]
+    assert "Cookie" not in requests[1].headers

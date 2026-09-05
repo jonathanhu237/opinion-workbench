@@ -34,6 +34,7 @@ FailureCode = Literal[
     "source_active",
     "browser_operation_active",
     "acquisition_failed",
+    "source_access_denied",
     "source_content_unavailable",
     "platform_not_supported",
     "source_structure_changed",
