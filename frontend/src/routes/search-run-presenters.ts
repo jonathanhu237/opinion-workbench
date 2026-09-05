@@ -27,6 +27,7 @@ const statusLabels: Record<SearchRunStatus, string> = {
   running: '采集中',
   completed_with_results: '采集完成',
   completed_empty: '未发现内容',
+  completed_with_incomplete: '采集未完整覆盖',
   login_required: '需要登录',
   manual_challenge_required: '需要完成安全验证',
   platform_blocked_or_rate_limited: '平台限制访问',
@@ -124,7 +125,8 @@ export function searchRunDisplayLabel(run: SearchRunPresentation) {
   if (
     run.incomplete_terms?.length &&
     (run.status === 'completed_with_results' ||
-      run.status === 'completed_empty')
+      run.status === 'completed_empty' ||
+      run.status === 'completed_with_incomplete')
   ) {
     return '采集未完整覆盖'
   }
@@ -175,7 +177,8 @@ export function searchRunStatusGuidance(
   }
   if (
     (run.status === 'completed_with_results' ||
-      run.status === 'completed_empty') &&
+      run.status === 'completed_empty' ||
+      run.status === 'completed_with_incomplete') &&
     run.incomplete_terms?.length
   ) {
     return incompleteTermsGuidance(run.incomplete_terms)

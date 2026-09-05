@@ -46,6 +46,7 @@ SearchOutcome = Literal[
     "timed_out",
     "completed_with_results",
     "completed_empty",
+    "completed_with_incomplete",
     "login_required",
     "manual_challenge_required",
     "platform_blocked_or_rate_limited",

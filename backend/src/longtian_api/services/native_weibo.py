@@ -185,7 +185,11 @@ class NativeWeiboCollector:
                 if position + 1 < len(terms):
                     await asyncio.sleep(self.delay_seconds)
             return result(
-                "completed_with_results" if found else "completed_empty"
+                "completed_with_incomplete"
+                if incomplete_terms
+                else "completed_with_results"
+                if found
+                else "completed_empty"
             )
         except BrowserBudgetExceeded as error:
             return result("timed_out", execution_limit=error.limit)

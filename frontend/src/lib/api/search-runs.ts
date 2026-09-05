@@ -9,6 +9,7 @@ const activeStatuses = ['queued', 'running'] as const
 const terminalStatuses = [
   'completed_with_results',
   'completed_empty',
+  'completed_with_incomplete',
   'login_required',
   'manual_challenge_required',
   'platform_blocked_or_rate_limited',
@@ -76,6 +77,15 @@ export const searchRunSummarySchema = z
       context.addIssue({ code: 'custom', message: 'invalid failure reason' })
     }
     const diagnostics = value.incomplete_terms ?? []
+    if (
+      value.status === 'completed_with_incomplete' &&
+      diagnostics.length === 0
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'incomplete status requires diagnostics',
+      })
+    }
     if (
       new Set(diagnostics.map((diagnostic) => diagnostic.position)).size !==
         diagnostics.length ||

@@ -18,6 +18,7 @@ SearchRunStatus = Literal[
     "running",
     "completed_with_results",
     "completed_empty",
+    "completed_with_incomplete",
     "login_required",
     "manual_challenge_required",
     "platform_blocked_or_rate_limited",
@@ -108,6 +109,8 @@ class SearchRunSummary(BaseModel):
             raise ValueError("execution_limit requires timed_out status")
         if self.failure_reason is not None and self.status != "structure_changed":
             raise ValueError("failure_reason requires structure_changed status")
+        if self.status == "completed_with_incomplete" and not self.incomplete_terms:
+            raise ValueError("incomplete status requires diagnostics")
         positions = [item.position for item in self.incomplete_terms]
         if len(positions) != len(set(positions)) or any(
             position >= self.term_count for position in positions

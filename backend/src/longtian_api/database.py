@@ -4,7 +4,7 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
-CURRENT_DATABASE_VERSION = 27
+CURRENT_DATABASE_VERSION = 28
 DEFAULT_RULE_NAME = "龙田街道及四个社区"
 DEFAULT_RULE_TERMS = (
     "龙田街道",
@@ -131,6 +131,9 @@ class Database:
                 version = 26
             if version < 27:
                 _migrate_to_version_27(connection)
+                version = 27
+            if version < 28:
+                _migrate_to_version_28(connection)
         finally:
             connection.close()
 
@@ -403,6 +406,40 @@ def _migrate_to_version_27(connection: sqlite3.Connection) -> None:
         if connection.in_transaction:
             connection.execute("ROLLBACK")
         raise
+
+
+def _migrate_to_version_28(connection: sqlite3.Connection) -> None:
+    """Expose incomplete coverage as a distinct terminal search status."""
+    from longtian_api.migrations.search_run_status_v28 import migrate
+
+    previous_foreign_keys = connection.execute("PRAGMA foreign_keys").fetchone()[0]
+    previous_legacy_alter_table = connection.execute(
+        "PRAGMA legacy_alter_table"
+    ).fetchone()[0]
+    try:
+        connection.execute("PRAGMA foreign_keys = OFF")
+        connection.execute("PRAGMA legacy_alter_table = ON")
+        connection.execute("BEGIN IMMEDIATE")
+        version = _read_user_version(connection)
+        if version >= 28:
+            connection.execute("COMMIT")
+            return
+        if version != 27:
+            raise DatabaseVersionError("Unsupported database migration source version.")
+        migrate(connection)
+        if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
+            raise sqlite3.DatabaseError("Foreign key check failed after v28 migration")
+        connection.execute("PRAGMA user_version = 28")
+        connection.execute("COMMIT")
+    except BaseException:
+        if connection.in_transaction:
+            connection.execute("ROLLBACK")
+        raise
+    finally:
+        connection.execute(f"PRAGMA foreign_keys = {int(previous_foreign_keys)}")
+        connection.execute(
+            f"PRAGMA legacy_alter_table = {int(previous_legacy_alter_table)}"
+        )
 
 
 def _migrate_to_version_23(connection: sqlite3.Connection) -> None:

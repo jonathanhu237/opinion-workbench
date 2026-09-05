@@ -260,7 +260,7 @@ def test_native_discovery_marks_unresolved_view_all_keyword_and_continues(
 
     with TestClient(app) as client:
         run = collect(client, limit=3)
-        assert run["status"] == "completed_with_results"
+        assert run["status"] == "completed_with_incomplete"
         assert (run["new_count"], run["total_count"]) == (2, 2)
         assert run["incomplete_terms"] == [
             {
@@ -341,7 +341,7 @@ def test_all_incomplete_keywords_are_not_reported_as_successful_empty(
             client.portal.call(asyncio.sleep, 0.01)
         else:
             raise AssertionError("search run did not become terminal")
-        assert run["status"] == "completed_empty"
+        assert run["status"] == "completed_with_incomplete"
         assert run["total_count"] == 0
         assert [item["term"] for item in run["incomplete_terms"]] == terms
         assert len(browser.visits) == len(pages)

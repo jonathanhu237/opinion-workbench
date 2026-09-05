@@ -228,7 +228,8 @@ export function CollectionRunDetail() {
           )}
           {run.incomplete_terms?.length &&
           run.status !== 'completed_with_results' &&
-          run.status !== 'completed_empty' ? (
+          run.status !== 'completed_empty' &&
+          run.status !== 'completed_with_incomplete' ? (
             <div
               className="rounded-lg border border-amber-300/70 bg-amber-50/60 p-4 text-sm text-amber-900 dark:border-amber-700/70 dark:bg-amber-950/20 dark:text-amber-100"
               role="status"

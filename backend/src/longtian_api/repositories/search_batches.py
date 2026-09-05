@@ -30,7 +30,11 @@ from longtian_api.services.collector_contracts import (
 )
 
 ACTIVE = {"queued", "running", "paused_for_manual_action"}
-SUCCESS = {"completed_with_results", "completed_empty"}
+SUCCESS = {
+    "completed_with_results",
+    "completed_empty",
+    "completed_with_incomplete",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -868,7 +872,8 @@ def _settle_unfinished_attempts(
              WHERE attempts.batch_id = search_batch_items.batch_id
                AND attempts.item_position = search_batch_items.position
              ORDER BY attempts.attempt_number DESC LIMIT 1
-           ) IN ('completed_with_results', 'completed_empty')""",
+           ) IN ('completed_with_results', 'completed_empty',
+                 'completed_with_incomplete')""",
         (batch_id,),
     )
     connection.execute(

@@ -265,6 +265,7 @@ function BatchRail({
                         'running',
                         'completed_empty',
                         'completed_with_results',
+                        'completed_with_incomplete',
                       ].includes(run.status) && (
                         <Button
                           variant="outline"

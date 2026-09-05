@@ -81,6 +81,30 @@ describe('search runs API boundary', () => {
     ).toBe(false)
   })
 
+  it('keeps incomplete coverage terminal and requires its diagnostics', () => {
+    const { terms: _terms, ...summary } = run
+    const incomplete = {
+      ...summary,
+      status: 'completed_with_incomplete' as const,
+      incomplete_terms: [
+        {
+          position: 0,
+          term: '龙田街道',
+          reason: 'view_all_unresolved' as const,
+          result_count: 1,
+        },
+      ],
+    }
+    expect(searchRunSummarySchema.safeParse(incomplete).success).toBe(true)
+    expect(
+      searchRunSummarySchema.safeParse({
+        ...summary,
+        status: 'completed_with_incomplete',
+      }).success,
+    ).toBe(false)
+    expect(isActiveSearchRun(incomplete.status)).toBe(false)
+  })
+
   it('validates structured failure reasons and contradictory pairs', () => {
     const { terms: _terms, ...summary } = run
     const reason = 'search_results_incompatible' as const

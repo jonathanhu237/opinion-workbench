@@ -75,6 +75,7 @@ function runBadgeVariant(status: SearchRunStatus) {
   if (isActiveSearchRun(status)) return 'default' as const
   if (
     status === 'completed_empty' ||
+    status === 'completed_with_incomplete' ||
     status === 'cancelled' ||
     status === 'login_required' ||
     status === 'manual_challenge_required'

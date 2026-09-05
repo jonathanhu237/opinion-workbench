@@ -5,6 +5,11 @@ from dataclasses import dataclass
 from typing import Literal
 
 CheckpointBasis = Literal["explicit", "legacy_inferred", "mixed", "unknown"]
+COMPLETED_RUN_STATUSES = {
+    "completed_with_results",
+    "completed_empty",
+    "completed_with_incomplete",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,7 +40,7 @@ def legacy_prefix(run: sqlite3.Row, terms: list[sqlite3.Row]) -> int | None:
         type(position) is not int or not 0 <= position < len(terms)
     ):
         return None
-    if run["status"] in {"completed_with_results", "completed_empty"}:
+    if run["status"] in COMPLETED_RUN_STATUSES:
         return len(terms) if position == len(terms) - 1 else None
     return position or 0
 
@@ -59,7 +64,7 @@ def backfill_legacy_completions(connection: sqlite3.Connection, timestamp: str) 
             continue
         proof = (
             "legacy_run_succeeded"
-            if run["status"] in {"completed_with_results", "completed_empty"}
+            if run["status"] in COMPLETED_RUN_STATUSES
             else "legacy_next_term_started"
         )
         for position in range(prefix):
@@ -148,7 +153,7 @@ def item_checkpoint(
             expected_proof = (
                 (
                     "legacy_run_succeeded"
-                    if run["status"] in {"completed_with_results", "completed_empty"}
+                    if run["status"] in COMPLETED_RUN_STATUSES
                     else "legacy_next_term_started"
                 )
                 if prefix is not None
@@ -188,7 +193,7 @@ def item_checkpoint(
                 next_position,
             }:
                 return unavailable
-            if run["status"] in {"completed_with_results", "completed_empty"} and (
+            if run["status"] in COMPLETED_RUN_STATUSES and (
                 next_position != len(terms)
             ):
                 return unavailable

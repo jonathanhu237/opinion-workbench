@@ -84,7 +84,9 @@ const searchBatchItemSchema = z
     const runStatus = value.latest_attempt?.run.status
     const runActive = runStatus === 'queued' || runStatus === 'running'
     const runSuccess =
-      runStatus === 'completed_with_results' || runStatus === 'completed_empty'
+      runStatus === 'completed_with_results' ||
+      runStatus === 'completed_empty' ||
+      runStatus === 'completed_with_incomplete'
     if (
       (value.latest_attempt === null) !== (value.attempt_count === 0) ||
       (value.latest_attempt !== null &&
