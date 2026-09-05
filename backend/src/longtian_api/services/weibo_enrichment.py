@@ -1,9 +1,10 @@
 """Selected-post lookups owned by the project and bounded upstream acquisition."""
 
 import asyncio
+import json
 import time
 from collections import Counter
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 
@@ -21,13 +22,62 @@ from longtian_api.services.gallery_component import (
 from longtian_api.services.media_inventory import media_inventory
 from longtian_api.services.native_browser_contracts import BrowserUnavailable
 from longtian_api.services.weibo_dom import document, text_of
-from longtian_api.services.weibo_media import transfer_media
+from longtian_api.services.weibo_media import allowed_media_url, transfer_media
 
 
 class WeiboAccessError(Exception):
     def __init__(self, outcome):
         super().__init__(outcome)
         self.outcome = outcome
+
+
+MAX_REDIRECT_HOPS = 5
+
+
+def _request_timeout(value, cap):
+    if value is None:
+        return cap
+    if type(value) in (int, float):
+        return min(float(value), cap)
+    if isinstance(value, list):
+        values = [float(item) for item in value if item is not None]
+        return min([cap, *values]) if values else cap
+    return cap
+
+
+def _safe_redirect_target(base_url, location):
+    if not isinstance(location, str) or not location or len(location) > 2048:
+        return None
+    target = urljoin(base_url, location)
+    try:
+        parts = urlsplit(target)
+    except ValueError:
+        return None
+    if (
+        parts.scheme != "https"
+        or parts.username is not None
+        or parts.password is not None
+        or parts.port not in (None, 443)
+        or any(ord(char) <= 32 for char in target)
+    ):
+        return None
+    return target
+
+
+def _can_follow_redirect(stage, current_url, target_url):
+    try:
+        current = urlsplit(current_url)
+        target = urlsplit(target_url)
+    except ValueError:
+        return False
+    if current.hostname != target.hostname:
+        return False
+    if stage == "media":
+        return allowed_media_url(target_url)
+    path = target.path.lower()
+    if path == "/login" or path.startswith("/login/"):
+        return False
+    return target.hostname in {"weibo.com", "www.weibo.com", "m.weibo.cn"}
 
 
 class WeiboEnricher:
@@ -120,9 +170,10 @@ class WeiboEnricher:
                 follow_redirects=False,
                 trust_env=False,
             ) as client:
+                network_requests = 0
 
                 async def request_fetch(request: UpstreamRequest):
-                    nonlocal detail_payload
+                    nonlocal detail_payload, network_requests
                     expected = (
                         f"https://weibo.com/ajax/statuses/show?id={content_id}"
                         "&isGetLongText=true"
@@ -136,58 +187,105 @@ class WeiboEnricher:
                     ):
                         headers.pop("Cookie", None)
                         headers.pop("cookie", None)
-                    await self.before_request()
-                    async with client.stream(
-                        request.method,
-                        request.url,
-                        headers=headers,
-                        content=request.body,
-                        # Redirects must return through the broker as a
-                        # response. Following them inside httpx would hide
-                        # hops from the request budget and could cross the
-                        # credential boundary before classification.
-                        follow_redirects=False,
-                    ) as response:
-                        limit = (
-                            1024 * 1024
-                            if request.stage == "detail"
-                            else budget.max_total_bytes
-                        )
-                        raw = bytearray()
-                        overflow = False
-                        async for chunk in response.aiter_bytes(chunk_size=64 * 1024):
-                            if len(raw) + len(chunk) > limit:
-                                overflow = True
-                                break
-                            raw.extend(chunk)
-                        body = bytes(raw)
-                        response_headers = dict(response.headers)
-                        if overflow and response.status_code < 400:
-                            body = b""
-                            response_headers["x-longtian-error"] = (
-                                "detail_limit"
-                                if request.stage == "detail"
-                                else "media_limit"
-                            )
-                        value = body
-                        if request.stage == "detail" and response.status_code < 400:
-                            try:
-                                value = response.json()
-                            except (ValueError, UnicodeError):
-                                value = body
-                            if isinstance(value, dict):
-                                detail_payload = value
-                        return UpstreamResponse(
-                            status_code=response.status_code,
-                            url=str(response.url),
-                            headers=response_headers,
-                            body=value,
-                            history=tuple(
-                                (item.status_code, str(item.url))
-                                for item in response.history
+                    current_url = request.url
+                    current_headers = headers
+                    current_body = request.body
+                    history = []
+                    for _ in range(MAX_REDIRECT_HOPS + 1):
+                        if network_requests >= 64:
+                            raise ComponentError("request_limit")
+                        network_requests += 1
+                        await self.before_request()
+                        async with client.stream(
+                            request.method,
+                            current_url,
+                            headers=current_headers,
+                            content=current_body,
+                            # The broker deliberately streams each hop itself;
+                            # this keeps response bodies bounded and makes
+                            # every redirect visible to the application budget.
+                            follow_redirects=False,
+                            timeout=_request_timeout(
+                                request.timeout,
+                                10 if request.stage == "detail" else 15,
                             ),
-                            cookies=dict(response.cookies.items()),
-                        )
+                        ) as response:
+                            limit = (
+                                1024 * 1024
+                                if request.stage == "detail"
+                                else budget.max_total_bytes
+                            )
+                            raw = bytearray()
+                            overflow = False
+                            async for chunk in response.aiter_bytes(
+                                chunk_size=64 * 1024
+                            ):
+                                if len(raw) + len(chunk) > limit:
+                                    overflow = True
+                                    break
+                                raw.extend(chunk)
+                            body = bytes(raw)
+                            response_headers = dict(response.headers)
+                            if overflow and response.status_code < 400:
+                                body = b""
+                                response_headers["x-longtian-error"] = (
+                                    "detail_limit"
+                                    if request.stage == "detail"
+                                    else "media_limit"
+                                )
+                            result = UpstreamResponse(
+                                status_code=response.status_code,
+                                url=str(response.url),
+                                headers=response_headers,
+                                body=body,
+                                cookies=dict(response.cookies.items()),
+                            )
+                        location = result.headers.get("location")
+                        target = _safe_redirect_target(current_url, location)
+                        if not (
+                            request.allow_redirects
+                            and 300 <= result.status_code < 400
+                            and target is not None
+                            and _can_follow_redirect(request.stage, current_url, target)
+                        ):
+                            result = UpstreamResponse(
+                                status_code=result.status_code,
+                                url=result.url,
+                                headers=result.headers,
+                                body=result.body,
+                                history=tuple(history) + result.history,
+                                cookies=result.cookies,
+                            )
+                            value = result.body
+                            if request.stage == "detail" and result.status_code < 400:
+                                try:
+                                    value = json.loads(result.body)
+                                except (ValueError, UnicodeError):
+                                    value = result.body
+                                if isinstance(value, dict):
+                                    detail_payload = value
+                                if value is not result.body:
+                                    result = UpstreamResponse(
+                                        status_code=result.status_code,
+                                        url=result.url,
+                                        headers=result.headers,
+                                        body=value,
+                                        history=result.history,
+                                        cookies=result.cookies,
+                                    )
+                            return result
+                        history.append((result.status_code, target))
+                        current_url = target
+                        current_body = None
+                        current_host = (urlsplit(current_url).hostname or "").lower()
+                        current_headers = dict(headers)
+                        if request.stage == "media" and not (
+                            current_host == "weibo.com"
+                            or current_host.endswith(".weibo.com")
+                        ):
+                            current_headers.pop("Cookie", None)
+                            current_headers.pop("cookie", None)
+                    raise ComponentError("redirect_limit")
 
                 if not from_checkpoint:
                     parsed = await self.parser.extract(
@@ -321,11 +419,22 @@ class WeiboEnricher:
                 "platform_blocked_or_rate_limited",
             }:
                 self._manual_target_url = content_url
-            return EnrichmentWorkerResult(error.outcome)
+            return EnrichmentWorkerResult(
+                error.outcome,
+                diagnostic=_worker_diagnostic(error.outcome),
+            )
         except BrowserUnavailable:
-            return EnrichmentWorkerResult("browser_unavailable")
+            return EnrichmentWorkerResult(
+                "browser_unavailable",
+                diagnostic=_worker_diagnostic(
+                    "parser_failed", stage="browser", basis="transport"
+                ),
+            )
         except (TimeoutError, httpx.TimeoutException):
-            return EnrichmentWorkerResult("timed_out")
+            return EnrichmentWorkerResult(
+                "timed_out",
+                diagnostic=_worker_diagnostic("parser_failed", basis="transport"),
+            )
         except ComponentError as error:
             known = {
                 "content_unavailable",
@@ -346,7 +455,12 @@ class WeiboEnricher:
                 diagnostic=_component_diagnostic(error),
             )
         except (httpx.HTTPError, ValueError):
-            return EnrichmentWorkerResult("structure_changed")
+            return EnrichmentWorkerResult(
+                "structure_changed",
+                diagnostic=_worker_diagnostic(
+                    "parser_failed", basis="upstream_exception"
+                ),
+            )
 
 
 def _diagnostic(value):
@@ -356,6 +470,41 @@ def _diagnostic(value):
         return AcquisitionDiagnostic.model_validate(value)
     except (TypeError, ValueError):
         return None
+
+
+def _worker_diagnostic(outcome, *, stage="detail", basis="upstream_exception"):
+    allowed_outcomes = {
+        "access_denied",
+        "asset_blocked",
+        "asset_unavailable",
+        "content_unavailable",
+        "login_required",
+        "manual_challenge_required",
+        "media_limit",
+        "media_redirect",
+        "parser_failed",
+        "platform_blocked_or_rate_limited",
+        "structure_changed",
+    }
+    return AcquisitionDiagnostic(
+        stage=stage if stage in ("detail", "media", "browser") else "detail",
+        outcome=outcome if outcome in allowed_outcomes else "parser_failed",
+        status_code=None,
+        basis=basis
+        if basis
+        in {
+            "http_status",
+            "explicit_platform_evidence",
+            "login_redirect",
+            "platform_payload",
+            "browser_dom_evidence",
+            "upstream_exception",
+            "transport",
+        }
+        else "upstream_exception",
+        asset_position=None,
+        target="selected_post",
+    )
 
 
 def _component_diagnostic(error):

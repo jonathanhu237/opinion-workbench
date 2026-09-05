@@ -20,6 +20,17 @@ def test_upstream_classification_requires_trusted_redirect_or_platform_evidence(
     )
     assert _classify_response(arbitrary, stage="detail") == "access_denied"
 
+    misleading = BridgeResponse(
+        {
+            "kind": "response",
+            "status_code": 403,
+            "url": "https://weibo.com/ajax/statuses/show?id=3600375418559878",
+            "headers": {"Location": "https://untrusted.example/challenge"},
+            "body": {"encoding": "base64", "value": ""},
+        }
+    )
+    assert _classify_response(misleading, stage="detail") == "access_denied"
+
     login = BridgeResponse(
         {
             "kind": "response",

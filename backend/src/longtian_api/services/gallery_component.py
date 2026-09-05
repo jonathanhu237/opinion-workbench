@@ -50,6 +50,10 @@ class UpstreamRequest:
     body: bytes | None = field(default=None, repr=False)
     allow_redirects: bool = True
     media_index: int | None = None
+    stream: bool = True
+    timeout: object = field(default=None, repr=False)
+    verify: bool = True
+    proxies: Mapping[str, str] = field(default_factory=dict, repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -519,14 +523,40 @@ class GalleryComponent:
             type(media_index) is not int or not 0 <= media_index <= 128
         ):
             raise ComponentError("invalid_request")
+        stream = message.get("stream", True)
+        allow_redirects = message.get("allow_redirects", True)
+        verify = message.get("verify", True)
+        proxies = message.get("proxies", {})
+        if type(stream) is not bool or type(allow_redirects) is not bool:
+            raise ComponentError("invalid_request")
+        if verify is not True or proxies not in (None, {}):
+            raise ComponentError("unsupported_request_options")
+        timeout = message.get("timeout")
+        if timeout is not None:
+            if type(timeout) in (int, float):
+                if not 0 < float(timeout) <= 120:
+                    raise ComponentError("invalid_request")
+            elif isinstance(timeout, list) and len(timeout) == 2:
+                if any(
+                    item is not None
+                    and (type(item) not in (int, float) or not 0 < float(item) <= 120)
+                    for item in timeout
+                ):
+                    raise ComponentError("invalid_request")
+            else:
+                raise ComponentError("invalid_request")
         return UpstreamRequest(
             stage=stage,
             method=method,
             url=url,
             headers=headers,
             body=body,
-            allow_redirects=bool(message.get("allow_redirects", True)),
+            allow_redirects=allow_redirects,
             media_index=media_index,
+            stream=stream,
+            timeout=timeout,
+            verify=verify,
+            proxies=proxies or {},
         )
 
     @staticmethod

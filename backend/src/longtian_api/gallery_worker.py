@@ -183,6 +183,27 @@ class BridgeResponse:
         self.close()
 
 
+def _normalize_timeout(value):
+    if value is None:
+        return None
+    if type(value) in (int, float):
+        value = float(value)
+        if 0 < value <= 120:
+            return value
+        raise ValueError("invalid timeout")
+    if isinstance(value, (tuple, list)) and len(value) == 2:
+        normalized = []
+        for item in value:
+            if item is None:
+                normalized.append(None)
+                continue
+            if type(item) not in (int, float) or not 0 < float(item) <= 120:
+                raise ValueError("invalid timeout")
+            normalized.append(float(item))
+        return normalized
+    raise ValueError("invalid timeout")
+
+
 class BridgeSession:
     """A requests-compatible session whose network calls go to the parent."""
 
@@ -212,6 +233,18 @@ class BridgeSession:
 
         # Let requests merge session defaults, cookies, params and body before
         # handing the exact prepared request to the owning application.
+        stream = kwargs.pop("stream", False)
+        timeout = kwargs.pop("timeout", None)
+        verify = kwargs.pop("verify", True)
+        proxies = kwargs.pop("proxies", None)
+        allow_redirects = kwargs.pop("allow_redirects", True)
+        if type(stream) is not bool or type(allow_redirects) is not bool:
+            raise ValueError("invalid request options")
+        if type(verify) is not bool or not verify:
+            raise ValueError("unsupported TLS options")
+        if proxies not in (None, {}):
+            raise ValueError("unsupported proxy options")
+        timeout = _normalize_timeout(timeout)
         request = requests.Request(
             method=method,
             url=url,
@@ -221,6 +254,8 @@ class BridgeSession:
             params=kwargs.pop("params", None),
             cookies=kwargs.pop("cookies", None),
         )
+        if kwargs:
+            raise ValueError("unsupported request options")
         prepared = self.prepare_request(request)
         headers = dict(prepared.headers)
         host = (urlsplit(prepared.url).hostname or "").lower()
@@ -239,7 +274,11 @@ class BridgeSession:
                 "url": prepared.url,
                 "headers": headers,
                 "body": base64.b64encode(body).decode("ascii") if body else None,
-                "allow_redirects": bool(kwargs.pop("allow_redirects", True)),
+                "allow_redirects": allow_redirects,
+                "stream": stream,
+                "timeout": timeout,
+                "verify": verify,
+                "proxies": {},
             }
         )
         response = BridgeResponse(receive())
@@ -249,7 +288,18 @@ class BridgeSession:
             self.media_bytes += len(response.content)
             if response.headers.get("x-longtian-error") == "media_limit":
                 self.media_bytes = self.max_media_bytes
-        self.cookies.update(response.cookies)
+        # Only account cookies explicitly issued by the Weibo account host.
+        # CDN and unrelated response cookies must never become future account
+        # credentials, even if the upstream response exposes them.
+        if host == "weibo.com" or host.endswith(".weibo.com"):
+            for cookie in response.cookies:
+                if cookie.name in ("SUB", "SUBP"):
+                    self.cookies.set(
+                        cookie.name,
+                        cookie.value,
+                        domain=".weibo.com",
+                        path="/",
+                    )
         return response
 
 
@@ -277,7 +327,9 @@ def _challenge_from_response(response):
     else:
         body = raw.decode("utf-8", errors="ignore").lower()
     headers = " ".join(
-        f"{key}:{value}" for key, value in response.headers.items()
+        f"{key}:{value}"
+        for key, value in response.headers.items()
+        if key.lower() not in {"location", "set-cookie", "content-location"}
     ).lower()
     evidence = body + " " + headers
     if any(
