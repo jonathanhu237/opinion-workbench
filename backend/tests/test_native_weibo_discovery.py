@@ -34,6 +34,8 @@ def card(mid: str, body: str, *, next_url: str | None = None) -> str:
 
 
 def omitted_page(term: str) -> str:
+    # Verified against the rendered page: #pl_feedlist_index .m-error contains
+    # the omission text and the "查看全部搜索结果" link.
     encoded = quote_plus(term)
     return f"""<div id="pl_feedlist_index" class="main-full">
       <div class="m-error">
