@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import { useState } from 'react'
 import { Link } from 'react-router'
 
 import { Badge } from '@/components/ui/badge'
@@ -319,6 +320,7 @@ export function ReportDetails({
   onSourcePage,
   onSectionPage,
   onSection,
+  sourcesOpen = true,
 }: {
   report: ReportRun
   sourceOffset: number
@@ -327,12 +329,15 @@ export function ReportDetails({
   onSourcePage: (offset: number) => void
   onSectionPage: (offset: number) => void
   onSection: (id: number | null) => void
+  sourcesOpen?: boolean
 }) {
   const active = isActiveReport(report.status)
+  const [sourcesExpanded, setSourcesExpanded] = useState(sourcesOpen)
   const sources = useQuery({
     queryKey: [...TOPIC_REPORTS_QUERY_KEY, 'sources', report.id, sourceOffset],
     queryFn: ({ signal }) =>
       fetchReportSources(report.id, signal, sourceOffset),
+    enabled: sourcesExpanded,
     retry: false,
     refetchInterval: active ? 1000 : false,
   })
@@ -427,105 +432,118 @@ export function ReportDetails({
           </>
         )}
       </section>
-      <details className="rounded-lg border p-3" open>
+      <details
+        className="rounded-lg border p-3"
+        open={sourcesExpanded}
+        onToggle={(event) => setSourcesExpanded(event.currentTarget.open)}
+      >
         <summary className="min-h-8 cursor-pointer font-medium">
           报告来源与相关性
         </summary>
-        <p className="mt-2 text-sm leading-6 text-muted-foreground">
-          这是首次发现时间范围和当时的证据，不是事件发生日期。没有可用分析的内容不会自动重做；重试会继续使用本次报告的内容。
-        </p>
-        {sources.isPending ? (
-          <p role="status">正在读取报告来源…</p>
-        ) : sources.isError ? (
-          <ReadError
-            error={sources.error}
-            retry={() => void sources.refetch()}
-          />
-        ) : (
+        {sourcesExpanded && (
           <>
-            <ul className="divide-y">
-              {sources.data.items.map((item) => (
-                <li
-                  key={item.source.result_id}
-                  className="min-w-0 space-y-2 py-4"
-                >
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h5 className="text-sm font-medium wrap-anywhere">
-                      原文 {item.position + 1} · {item.source.title}
-                    </h5>
-                    <Badge variant="outline">{sourceLabels[item.state]}</Badge>
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    首次发现 {formatEvidenceDate(item.first_seen_at)} ·
-                    原文发布时间 {item.source.published_at_text || '未知'}
-                  </p>
-                  {item.evidence_coverage && (
-                    <p className="text-xs text-muted-foreground">
-                      内容：{evidenceLevelLabels[item.evidence_coverage.level]}{' '}
-                      · 文字
-                      {item.evidence_coverage.text_complete ? '完整' : '部分'} ·
-                      图片 {item.evidence_coverage.image.ready}/
-                      {item.evidence_coverage.image.expected} · 视频{' '}
-                      {item.evidence_coverage.video.ready}/
-                      {item.evidence_coverage.video.expected}
-                      {item.evidence_coverage.image.unknown +
-                        item.evidence_coverage.video.unknown +
-                        item.evidence_coverage.audio.unknown >
-                      0
-                        ? ' · 部分媒体尚未确认'
-                        : ''}
-                    </p>
-                  )}
-                  {item.judgment && (
-                    <p className="text-sm leading-6 wrap-anywhere whitespace-pre-wrap">
-                      {item.judgment.reason}
-                    </p>
-                  )}
-                  {item.unavailable_reason && (
-                    <p className="text-sm text-muted-foreground">
-                      {unavailableLabels[item.unavailable_reason]}
-                      ；因此没有判断为相关或不相关。
-                    </p>
-                  )}
-                  {item.error && (
-                    <p className="text-sm text-destructive">
-                      {item.error.message}
-                    </p>
-                  )}
-                  <div className="flex flex-wrap items-center gap-3">
-                    <ResultSourceLink source={item.source} />
-                    <Link
-                      className={buttonVariants({
-                        variant: 'link',
-                        className: 'min-h-11',
-                      })}
-                      to={`/reports/history?result=${item.source.result_id}${item.initial_attempt_id === null ? '' : `&attempt=${item.initial_attempt_id}`}&report=${report.id}`}
-                      preventScrollReset
+            <p className="mt-2 text-sm leading-6 text-muted-foreground">
+              这是首次发现时间范围和当时的证据，不是事件发生日期。没有可用分析的内容不会自动重做；重试会继续使用本次报告的内容。
+            </p>
+            {sources.isPending ? (
+              <p role="status">正在读取报告来源…</p>
+            ) : sources.isError ? (
+              <ReadError
+                error={sources.error}
+                retry={() => void sources.refetch()}
+              />
+            ) : (
+              <>
+                <ul className="divide-y">
+                  {sources.data.items.map((item) => (
+                    <li
+                      key={item.source.result_id}
+                      className="min-w-0 space-y-2 py-4"
                     >
-                      {item.initial_attempt_id === null
-                        ? '查看内容和历史'
-                        : '查看本次初步分析'}
-                    </Link>
-                    <Link
-                      className={buttonVariants({
-                        variant: 'link',
-                        className: 'min-h-11',
-                      })}
-                      to={`/collection-runs/${item.source.source_run_id}`}
-                    >
-                      查看采集记录 #{item.source.source_run_id}
-                    </Link>
-                  </div>
-                </li>
-              ))}
-            </ul>
-            <ResultsPagination
-              label="报告来源"
-              offset={sourceOffset}
-              limit={REPORT_PAGE_SIZE}
-              total={sources.data.total}
-              onChange={onSourcePage}
-            />
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h5 className="text-sm font-medium wrap-anywhere">
+                          原文 {item.position + 1} · {item.source.title}
+                        </h5>
+                        <Badge variant="outline">
+                          {sourceLabels[item.state]}
+                        </Badge>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        首次发现 {formatEvidenceDate(item.first_seen_at)} ·
+                        原文发布时间 {item.source.published_at_text || '未知'}
+                      </p>
+                      {item.evidence_coverage && (
+                        <p className="text-xs text-muted-foreground">
+                          内容：
+                          {evidenceLevelLabels[item.evidence_coverage.level]} ·
+                          文字
+                          {item.evidence_coverage.text_complete
+                            ? '完整'
+                            : '部分'}{' '}
+                          · 图片 {item.evidence_coverage.image.ready}/
+                          {item.evidence_coverage.image.expected} · 视频{' '}
+                          {item.evidence_coverage.video.ready}/
+                          {item.evidence_coverage.video.expected}
+                          {item.evidence_coverage.image.unknown +
+                            item.evidence_coverage.video.unknown +
+                            item.evidence_coverage.audio.unknown >
+                          0
+                            ? ' · 部分媒体尚未确认'
+                            : ''}
+                        </p>
+                      )}
+                      {item.judgment && (
+                        <p className="text-sm leading-6 wrap-anywhere whitespace-pre-wrap">
+                          {item.judgment.reason}
+                        </p>
+                      )}
+                      {item.unavailable_reason && (
+                        <p className="text-sm text-muted-foreground">
+                          {unavailableLabels[item.unavailable_reason]}
+                          ；因此没有判断为相关或不相关。
+                        </p>
+                      )}
+                      {item.error && (
+                        <p className="text-sm text-destructive">
+                          {item.error.message}
+                        </p>
+                      )}
+                      <div className="flex flex-wrap items-center gap-3">
+                        <ResultSourceLink source={item.source} />
+                        <Link
+                          className={buttonVariants({
+                            variant: 'link',
+                            className: 'min-h-11',
+                          })}
+                          to={`/reports?result=${item.source.result_id}${item.initial_attempt_id === null ? '' : `&attempt=${item.initial_attempt_id}`}&report=${report.id}`}
+                          preventScrollReset
+                        >
+                          {item.initial_attempt_id === null
+                            ? '查看内容和历史'
+                            : '查看本次初步分析'}
+                        </Link>
+                        <Link
+                          className={buttonVariants({
+                            variant: 'link',
+                            className: 'min-h-11',
+                          })}
+                          to={`/collection-runs/${item.source.source_run_id}`}
+                        >
+                          查看采集记录 #{item.source.source_run_id}
+                        </Link>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+                <ResultsPagination
+                  label="报告来源"
+                  offset={sourceOffset}
+                  limit={REPORT_PAGE_SIZE}
+                  total={sources.data.total}
+                  onChange={onSourcePage}
+                />
+              </>
+            )}
           </>
         )}
       </details>

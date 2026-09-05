@@ -390,7 +390,7 @@ describe('automation run routes', () => {
     )
     expect(screen.getByRole('link', { name: /查看本轮报告/u })).toHaveAttribute(
       'href',
-      '/reports/history?report=401',
+      '/reports?report=401',
     )
     expect(screen.getAllByRole('listitem')).toHaveLength(3)
   })

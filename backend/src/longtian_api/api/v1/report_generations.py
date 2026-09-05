@@ -5,7 +5,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Request
 
 from longtian_api.api.v1.ai_settings import no_store, require_local_mutation
-from longtian_api.api.v1.results import Limit, ResourceId
+from longtian_api.api.v1.results import Limit, Offset, ResourceId
 from longtian_api.api.v1.topic_reports import OptionalId, ReportRoute
 from longtian_api.schemas.report_generations import (
     GenerationControl,
@@ -13,6 +13,8 @@ from longtian_api.schemas.report_generations import (
     GenerationEligibility,
     GenerationList,
     ReportGeneration,
+    ReportRecord,
+    ReportRecordList,
     SelectionPreview,
     SelectionPreviewRequest,
 )
@@ -44,6 +46,20 @@ def list_generations(
     service: Service, limit: Limit = 20, before_id: OptionalId = None
 ) -> GenerationList:
     return service.repository.list_generations(limit=limit, before_id=before_id)
+
+
+@router.get("/records")
+def list_report_records(
+    service: Service, limit: Limit = 20, offset: Offset = 0
+) -> ReportRecordList:
+    return service.repository.list_records(limit=limit, offset=offset)
+
+
+@router.get("/records/report/{report_id}")
+def read_report_record(
+    report_id: ResourceId, service: Service
+) -> ReportRecord | None:
+    return service.repository.read_record_by_report(report_id)
 
 
 @router.get("/eligibility")

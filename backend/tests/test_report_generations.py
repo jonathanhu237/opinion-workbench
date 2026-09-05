@@ -23,6 +23,44 @@ def generation_request(ids):
     }
 
 
+def test_report_records_projection_keeps_manual_child_in_one_row(tmp_path):
+    app, database, _, _ = api_environment(tmp_path, count=1)
+    save_body(database, 1)
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        saved(client)
+        response = client.post(
+            "/api/v1/report-generations", json=generation_request([1])
+        )
+        assert response.status_code == 202, response.text
+        client.portal.call(finish, app.state.report_generation_service)
+
+        records = client.get("/api/v1/report-generations/records")
+        record = client.get("/api/v1/report-generations/records/report/1")
+
+    assert records.status_code == 200, records.text
+    assert record.status_code == 200, record.text
+    assert records.json()["next_offset"] is None
+    assert records.json()["items"] == [
+        {
+            "record_type": "generation",
+            "record_id": 1,
+            "generation_id": 1,
+            "report_id": 1,
+            "automation_run_id": None,
+            "name": "报告 #1",
+            "trigger": "manual",
+            "status": "completed",
+            "created_at": records.json()["items"][0]["created_at"],
+            "selection_count": 1,
+            "processed_count": 1,
+            "failed_count": 0,
+            "active_count": 0,
+            "parent_report_id": None,
+        }
+    ]
+    assert record.json() == records.json()["items"][0]
+
+
 def test_one_start_reuses_three_summaries_and_analyses_seven_saved_bodies(tmp_path):
     app, _, model, media = api_environment(tmp_path, count=11)
     media.media = False

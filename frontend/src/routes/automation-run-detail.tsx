@@ -117,9 +117,8 @@ function stageLink(stage: AutomationStage) {
   if (stage.child_id === null) return null
   if (stage.name === 'collection')
     return `/collection-batches/${stage.child_id}`
-  if (stage.name === 'initial_analysis')
-    return `/reports/history?job=${stage.child_id}`
-  return `/reports/history?report=${stage.child_id}`
+  if (stage.name === 'initial_analysis') return `/reports?job=${stage.child_id}`
+  return `/reports?report=${stage.child_id}`
 }
 
 function stageLinkLabel(stage: AutomationStage) {
@@ -815,7 +814,7 @@ export function AutomationRunDetail() {
                               variant: 'secondary',
                               className: 'mt-3 min-h-11',
                             })}
-                            to={`/reports/history?report=${run.topic_report_id}`}
+                            to={`/reports?report=${run.topic_report_id}`}
                           >
                             <FileSearch aria-hidden />
                             查看本轮报告

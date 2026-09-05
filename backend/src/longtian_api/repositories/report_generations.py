@@ -13,6 +13,8 @@ from longtian_api.schemas.report_generations import (
     GenerationCreate,
     GenerationList,
     ReportGeneration,
+    ReportRecord,
+    ReportRecordList,
     SelectionPreview,
     SelectionPreviewRequest,
 )
@@ -114,6 +116,141 @@ class ReportGenerationRepository(AnalysisRepository):
                 items=[self._generation(connection, row[0]) for row in rows[:limit]],
                 next_before_id=rows[limit - 1][0] if len(rows) > limit else None,
             )
+
+    def list_records(self, *, limit=20, offset=0, report_id=None):
+        """Return one stable, time-ordered projection of every report record.
+
+        Manual generations own their child report and therefore appear once as
+        a ``generation`` row. Standalone topic reports (automatic, interval,
+        and retry) appear as ``report`` rows; a manual child is excluded by
+        the ownership join below. This keeps the UI from merging two
+        independently paginated histories and accidentally duplicating rows.
+        """
+        with self.connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT record_type, record_id, generation_id, report_id, name,
+                       automation_run_id, trigger, status, created_at, selection_count,
+                       processed_count, failed_count, active_count,
+                       parent_report_id
+                FROM (
+                  SELECT
+                    'generation' AS record_type,
+                    g.id AS record_id,
+                    g.id AS generation_id,
+                    g.report_id AS report_id,
+                    NULL AS automation_run_id,
+                    COALESCE(NULLIF(g.name, ''), '报告 #' || g.id) AS name,
+                    'manual' AS trigger,
+                    CASE WHEN g.pause_reason IS NOT NULL
+                         THEN 'paused_for_manual_action'
+                         ELSE g.status END AS status,
+                    g.created_at AS created_at,
+                    (SELECT COUNT(*) FROM content_analysis_attempts a
+                       WHERE a.job_id = g.analysis_job_id) AS selection_count,
+                    (SELECT COUNT(*) FROM content_analysis_attempts a
+                       WHERE a.job_id = g.analysis_job_id
+                       AND a.status NOT IN ('queued','acquiring','analysing'))
+                       AS processed_count,
+                    (SELECT COUNT(*) FROM content_analysis_attempts a
+                       WHERE a.job_id = g.analysis_job_id
+                       AND a.status IN ('failed','input_incomplete','unsupported',
+                                        'cancelled','interrupted')) AS failed_count,
+                    (SELECT COUNT(*) FROM content_analysis_attempts a
+                       WHERE a.job_id = g.analysis_job_id
+                       AND a.status IN ('queued','acquiring','analysing'))
+                       AS active_count,
+                    NULL AS parent_report_id
+                  FROM report_generations g
+                  UNION ALL
+                  SELECT
+                    'report' AS record_type,
+                    r.id AS record_id,
+                    NULL AS generation_id,
+                    r.id AS report_id,
+                    COALESCE(
+                      (SELECT ar.id FROM automation_runs ar
+                       WHERE ar.topic_report_id = r.id
+                       ORDER BY ar.id DESC LIMIT 1),
+                      (SELECT ar.id FROM automation_runs ar
+                       JOIN topic_report_runs parent ON parent.id = r.parent_report_id
+                       WHERE ar.topic_report_id = parent.id
+                       ORDER BY ar.id DESC LIMIT 1)
+                    ) AS automation_run_id,
+                    CASE r.trigger
+                      WHEN 'automatic' THEN '自动报告 #' || r.id
+                      WHEN 'interval' THEN '时间范围报告 #' || r.id
+                      WHEN 'retry' THEN '报告重试 #' || r.id
+                      ELSE '报告 #' || r.id
+                    END AS name,
+                    r.trigger AS trigger,
+                    r.status AS status,
+                    r.created_at AS created_at,
+                    (SELECT COUNT(*) FROM topic_report_sources s
+                       WHERE s.report_id = r.id) AS selection_count,
+                    (SELECT COUNT(*) FROM topic_report_sources s
+                       LEFT JOIN topic_report_nodes n
+                         ON n.report_id = s.report_id
+                        AND n.node_key = 'judgment:' || s.content_id
+                       WHERE s.report_id = r.id
+                       AND (s.unavailable_reason IS NOT NULL
+                            OR n.status NOT IN ('queued','running')))
+                       AS processed_count,
+                    (SELECT COUNT(*) FROM topic_report_sources s
+                       LEFT JOIN topic_report_nodes n
+                         ON n.report_id = s.report_id
+                        AND n.node_key = 'judgment:' || s.content_id
+                       WHERE s.report_id = r.id
+                       AND (s.unavailable_reason IS NOT NULL
+                            OR n.status IN ('failed','cancelled','interrupted')))
+                       AS failed_count,
+                    (SELECT COUNT(*) FROM topic_report_sources s
+                       JOIN topic_report_nodes n
+                         ON n.report_id = s.report_id
+                        AND n.node_key = 'judgment:' || s.content_id
+                       WHERE s.report_id = r.id
+                       AND s.unavailable_reason IS NULL
+                       AND n.status IN ('queued','running')) AS active_count,
+                    r.parent_report_id AS parent_report_id
+                  FROM topic_report_runs r
+                  WHERE NOT EXISTS (
+                    SELECT 1 FROM report_generations g
+                    WHERE g.report_id = r.id
+                  )
+                )
+                WHERE (? IS NULL OR report_id=?)
+                ORDER BY created_at DESC, record_type ASC, record_id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (report_id, report_id, limit + 1, offset),
+            ).fetchall()
+            values = [
+                ReportRecord(
+                    record_type=row["record_type"],
+                    record_id=row["record_id"],
+                    generation_id=row["generation_id"],
+                    report_id=row["report_id"],
+                    automation_run_id=row["automation_run_id"],
+                    name=row["name"],
+                    trigger=row["trigger"],
+                    status=row["status"],
+                    created_at=row["created_at"],
+                    selection_count=row["selection_count"],
+                    processed_count=row["processed_count"],
+                    failed_count=row["failed_count"],
+                    active_count=row["active_count"],
+                    parent_report_id=row["parent_report_id"],
+                )
+                for row in rows[:limit]
+            ]
+            return ReportRecordList(
+                items=values,
+                next_offset=offset + limit if len(rows) > limit else None,
+            )
+
+    def read_record_by_report(self, report_id):
+        page = self.list_records(limit=1, report_id=report_id)
+        return page.items[0] if page.items else None
 
     def _replay_generation(self, connection, payload):
         row = connection.execute(

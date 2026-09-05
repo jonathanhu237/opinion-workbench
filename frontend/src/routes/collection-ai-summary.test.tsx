@@ -167,7 +167,7 @@ describe('manual collection summaries', () => {
     expect(screen.queryByRole('button', { name: '生成汇总' })).toBeNull()
     expect(screen.getByRole('link', { name: '前往生成报告' })).toHaveAttribute(
       'href',
-      '/reports/new',
+      '/reports?generate=1',
     )
     expect(mockedStart).not.toHaveBeenCalled()
     first.unmount()
@@ -245,7 +245,7 @@ describe('manual collection summaries', () => {
     renderRun()
     expect(
       await screen.findByRole('link', { name: '前往生成报告' }),
-    ).toHaveAttribute('href', '/reports/new')
+    ).toHaveAttribute('href', '/reports?generate=1')
     expect(screen.queryByRole('button', { name: '生成汇总' })).toBeNull()
     expect(mockedStart).not.toHaveBeenCalled()
     expect(screen.getByText('原始搜索结果')).toBeVisible()
@@ -261,7 +261,7 @@ describe('manual collection summaries', () => {
     renderRun()
     expect(
       await screen.findByRole('link', { name: '前往生成报告' }),
-    ).toHaveAttribute('href', '/reports/new')
+    ).toHaveAttribute('href', '/reports?generate=1')
     expect(screen.queryByRole('button', { name: '生成汇总' })).toBeNull()
     expect(mockedSettings).not.toHaveBeenCalled()
     expect(screen.getByRole('link', { name: '打开原文' })).toHaveAttribute(

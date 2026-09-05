@@ -323,12 +323,14 @@ export function ResultEvidence({
   selected,
   onClose,
   asSheet = false,
+  selectionEnabled = true,
 }: {
   resultId: number
   onSelect: (result: SharedResult) => void
   selected: boolean
   onClose: () => void
   asSheet?: boolean
+  selectionEnabled?: boolean
 }) {
   const heading = useRef<HTMLHeadingElement>(null)
   const [params, setParams] = useSearchParams()
@@ -460,18 +462,20 @@ export function ResultEvidence({
             </dl>
             <div className="flex flex-wrap gap-3">
               <ResultSourceLink source={result.source} />
-              <Button
-                variant="outline"
-                className="min-h-11"
-                disabled={selected || active}
-                onClick={() => onSelect(result)}
-              >
-                {active
-                  ? '此条正在处理中'
-                  : selected
-                    ? '已选入本次报告'
-                    : '选入本次报告'}
-              </Button>
+              {selectionEnabled && (
+                <Button
+                  variant="outline"
+                  className="min-h-11"
+                  disabled={selected || active}
+                  onClick={() => onSelect(result)}
+                >
+                  {active
+                    ? '此条正在处理中'
+                    : selected
+                      ? '已选入本次报告'
+                      : '选入本次报告'}
+                </Button>
+              )}
             </div>
             {result.legacy_count > 0 && (
               <p className="text-sm text-muted-foreground">

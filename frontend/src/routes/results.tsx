@@ -466,7 +466,7 @@ export function Results({ mode }: { mode?: 'compose' | 'records' } = {}) {
                 onStarted={(generation) => {
                   setSelectedIds([])
                   navigate({
-                    pathname: '/reports/history',
+                    pathname: '/reports',
                     search: `?generation=${generation.id}`,
                   })
                   void client.invalidateQueries({

@@ -15,6 +15,7 @@ import { isoDateSchema } from '@/lib/api/search-runs'
 import { reportRunSchema } from '@/lib/api/topic-reports'
 
 export const GENERATIONS_QUERY_KEY = ['report-generations'] as const
+export const REPORT_RECORDS_QUERY_KEY = ['report-records'] as const
 const selection = z.strictObject({
   kind: z.literal('explicit'),
   result_ids: z.array(safeId).min(1).refine(uniqueIds),
@@ -122,6 +123,41 @@ export type GenerationCreate = z.infer<typeof generationCreateSchema>
 export type ReportGeneration = z.infer<typeof generationSchema>
 export type SelectionPreviewRequest = z.infer<typeof selectionPreviewRequest>
 export type SelectionPreview = z.infer<typeof selectionPreviewSchema>
+const reportRecordSchema = z.strictObject({
+  record_type: z.enum(['generation', 'report']),
+  record_id: safeId,
+  generation_id: safeId.nullable(),
+  report_id: safeId.nullable(),
+  automation_run_id: safeId.nullable(),
+  name: z.string().min(1).max(200),
+  trigger: z.enum(['manual', 'automatic', 'interval', 'retry']),
+  status: z.enum([
+    'summarising',
+    'paused_for_manual_action',
+    'reporting',
+    'completed',
+    'empty',
+    'failed',
+    'configuration_blocked',
+    'cancelled',
+    'interrupted',
+    'queued',
+    'judging',
+    'composing',
+  ]),
+  created_at: isoDateSchema,
+  selection_count: safeCount,
+  processed_count: safeCount,
+  failed_count: safeCount,
+  active_count: safeCount,
+  parent_report_id: safeId.nullable(),
+})
+const reportRecordListSchema = z.strictObject({
+  items: z.array(reportRecordSchema).max(20),
+  next_offset: safeCount.nullable(),
+})
+export type ReportRecord = z.infer<typeof reportRecordSchema>
+export type ReportRecordList = z.infer<typeof reportRecordListSchema>
 export async function createReportGeneration(input: GenerationCreate) {
   const valid = generationCreateSchema.safeParse(input)
   if (!valid.success) throw new AnalysisApiError('invalid_request')
@@ -192,6 +228,34 @@ export async function fetchReportGenerations(
   )
     throw new AnalysisApiError('invalid_response')
   return page
+}
+
+export async function fetchReportRecords(signal: AbortSignal, offset = 0) {
+  if (!safeCount.safeParse(offset).success)
+    throw new AnalysisApiError('invalid_request')
+  return decodeAnalysis(
+    reportRecordListSchema,
+    await analysisRequest(
+      `/report-generations/records?limit=20&offset=${offset}`,
+      {
+        signal,
+      },
+    ),
+  )
+}
+
+export async function fetchReportRecordByReport(
+  reportId: number,
+  signal: AbortSignal,
+) {
+  if (!safeId.safeParse(reportId).success)
+    throw new AnalysisApiError('invalid_request')
+  return decodeAnalysis(
+    reportRecordSchema.nullable(),
+    await analysisRequest(`/report-generations/records/report/${reportId}`, {
+      signal,
+    }),
+  )
 }
 
 export async function fetchGenerationEligibility(signal: AbortSignal) {

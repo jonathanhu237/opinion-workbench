@@ -353,7 +353,7 @@ function GenerationDetails({ value }: { value: ReportGeneration }) {
                 <div key={item.id} className="flex flex-col gap-1 text-sm">
                   <Link
                     className="underline underline-offset-4"
-                    to={`/reports/history?generation=${value.id}&result=${item.source.result_id}&attempt=${item.id}`}
+                    to={`/reports?generation=${value.id}&result=${item.source.result_id}&attempt=${item.id}`}
                   >
                     {item.source.title || `内容 #${item.source.result_id}`}
                   </Link>

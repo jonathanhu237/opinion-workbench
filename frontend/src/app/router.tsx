@@ -99,16 +99,25 @@ export const appRoutes: RouteObject[] = [
         element: <LegacyResultsRedirect />,
       },
       {
+        path: 'reports',
+        hydrateFallbackElement: (
+          <p role="status" className="text-sm text-muted-foreground">
+            正在加载舆情报告…
+          </p>
+        ),
+        lazy: async () => {
+          const { ReportHub } = await import('@/routes/reports-page')
+          return { Component: ReportHub }
+        },
+      },
+      {
         path: 'reports/new',
         hydrateFallbackElement: (
           <p role="status" className="text-sm text-muted-foreground">
             正在加载生成报告…
           </p>
         ),
-        lazy: async () => {
-          const { ReportGeneration } = await import('@/routes/results')
-          return { Component: ReportGeneration }
-        },
+        element: <LegacyReportRedirect mode="generate" />,
       },
       {
         path: 'reports/history',
@@ -117,10 +126,7 @@ export const appRoutes: RouteObject[] = [
             正在加载报告记录…
           </p>
         ),
-        lazy: async () => {
-          const { ReportRecords } = await import('@/routes/results')
-          return { Component: ReportRecords }
-        },
+        element: <LegacyReportRedirect mode="history" />,
       },
       {
         path: 'ai-settings',
@@ -174,13 +180,29 @@ export const appRoutes: RouteObject[] = [
 
 export function legacyResultsDestination(search: string) {
   const params = new URLSearchParams(search)
-  const records = isReportRecordContext(params)
   params.delete('view')
+  if (!isReportRecordContext(new URLSearchParams(search))) {
+    params.set('generate', '1')
+  }
   const nextSearch = params.toString()
   return {
-    pathname: records ? '/reports/history' : '/reports/new',
+    pathname: '/reports',
     search: nextSearch ? `?${nextSearch}` : '',
   }
+}
+
+function LegacyReportRedirect({ mode }: { mode: 'generate' | 'history' }) {
+  const location = useLocation()
+  const params = new URLSearchParams(location.search)
+  params.delete('view')
+  if (mode === 'generate') params.set('generate', '1')
+  const search = params.toString()
+  return (
+    <Navigate
+      replace
+      to={{ pathname: '/reports', search: search ? `?${search}` : '' }}
+    />
+  )
 }
 
 function LegacyResultsRedirect() {

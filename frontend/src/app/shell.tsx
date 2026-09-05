@@ -1,13 +1,11 @@
 import {
   CircleUserRound,
   ClipboardList,
-  ChevronRight,
   FileSearch,
   ListChecks,
   Settings2,
-  type LucideIcon,
 } from 'lucide-react'
-import { useEffect, useReducer, useRef, useState } from 'react'
+import { useEffect, useReducer, useRef } from 'react'
 import { NavLink, Outlet, useLocation, useOutletContext } from 'react-router'
 
 import {
@@ -20,9 +18,6 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarMenuSub,
-  SidebarMenuSubButton,
-  SidebarMenuSubItem,
   SidebarProvider,
   SidebarSeparator,
   SidebarTrigger,
@@ -53,6 +48,7 @@ const pageTitles: Record<string, string> = {
   '/automation-tasks': '自动任务',
   '/reports/new': '生成报告',
   '/reports/history': '报告记录',
+  '/reports': '舆情报告',
   '/settings': '设置',
   '/results': '生成报告',
   '/ai-settings': 'AI 配置',
@@ -95,84 +91,13 @@ function ProductIdentity() {
   )
 }
 
-type NavigationChild = {
-  label: string
-  to: string
-  isActive: boolean
-}
-
-function SidebarExpandableGroup({
-  id,
-  label,
-  icon: Icon,
-  open,
-  active,
-  onToggle,
-  items,
-}: {
-  id: string
-  label: string
-  icon: LucideIcon
-  open: boolean
-  active: boolean
-  onToggle: () => void
-  items: readonly NavigationChild[]
-}) {
-  const { setOpenMobile } = useSidebar()
-
-  return (
-    <SidebarMenuItem>
-      <SidebarMenuButton
-        type="button"
-        aria-expanded={open}
-        aria-controls={`sidebar-${id}-submenu`}
-        onClick={onToggle}
-        isActive={active}
-        className="min-h-11 gap-3 rounded-lg px-3 text-sidebar-foreground/78 transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground md:min-h-10 data-active:bg-sidebar-primary data-active:text-sidebar-primary-foreground data-active:shadow-[inset_3px_0_0_var(--sidebar-ring)]"
-      >
-        <Icon className="size-4" aria-hidden />
-        <span>{label}</span>
-        <ChevronRight
-          className={`ml-auto size-4 transition-transform ${open ? 'rotate-90' : ''}`}
-          aria-hidden
-        />
-      </SidebarMenuButton>
-      <SidebarMenuSub id={`sidebar-${id}-submenu`} hidden={!open}>
-        {items.map((item) => (
-          <SidebarMenuSubItem key={item.to}>
-            <SidebarMenuSubButton
-              render={
-                <NavLink
-                  to={item.to}
-                  end
-                  onClick={() => setOpenMobile(false)}
-                />
-              }
-              isActive={item.isActive}
-            >
-              <span>{item.label}</span>
-            </SidebarMenuSubButton>
-          </SidebarMenuSubItem>
-        ))}
-      </SidebarMenuSub>
-    </SidebarMenuItem>
-  )
-}
-
 function PrimaryNavigation() {
   const location = useLocation()
   const { setOpenMobile } = useSidebar()
-  const reportsActive =
-    location.pathname.startsWith('/reports') || location.pathname === '/results'
   const settingsActive =
     location.pathname.startsWith('/settings') ||
     location.pathname === '/ai-settings' ||
     location.pathname === '/media-settings'
-  const [reportsOpen, setReportsOpen] = useState(reportsActive)
-
-  useEffect(() => {
-    if (reportsActive) setReportsOpen(true)
-  }, [reportsActive])
 
   const navigationItems = [
     {
@@ -194,6 +119,14 @@ function PrimaryNavigation() {
       isActive:
         location.pathname.startsWith('/collection-runs') ||
         location.pathname.startsWith('/collection-batches'),
+    },
+    {
+      label: '舆情报告',
+      to: '/reports',
+      icon: FileSearch,
+      isActive:
+        location.pathname.startsWith('/reports') ||
+        location.pathname === '/results',
     },
   ] as const
 
@@ -219,26 +152,6 @@ function PrimaryNavigation() {
   return (
     <SidebarMenu>
       {navigationItems.map(renderLink)}
-      <SidebarExpandableGroup
-        id="reports"
-        label="舆情报告"
-        icon={FileSearch}
-        open={reportsOpen}
-        active={reportsActive}
-        onToggle={() => setReportsOpen((current) => !current)}
-        items={[
-          {
-            label: '生成报告',
-            to: '/reports/new',
-            isActive: location.pathname === '/reports/new',
-          },
-          {
-            label: '报告记录',
-            to: '/reports/history',
-            isActive: location.pathname === '/reports/history',
-          },
-        ]}
-      />
       <SidebarMenuItem>
         <SidebarMenuButton
           render={

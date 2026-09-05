@@ -173,7 +173,7 @@ describe('Longtian public opinion application', () => {
     expect(screen.queryByText('今日头条')).toBeNull()
   })
 
-  it('keeps report destinations grouped and settings as one unified page', async () => {
+  it('keeps reports as one destination and settings as one unified page', async () => {
     const user = userEvent.setup()
     const { router } = renderRoute()
     await waitFor(() =>
@@ -184,18 +184,17 @@ describe('Longtian public opinion application', () => {
       within(navigation)
         .getAllByRole('link')
         .map((link) => link.textContent),
-    ).toEqual(['平台账号', '监控规则', '舆情爬取', '自动任务', '设置'])
-    const reportGroup = within(navigation).getByRole('button', {
-      name: '舆情报告',
-    })
-    expect(reportGroup).toHaveAttribute('aria-expanded', 'false')
-    await user.click(reportGroup)
+    ).toEqual([
+      '平台账号',
+      '监控规则',
+      '舆情爬取',
+      '舆情报告',
+      '自动任务',
+      '设置',
+    ])
     expect(
-      within(navigation).getByRole('link', { name: '生成报告' }),
-    ).toHaveAttribute('href', '/reports/new')
-    expect(
-      within(navigation).getByRole('link', { name: '报告记录' }),
-    ).toHaveAttribute('href', '/reports/history')
+      within(navigation).getByRole('link', { name: '舆情报告' }),
+    ).toHaveAttribute('href', '/reports')
     await user.click(within(navigation).getByRole('link', { name: '设置' }))
     expect(
       await screen.findByRole('heading', { name: '设置', level: 1 }),

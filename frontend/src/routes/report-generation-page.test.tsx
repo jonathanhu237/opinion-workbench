@@ -105,6 +105,7 @@ function renderPageWithHistory() {
   const router = createMemoryRouter(
     [
       { path: '/reports/new', element: <ReportGeneration /> },
+      { path: '/reports', element: <p>舆情报告</p> },
       { path: '/reports/history', element: <p>报告记录</p> },
     ],
     { initialEntries: ['/reports/new'] },
@@ -184,7 +185,7 @@ it('takes the user to report records after a generation is accepted', async () =
   await user.click(screen.getByRole('button', { name: '生成报告' }))
   await user.click(await screen.findByRole('button', { name: '确认生成报告' }))
   await waitFor(() => {
-    expect(router.state.location.pathname).toBe('/reports/history')
+    expect(router.state.location.pathname).toBe('/reports')
     expect(router.state.location.search).toBe('?generation=23')
   })
 })

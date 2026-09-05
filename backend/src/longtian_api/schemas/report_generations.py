@@ -170,3 +170,43 @@ class ReportGeneration(StrictModel):
 class GenerationList(StrictModel):
     items: list[ReportGeneration]
     next_before_id: PositiveId | None
+
+
+ReportRecordStatus = Literal[
+    "summarising",
+    "paused_for_manual_action",
+    "reporting",
+    "completed",
+    "empty",
+    "failed",
+    "configuration_blocked",
+    "cancelled",
+    "interrupted",
+    "queued",
+    "judging",
+    "composing",
+]
+
+
+class ReportRecord(StrictModel):
+    """Small, unified projection used by the report list."""
+
+    record_type: Literal["generation", "report"]
+    record_id: PositiveId
+    generation_id: PositiveId | None
+    report_id: PositiveId | None
+    automation_run_id: PositiveId | None
+    name: str = Field(min_length=1, max_length=200)
+    trigger: Literal["manual", "automatic", "interval", "retry"]
+    status: ReportRecordStatus
+    created_at: UtcTimestamp
+    selection_count: Count
+    processed_count: Count
+    failed_count: Count
+    active_count: Count
+    parent_report_id: PositiveId | None
+
+
+class ReportRecordList(StrictModel):
+    items: list[ReportRecord]
+    next_offset: Count | None

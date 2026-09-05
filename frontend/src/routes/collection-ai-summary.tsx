@@ -383,7 +383,7 @@ export function CollectionAISummary({
         </h2>
         {historyOnly ? (
           <Link
-            to="/reports/new"
+            to="/reports?generate=1"
             className={buttonVariants({ className: 'min-h-11 sm:min-h-8' })}
           >
             前往生成报告
@@ -405,7 +405,10 @@ export function CollectionAISummary({
       </div>
       <p className="text-sm leading-6 text-muted-foreground">
         旧版分析只针对本次采集，历史报告继续保留。
-        <Link to="/reports/new" className="ml-1 underline underline-offset-4">
+        <Link
+          to="/reports?generate=1"
+          className="ml-1 underline underline-offset-4"
+        >
           前往生成报告查看选材与报告
         </Link>
       </p>
