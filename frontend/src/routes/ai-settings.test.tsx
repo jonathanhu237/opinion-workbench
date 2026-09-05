@@ -36,7 +36,7 @@ const empty: Settings = {
   revision: 0,
 }
 const key = 'fake-form-key-sentinel'
-const savedKeyMask = '********************'
+const savedKeyMask = '****'
 const fetchSettings = vi.mocked(fetchAISettings)
 const saveSettings = vi.mocked(saveAISettings)
 const testConnection = vi.mocked(testAIConnection)
