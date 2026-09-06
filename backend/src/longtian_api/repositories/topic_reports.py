@@ -399,6 +399,7 @@ class TopicReportRepository:
                             {
                                 "text": item["text"],
                                 "section_ids": [keys[key] for key in item["child_ids"]],
+                                "source_ids": item.get("source_ids"),
                             }
                             for item in output["items"]
                         ],
@@ -1428,6 +1429,17 @@ class TopicReportRepository:
             keys = {child.key for child in children}
             if any(not set(item["child_ids"]) <= keys for item in output["items"]):
                 raise ValueError("invalid child citations")
+            by_key = {child.key: child for child in children}
+            for item in output["items"]:
+                if item.get("source_ids") is not None:
+                    allowed = {
+                        source_id
+                        for key in item["child_ids"]
+                        for paragraph in by_key[key].items
+                        for source_id in paragraph.source_ids
+                    }
+                    if not set(item["source_ids"]) <= allowed:
+                        raise ValueError("invalid paragraph source citations")
             expected = canonical_hash(
                 {
                     "schema": "topic-membership-v1",
@@ -1451,6 +1463,11 @@ class TopicReportRepository:
             output_hash=row["output_hash"],
             membership_hash=expected,
             source_count=len(members),
+            items=[
+                {"text": item["text"], "source_ids": item["source_ids"]}
+                for item in output["items"]
+                if item.get("source_ids")
+            ],
         )
 
     def children(self, node_ids):

@@ -8,6 +8,8 @@ The provider lease and canonical graph proof belong to core, not this module.
 
 import hashlib
 import json
+import logging
+import re
 from collections.abc import Sequence
 from typing import TypeVar
 
@@ -56,7 +58,17 @@ from longtian_api.services.ai_client import (
 )
 from longtian_api.services.ai_errors import AIError
 
-ENGINE_VERSION = "topic-text-engine-v1"
+ENGINE_VERSION = "topic-text-engine-v4-event-prose"
+
+_EVENT_WRITING_CONTRACT = """报告按事件组织，而不是逐条帖子或逐种媒体罗列。
+同一事件只写一个items条目，将事实陈述、时间地点、相关图片观察和待核实事项简洁整合在该条目中；不要拆成文字一段、图片一段、执法指控再一段。
+不同来源描述同一事件时合并叙述，并保留所有直接支持该事件的source_ids；跨子节的同一事件也必须合并，不要照搬子节的拆段。
+同文或近似文案的重复发布不等于多起事件，也不等于多个独立信源或多方佐证；没有独立证据时只称来源反映，不推断发布者数量。
+当前输入没有可核验的发布者身份信息，子节中的作者数量推断也不可信。统一用“来源反映”“材料称”，不要写“多位发布者”“多名发帖人”“不同发布者”或“多个独立信源”；需要说明时写“发布者身份未核实”。
+来源编号只放在source_ids数组中，overview和text正文严禁出现source_id、source_ids、result_id、result_ids、section_id或child_id等内部字段名及编号注释。
+同一来源可能报道多起不同事件，不能只因source_ids相同就强行合并；不同时间地点、事实矛盾或后续进展必须保留区别，不得为了去重删掉新事实。
+图片只保留对事件有意义的观察，不逐一罗列车辆、井盖、衣物等无关细节。摘要概括主题，正文不重复摘要措辞。
+"""
 
 _COMMON_CONTRACT = """你只根据已保存的文字材料进行主题判断与报告写作。
 不获取新的原文或媒体。
@@ -74,14 +86,21 @@ _OUTPUT_CONTRACTS: dict[NodeKind, str] = {
         "逐条判断主题相关性；证据不足时保留uncertain，不能当作irrelevant。"
     ),
     "leaf": (
-        '结构：{"overview":"1至2000字","items":[{"text":"1至2000字",'
+        _EVENT_WRITING_CONTRACT
+        + '结构：{"overview":"1至2000字","items":[{"text":"1至2000字",'
         '"source_ids":[来源result_id]}]}。items为1至16项；每段引用1至8个不重复来源。'
         "只分析提供的相关来源，所有提供的来源都必须至少在一个段落中被引用。"
     ),
     "overview": (
-        '结构：{"overview":"1至2000字","items":[{"text":"1至2000字",'
-        '"child_ids":[提供的子节key]}]}。items为1至16项；每段引用1至8个不重复子节。'
-        "概括提供的子节，不输出原始来源ID；详细证据保留在子节，不凭概述创造新事实。"
+        _EVENT_WRITING_CONTRACT
+        + '严格JSON结构示例：{"overview":"报告摘要","items":[{"text":"一段分析",'
+        '"source_ids":[123]}]}。示例123仅用于说明整数类型，实际必须替换为输入中的来源编号。'
+        "仅输出overview和items；每项仅包含text和source_ids，不输出child_ids或section_ids。"
+        "overview与每项text均为1至2000字；items为1至16项，source_ids为1至128个不重复整数，不能留空。"
+        "根据子节items中的文字及source_ids归纳，每段只引用直接支持本段论述的具体来源，"
+        "不得复制整个子节的全部来源。不同事件分段，不能把堵路来源引用到电费等无关段落。"
+        "source_ids必须从输入children的items中的source_ids选择，逐层保留真实来源编号。"
+        "不凭概述创造新事实，不输出URL。"
     ),
 }
 _Model = TypeVar("_Model", bound=StrictModel)
@@ -311,7 +330,13 @@ def take_overview(
                 key=f"overview:{level}:{position}",
                 payload={
                     "children": [
-                        {"key": child.key, "overview": child.overview}
+                        {
+                            "key": child.key,
+                            "overview": child.overview,
+                            "items": [
+                                item.model_dump(mode="json") for item in child.items
+                            ],
+                        }
                         for child in admitted
                     ]
                 },
@@ -402,7 +427,7 @@ def output_digest(kind: NodeKind, output: object) -> Sha256:
         {
             "kind": kind,
             "schema_version": REPORT_SCHEMA_VERSION,
-            "output": validated.model_dump(mode="json"),
+            "output": validated.model_dump(mode="json", exclude_none=True),
         }
     )
 
@@ -411,8 +436,56 @@ def _validate_output(
     call: PreparedCall, value: object, *, api_key: SecretStr, usage: AIUsage | None
 ) -> ValidatedOutput:
     models = {"judgment": Judgment, "leaf": LeafDocument, "overview": OverviewDocument}
+    if (
+        call.kind == "overview"
+        and isinstance(value, dict)
+        and isinstance(value.get("items"), list)
+    ):
+        # Child membership is redundant with the source identity. Derive graph
+        # edges deterministically; the model only chooses paragraph sources.
+        children = decode_model_json(call.user_text)["children"]
+        child_sources = {
+            child["key"]: {
+                source_id
+                for item in child.get("items", [])
+                for source_id in item["source_ids"]
+            }
+            for child in children
+        }
+        value = {
+            **value,
+            "items": [
+                {
+                    **item,
+                    "child_ids": [
+                        key
+                        for key, ids in child_sources.items()
+                        if any(
+                            type(source_id) is int and source_id in ids
+                            for source_id in item["source_ids"]
+                        )
+                    ],
+                }
+                if isinstance(item, dict)
+                and "child_ids" not in item
+                and isinstance(item.get("source_ids"), list)
+                else item
+                for item in value["items"]
+            ],
+        }
     try:
         output = models[call.kind].model_validate(value)
+    except ValidationError as error:
+        # Log only schema error codes, never provider text, keys or evidence.
+        logging.getLogger(__name__).warning(
+            "Report %s output schema rejected: %s",
+            call.kind,
+            [
+                entry["type"]
+                for entry in error.errors(include_input=False, include_context=False)
+            ],
+        )
+        raise AIAnalysisError("schema", "invalid_schema", usage) from None
     except _INVALID_INPUT:
         raise AIAnalysisError("schema", "invalid_schema", usage) from None
     if isinstance(output, LeafDocument):
@@ -423,11 +496,32 @@ def _validate_output(
         cited = {child_id for item in output.items for child_id in item.child_ids}
         if not cited <= set(call.child_ids):
             raise AIAnalysisError("schema", "invalid_citations", usage)
+        children = {
+            child["key"]: child
+            for child in decode_model_json(call.user_text)["children"]
+        }
+        for item in output.items:
+            allowed = {
+                source_id
+                for key in item.child_ids
+                for paragraph in children[key].get("items", [])
+                for source_id in paragraph["source_ids"]
+            }
+            if not item.source_ids or not set(item.source_ids) <= allowed:
+                raise AIAnalysisError("schema", "invalid_citations", usage)
     prose = (
         [output.reason]
         if isinstance(output, Judgment)
         else [output.overview, *(item.text for item in output.items)]
     )
+    if call.kind != "judgment" and any(
+        re.search(r"\b(?:source|result|section|child)_ids?\b", text, re.IGNORECASE)
+        or re.search(r"(?:多[位名个]|不同)(?:发布者|发帖人)|多个独立信源", text)
+        for text in prose
+    ):
+        # Enforce the neutral report-writing contract, not a guessed author
+        # count. Never silently rewrite a provider's accepted saved prose.
+        raise AIAnalysisError("schema", "invalid_schema", usage)
     for text in prose:
         check_credential(text, api_key, usage)
     return ValidatedOutput(

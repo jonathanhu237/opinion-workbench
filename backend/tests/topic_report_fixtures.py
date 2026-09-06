@@ -48,13 +48,22 @@ class TextPipelineClient:
         payload = json.loads(user[0]["text"] if isinstance(user, list) else user)
         if "children" in payload:
             stage = "overview"
+            source_ids = list(
+                dict.fromkeys(
+                    source_id
+                    for child in payload["children"]
+                    for item in child["items"]
+                    for source_id in item["source_ids"]
+                )
+            )
             answer = {
                 "overview": "各章节归纳的来源陈述，尚未核实。",
                 "items": [
                     {
                         "text": "来源反映的问题及时间仍需核实。",
-                        "child_ids": [child["key"] for child in payload["children"]],
+                        "source_ids": source_ids[offset : offset + 128],
                     }
+                    for offset in range(0, len(source_ids), 128)
                 ],
             }
         elif "sources" in payload:

@@ -320,11 +320,19 @@ class LeafDocument(StrictModel):
 class OverviewParagraph(StrictModel):
     text: Prose
     child_ids: list[NodeKey] = Field(min_length=1, max_length=8)
+    # None is readable only for reports saved before paragraph-level citations.
+    source_ids: list[PositiveId] | None = Field(
+        default=None, min_length=1, max_length=128
+    )
 
     @model_validator(mode="after")
     def unique_citations(self) -> Self:
         if len(self.child_ids) != len(set(self.child_ids)):
             raise ValueError("repeated citations")
+        if self.source_ids is not None and len(self.source_ids) != len(
+            set(self.source_ids)
+        ):
+            raise ValueError("repeated source citations")
         return self
 
 
@@ -333,12 +341,18 @@ class OverviewDocument(StrictModel):
     items: list[OverviewParagraph] = Field(min_length=1, max_length=16)
 
 
+class CitedText(StrictModel):
+    text: Prose
+    source_ids: list[PositiveId] = Field(min_length=1, max_length=128)
+
+
 class ChildOverview(StrictModel):
     key: NodeKey
     overview: Prose
     output_hash: Sha256
     membership_hash: Sha256
     source_count: PositiveId
+    items: list[CitedText] = Field(default_factory=list, max_length=16)
 
     @model_validator(mode="after")
     def composition_child(self) -> Self:

@@ -321,6 +321,38 @@ def test_callback_failure_never_strands_a_queue_and_later_arrivals_stay_out(tmp_
     asyncio.run(run())
 
 
+def test_retry_after_engine_upgrade_recomputes_without_touching_saved_reports(
+    tmp_path, monkeypatch
+):
+    async def run():
+        db, initial, reports, ai, model, worker, _ = environment(tmp_path, count=2)
+        with monkeypatch.context() as old:
+            for module in (
+                "longtian_api.services.topic_report_engine",
+                "longtian_api.services.topic_reports",
+                "longtian_api.repositories.topic_reports",
+            ):
+                old.setattr(
+                    f"{module}.ENGINE_VERSION", "topic-text-engine-v2-citations"
+                )
+            _, original = await analyse_all(db, initial, reports)
+        baseline = len(worker.calls), model.counts["initial"]
+        newer = await reports.retry(original.id, retry_request(original))
+        await finish(reports)
+        newer = reports.repository.read(newer.id)
+        assert newer.status == "completed" and newer.error is None
+        assert newer.nodes.judgments.reused == 0
+        assert newer.nodes.composition.reused == 0
+        assert newer.usage.total.attempted_requests == 3
+        assert (len(worker.calls), model.counts["initial"]) == baseline
+        assert reports.repository.read(original.id) == original
+        await initial.shutdown()
+        await reports.shutdown()
+        await ai.shutdown()
+
+    asyncio.run(run())
+
+
 def test_override_provider_change_unknown_usage_and_report_only_calls(tmp_path):
     async def run():
         db, initial, reports, ai, model, worker, _ = environment(tmp_path, count=2)

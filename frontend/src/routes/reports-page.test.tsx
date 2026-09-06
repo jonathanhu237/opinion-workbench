@@ -21,13 +21,22 @@ import {
   fetchReportGeneration,
   previewReportSelection,
 } from '@/lib/api/report-generations'
-import { fetchResults } from '@/lib/api/results'
+import {
+  fetchResults,
+  fetchResult,
+  fetchResultOrigins,
+  fetchResultLegacyAnalyses,
+} from '@/lib/api/results'
 import { ReportHub } from '@/routes/reports-page'
-import { fetchAnalysisJobItems } from '@/lib/api/content-analyses'
+import {
+  fetchAnalysisJobItems,
+  fetchResultAnalyses,
+} from '@/lib/api/content-analyses'
 
 vi.mock('@/lib/api/content-analyses', async (original) => ({
   ...(await original<typeof import('@/lib/api/content-analyses')>()),
   fetchAnalysisJobItems: vi.fn(),
+  fetchResultAnalyses: vi.fn(),
 }))
 
 vi.mock('@/lib/api/ai-settings', async (original) => ({
@@ -41,6 +50,9 @@ vi.mock('@/lib/api/analysis-settings', async (original) => ({
 vi.mock('@/lib/api/results', async (original) => ({
   ...(await original<typeof import('@/lib/api/results')>()),
   fetchResults: vi.fn(),
+  fetchResult: vi.fn(),
+  fetchResultOrigins: vi.fn(),
+  fetchResultLegacyAnalyses: vi.fn(),
 }))
 vi.mock('@/lib/api/report-generations', async (original) => ({
   ...(await original<typeof import('@/lib/api/report-generations')>()),
@@ -128,6 +140,43 @@ beforeEach(() => {
 })
 
 describe('舆情报告统一页面', () => {
+  it('opens details inside the selection dialog and returns with selection intact', async () => {
+    vi.mocked(fetchResult).mockResolvedValue(resultFixture())
+    const empty = { items: [], total: 0, limit: 20, offset: 0 }
+    vi.mocked(fetchResultOrigins).mockResolvedValue(empty)
+    vi.mocked(fetchResultLegacyAnalyses).mockResolvedValue(empty)
+    vi.mocked(fetchResultAnalyses).mockResolvedValue(empty)
+    const user = userEvent.setup()
+    renderPage()
+    await user.click(screen.getByRole('button', { name: '生成报告' }))
+    const checkbox = await screen.findByRole('checkbox', {
+      name: '选择内容：合成采集内容 11',
+    })
+    await user.click(checkbox)
+    await user.click(
+      screen.getByRole('button', { name: '查看内容详情：合成采集内容 11' }),
+    )
+    expect(
+      await screen.findByRole('dialog', { name: '内容详情' }),
+    ).toBeVisible()
+    expect(screen.getAllByRole('dialog')).toHaveLength(1)
+    expect(document.querySelector('[data-slot="sheet-content"]')).toBeNull()
+    await user.click(screen.getByRole('button', { name: '返回选材' }))
+    expect(
+      await screen.findByRole('dialog', { name: '生成报告' }),
+    ).toBeVisible()
+    expect(
+      screen.getByRole('checkbox', { name: '选择内容：合成采集内容 11' }),
+    ).toBeChecked()
+    await user.click(
+      screen.getByRole('button', { name: '查看内容详情：合成采集内容 11' }),
+    )
+    await user.keyboard('{Escape}')
+    expect(
+      await screen.findByRole('dialog', { name: '生成报告' }),
+    ).toBeVisible()
+    expect(createReportGeneration).not.toHaveBeenCalled()
+  })
   it('shows failed historic empty generations as failures without a report action', async () => {
     vi.mocked(fetchReportRecords).mockResolvedValue({
       items: [

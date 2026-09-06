@@ -324,6 +324,7 @@ export function ResultEvidence({
   onClose,
   asSheet = false,
   selectionEnabled = true,
+  closeLabel = '关闭详情',
 }: {
   resultId: number
   onSelect: (result: SharedResult) => void
@@ -331,6 +332,7 @@ export function ResultEvidence({
   onClose: () => void
   asSheet?: boolean
   selectionEnabled?: boolean
+  closeLabel?: string
 }) {
   const heading = useRef<HTMLHeadingElement>(null)
   const [params, setParams] = useSearchParams()
@@ -416,7 +418,7 @@ export function ResultEvidence({
             来源与单条总结
           </h2>
           <Button variant="ghost" className="min-h-11" onClick={onClose}>
-            关闭详情
+            {closeLabel}
           </Button>
         </div>
       </CardHeader>

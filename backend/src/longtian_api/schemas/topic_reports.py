@@ -460,6 +460,9 @@ class ReportDocument(StrictModel):
 class OverviewParagraph(StrictModel):
     text: str = Field(min_length=1, max_length=2000)
     section_ids: list[PositiveId] = Field(min_length=1, max_length=8)
+    source_ids: list[PositiveId] | None = Field(
+        default=None, min_length=1, max_length=128
+    )
     _prose = field_validator("text")(valid_prose)
 
 

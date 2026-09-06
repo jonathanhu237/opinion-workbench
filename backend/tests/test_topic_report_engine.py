@@ -165,6 +165,7 @@ def child(position=0, *, key=None, count=8, overview="子节概述，来源陈�
         output_hash=digest(f"output-{position}"),
         membership_hash=digest(f"membership-{position}"),
         source_count=count,
+        items=[{"text": overview, "source_ids": [position + 1]}],
     )
 
 
@@ -182,7 +183,13 @@ def answer_for(kind):
     key, ids = ("source_ids", [1, 2]) if kind == "leaf" else ("child_ids", ["leaf:0"])
     return {
         "overview": "来源陈述未核实。",
-        "items": [{"text": "时间与地点仍未知。", key: ids}],
+        "items": [
+            {
+                "text": "时间与地点仍未知。",
+                key: ids,
+                **({"source_ids": [1]} if kind == "overview" else {}),
+            }
+        ],
     }
 
 
@@ -202,6 +209,21 @@ def saved_output(call, output):
         output_hash=output.output_hash,
         output=output.output,
     )
+
+
+@pytest.mark.parametrize("kind", ["leaf", "overview"])
+def test_report_writing_groups_events_without_erasing_distinct_facts(kind):
+    call = call_for(kind)
+    assert "同一事件只写一个items条目" in call.system_text
+    assert "跨子节的同一事件也必须合并" in call.system_text
+    assert "不等于多个独立信源或多方佐证" in call.system_text
+    assert "不能只因source_ids相同就强行合并" in call.system_text
+    assert "不得为了去重删掉新事实" in call.system_text
+    assert call.system_text.endswith(context().prompt.instructions)
+    old = saved_output(call, parsed(kind)).model_copy(
+        update={"engine_version": "topic-text-engine-v2-citations"}
+    )
+    assert validate_reuse(call, old, api_key=CONFIGURATION.api_key) is None
 
 
 def test_full_saved_text_uncertainty_and_exact_prompt_without_media_or_urls():
@@ -264,7 +286,7 @@ def test_invalid_shape_prose_and_kind_preserve_usage(kind, change):
     if change == "extra":
         answer["source_url"] = "https://example.com/invented"
     elif change == "wrong_union":
-        answer = answer_for("leaf" if kind != "leaf" else "judgment")
+        answer = answer_for("leaf" if kind == "judgment" else "judgment")
     else:
         answer[text_key] = {
             "wrong_type": 42,
@@ -277,6 +299,34 @@ def test_invalid_shape_prose_and_kind_preserve_usage(kind, change):
         parsed(kind, answer)
     assert error.value.code == "invalid_schema" and error.value.usage == USAGE
     assert str(error.value) == "invalid_schema"
+
+
+@pytest.mark.parametrize("kind", ["leaf", "overview"])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "来源反映（source_ids: 1, 2）。",
+        "来源反映（result_id: 1）。",
+        "多位发布者反映道路堵塞。",
+        "不同发布者反映道路堵塞。",
+        "多个独立信源证实该事件。",
+    ],
+)
+def test_report_prose_rejects_internal_ids_and_unsupported_publisher_counts(kind, text):
+    answer = answer_for(kind)
+    answer["items"][0]["text"] = text
+    with pytest.raises(AIAnalysisError) as error:
+        parsed(kind, answer)
+    assert error.value.code == "invalid_schema" and error.value.usage == USAGE
+
+
+@pytest.mark.parametrize("kind", ["leaf", "overview"])
+def test_report_preserves_event_facts_and_neutral_publisher_uncertainty(kind):
+    answer = answer_for(kind)
+    answer["items"][0]["text"] = (
+        "来源反映3月5日道路堵塞，6日仍未解决。发布者身份未核实。"
+    )
+    assert parsed(kind, answer).output.items[0].text == answer["items"][0]["text"]
 
 
 @pytest.mark.parametrize("kind", ["judgment", "leaf", "overview"])
@@ -371,6 +421,53 @@ def test_overview_does_not_require_all_children_to_be_repeated_in_prose():
     assert output.output.items[0].child_ids == ["leaf:0"]
 
 
+@pytest.mark.parametrize("ids", [None, [999], [2]])
+def test_overview_requires_sources_from_the_cited_child(ids):
+    answer = answer_for("overview")
+    if ids is None:
+        answer["items"][0].pop("source_ids")
+    else:
+        answer["items"][0]["source_ids"] = ids
+    with pytest.raises(AIAnalysisError) as error:
+        parsed("overview", answer)
+    assert error.value.code == "invalid_citations"
+
+
+def test_legacy_overview_hash_remains_readable():
+    answer = answer_for("overview")
+    answer["items"][0].pop("source_ids")
+    assert engine.output_digest("overview", answer) == canonical_hash(
+        {
+            "kind": "overview",
+            "schema_version": engine.REPORT_SCHEMA_VERSION,
+            "output": answer,
+        }
+    )
+
+
+def test_overview_preserves_per_paragraph_sources():
+    answer = answer_for("overview")
+    answer["items"] = [
+        {"text": "堵路", "child_ids": ["leaf:0"], "source_ids": [1]},
+        {"text": "电费", "child_ids": ["leaf:1"], "source_ids": [2]},
+    ]
+    assert parsed("overview", answer).output.model_dump() == answer
+
+
+def test_overview_derives_graph_edges_from_provider_source_ids():
+    answer = {
+        "overview": "摘要",
+        "items": [
+            {"text": "堵路", "source_ids": [1]},
+            {"text": "电费", "source_ids": [2]},
+        ],
+    }
+    output = parsed("overview", answer).output
+    assert output.items[0].child_ids == ["leaf:0"]
+    assert output.items[1].child_ids == ["leaf:1"]
+    assert output.items[0].source_ids == [1]
+
+
 @pytest.mark.parametrize("instructions", ["自定义😀\n指令", "客" * 8000])
 @pytest.mark.parametrize("kind", ["judgment", "leaf"])
 def test_exact_escaped_unicode_character_limit_includes_custom_prompt(
@@ -458,7 +555,8 @@ def test_multilevel_overview_reduces_carries_and_never_expands_descendant_ids(co
                 payload = json.loads(plan.call.user_text)
                 assert set(payload) == {"children"}
                 assert all(
-                    set(item) == {"key", "overview"} for item in payload["children"]
+                    set(item) == {"key", "overview", "items"}
+                    for item in payload["children"]
                 )
                 assert 2 <= len(payload["children"]) <= 8
                 assert not plan.call.source_ids and plan.call.max_tokens == 4096

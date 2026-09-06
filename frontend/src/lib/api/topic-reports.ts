@@ -347,6 +347,7 @@ const paragraphSchema = z.strictObject({
 const childParagraphSchema = z.strictObject({
   text: prose(2000),
   section_ids: z.array(safeId).min(1).max(8).refine(uniqueIds),
+  source_ids: z.array(safeId).min(1).max(128).refine(uniqueIds).nullish(),
 })
 const nodeStatusSchema = z.enum([
   'queued',

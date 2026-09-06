@@ -88,6 +88,8 @@ import {
   TOPIC_REPORTS_QUERY_KEY,
 } from '@/lib/api/topic-reports'
 import { ResultEvidence } from '@/routes/results-evidence'
+import { ResultReadingDetail } from '@/routes/result-reading-detail'
+import { ReadableReport } from '@/routes/readable-report'
 import { ResultsJobs } from '@/routes/results-jobs'
 import {
   formatEvidenceDate,
@@ -95,7 +97,6 @@ import {
 } from '@/routes/results-presenters'
 import {
   ReportCoverage,
-  ReportDetails,
   reportStatusLabels,
 } from '@/routes/results-report-details'
 import { searchPlatformPresenters } from '@/routes/search-run-presenters'
@@ -519,6 +520,46 @@ function ReportGenerationWizard({
     () => restored?.report_prompt ?? { mode: 'default' },
   )
   const [detailId, setDetailId] = useState<number | null>(null)
+  const [detailParams, setDetailParams] = useSearchParams()
+  const savedDetailParams = useRef(new URLSearchParams())
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const detailReturn = useRef<{ element: HTMLElement | null; scroll: number }>({
+    element: null,
+    scroll: 0,
+  })
+  const openDetail = (id: number) => {
+    savedDetailParams.current = new URLSearchParams(detailParams)
+    detailReturn.current = {
+      element: document.activeElement as HTMLElement | null,
+      scroll: dialogRef.current?.scrollTop ?? 0,
+    }
+    setDetailId(id)
+  }
+  const closeDetail = () => {
+    setDetailId(null)
+    setDetailParams(
+      (current) => {
+        const next = new URLSearchParams(current)
+        for (const key of [
+          'attempt',
+          'attempt_offset',
+          'origin_offset',
+          'legacy_offset',
+        ]) {
+          const previous = savedDetailParams.current.get(key)
+          if (previous === null) next.delete(key)
+          else next.set(key, previous)
+        }
+        return next
+      },
+      { replace: true },
+    )
+    window.setTimeout(() => {
+      detailReturn.current.element?.focus({ preventScroll: true })
+      if (dialogRef.current)
+        dialogRef.current.scrollTop = detailReturn.current.scroll
+    }, 0)
+  }
   const [bulkError, setBulkError] = useState<string | null>(null)
   const [storageError, setStorageError] = useState(false)
   const [activeError, setActiveError] = useState<string | null>(null)
@@ -653,6 +694,10 @@ function ReportGenerationWizard({
 
   const close = (next: boolean) => {
     if (start.isPending) return
+    if (!next && detailId !== null) {
+      closeDetail()
+      return
+    }
     onOpenChange(next)
   }
 
@@ -660,275 +705,294 @@ function ReportGenerationWizard({
     <>
       <Dialog open={open} onOpenChange={close}>
         <DialogContent
+          ref={dialogRef}
           className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-5xl"
           showCloseButton={!start.isPending}
         >
-          <DialogHeader>
-            <DialogTitle>生成报告</DialogTitle>
-            <DialogDescription>
-              先固定选材，再填写两套提示词；只有最后一步才会开始处理。
-            </DialogDescription>
-          </DialogHeader>
-          <StepIndicator step={step} />
-          {intent && (
-            <p
-              className="rounded-lg border border-warning/40 bg-warning/5 p-3 text-sm"
-              role="status"
-            >
-              上次提交结果不确定。本次选材和提示词已经固定，再次提交会重放同一个请求，不会重复创建。
-            </p>
-          )}
-          {step === 1 && (
-            <div className="space-y-4">
-              <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  variant="outline"
-                  disabled={bulk.isPending || intent !== null}
-                  onClick={() => bulk.mutate()}
-                >
-                  {bulk.isPending
-                    ? '正在形成选材快照…'
-                    : '选中全部未纳入报告的内容'}
-                </Button>
-                <span className="text-sm text-muted-foreground">
-                  未纳入报告{' '}
-                  {eligibility.data
-                    ? eligibility.data.pending + eligibility.data.failed
-                    : '—'}{' '}
-                  条（包含曾失败内容）
-                </span>
-                {ids.length > 0 && (
-                  <Button
-                    variant="ghost"
-                    disabled={intent !== null || start.isPending}
-                    onClick={() => updateSelection([])}
-                  >
-                    清空选择
-                  </Button>
-                )}
+          {detailId !== null && (
+            <>
+              <DialogTitle className="sr-only">内容详情</DialogTitle>
+              <div className="mx-auto w-full max-w-3xl">
+                <ResultReadingDetail
+                  key={detailId}
+                  resultId={detailId}
+                  onClose={closeDetail}
+                />
               </div>
-              {bulkError && (
-                <p role="alert" className="text-sm text-destructive">
-                  {bulkError}
+            </>
+          )}
+          <div hidden={detailId !== null}>
+            <div className="flex flex-col gap-4">
+              {detailId === null && (
+                <DialogHeader>
+                  <DialogTitle>生成报告</DialogTitle>
+                  <DialogDescription>
+                    先固定选材，再填写两套提示词；只有最后一步才会开始处理。
+                  </DialogDescription>
+                </DialogHeader>
+              )}
+              <StepIndicator step={step} />
+              {intent && (
+                <p
+                  className="rounded-lg border border-warning/40 bg-warning/5 p-3 text-sm"
+                  role="status"
+                >
+                  上次提交结果不确定。本次选材和提示词已经固定，再次提交会重放同一个请求，不会重复创建。
                 </p>
               )}
-              <SelectionLibrary
-                open={open && step === 1}
-                selectedIds={ids}
-                onSelectionChange={updateSelection}
-                onOpenResult={setDetailId}
-              />
-            </div>
-          )}
-          {step === 2 && settings.data && (
-            <PromptChoiceField
-              id="report-wizard-initial-prompt"
-              label="内容分析提示词"
-              description="用于理解每条内容并生成单条总结；已有可用总结会复用，修改只影响本次生成。"
-              value={initialPrompt}
-              onChange={setInitialPrompt}
-              defaultInstructions={settings.data.initial_prompt.instructions}
-              disabled={intent !== null || start.isPending}
-              error={!initialValid ? '请输入有效提示词。' : undefined}
-            />
-          )}
-          {step === 2 && settings.isPending && (
-            <p role="status">正在读取默认提示词…</p>
-          )}
-          {step === 2 && settings.isError && (
-            <p role="alert" className="text-sm text-destructive">
-              无法读取默认提示词，请刷新后重试。
-            </p>
-          )}
-          {step === 3 && (
-            <div className="space-y-5">
-              <Field data-invalid={!name.trim()}>
-                <FieldLabel htmlFor="report-wizard-name">报告名称</FieldLabel>
-                <Input
-                  id="report-wizard-name"
-                  value={name}
-                  onChange={(event) => setName(event.target.value)}
-                  maxLength={200}
-                  disabled={intent !== null || start.isPending}
-                  aria-invalid={!name.trim()}
-                />
-                <FieldError
-                  errors={!name.trim() ? [{ message: '请输入报告名称。' }] : []}
-                />
-              </Field>
-              {settings.data ? (
+              {step === 1 && (
+                <div className="space-y-4">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      variant="outline"
+                      disabled={bulk.isPending || intent !== null}
+                      onClick={() => bulk.mutate()}
+                    >
+                      {bulk.isPending
+                        ? '正在形成选材快照…'
+                        : '选中全部未纳入报告的内容'}
+                    </Button>
+                    <span className="text-sm text-muted-foreground">
+                      未纳入报告{' '}
+                      {eligibility.data
+                        ? eligibility.data.pending + eligibility.data.failed
+                        : '—'}{' '}
+                      条（包含曾失败内容）
+                    </span>
+                    {ids.length > 0 && (
+                      <Button
+                        variant="ghost"
+                        disabled={intent !== null || start.isPending}
+                        onClick={() => updateSelection([])}
+                      >
+                        清空选择
+                      </Button>
+                    )}
+                  </div>
+                  {bulkError && (
+                    <p role="alert" className="text-sm text-destructive">
+                      {bulkError}
+                    </p>
+                  )}
+                  <SelectionLibrary
+                    open={open && step === 1}
+                    selectedIds={ids}
+                    onSelectionChange={updateSelection}
+                    onOpenResult={openDetail}
+                  />
+                </div>
+              )}
+              {step === 2 && settings.data && (
                 <PromptChoiceField
-                  id="report-wizard-report-prompt"
-                  label="报告总结提示词"
-                  description="用于汇总已选内容并组织整份报告；修改只影响本次生成。"
-                  value={reportPrompt}
-                  onChange={setReportPrompt}
-                  defaultInstructions={settings.data.report_prompt.instructions}
+                  id="report-wizard-initial-prompt"
+                  label="内容分析提示词"
+                  description="用于理解每条内容并生成单条总结；已有可用总结会复用，修改只影响本次生成。"
+                  value={initialPrompt}
+                  onChange={setInitialPrompt}
+                  defaultInstructions={
+                    settings.data.initial_prompt.instructions
+                  }
                   disabled={intent !== null || start.isPending}
-                  error={!reportValid ? '请输入有效提示词。' : undefined}
+                  error={!initialValid ? '请输入有效提示词。' : undefined}
                 />
-              ) : settings.isPending ? (
+              )}
+              {step === 2 && settings.isPending && (
                 <p role="status">正在读取默认提示词…</p>
-              ) : (
+              )}
+              {step === 2 && settings.isError && (
                 <p role="alert" className="text-sm text-destructive">
                   无法读取默认提示词，请刷新后重试。
                 </p>
               )}
-              <dl className="grid gap-3 rounded-lg border p-3 text-sm sm:grid-cols-4">
-                <div>
-                  <dt className="text-muted-foreground">选中总数</dt>
-                  <dd className="text-lg font-medium">{ids.length}</dd>
+              {step === 3 && (
+                <div className="space-y-5">
+                  <Field data-invalid={!name.trim()}>
+                    <FieldLabel htmlFor="report-wizard-name">
+                      报告名称
+                    </FieldLabel>
+                    <Input
+                      id="report-wizard-name"
+                      value={name}
+                      onChange={(event) => setName(event.target.value)}
+                      maxLength={200}
+                      disabled={intent !== null || start.isPending}
+                      aria-invalid={!name.trim()}
+                    />
+                    <FieldError
+                      errors={
+                        !name.trim() ? [{ message: '请输入报告名称。' }] : []
+                      }
+                    />
+                  </Field>
+                  {settings.data ? (
+                    <PromptChoiceField
+                      id="report-wizard-report-prompt"
+                      label="报告总结提示词"
+                      description="用于汇总已选内容并组织整份报告；修改只影响本次生成。"
+                      value={reportPrompt}
+                      onChange={setReportPrompt}
+                      defaultInstructions={
+                        settings.data.report_prompt.instructions
+                      }
+                      disabled={intent !== null || start.isPending}
+                      error={!reportValid ? '请输入有效提示词。' : undefined}
+                    />
+                  ) : settings.isPending ? (
+                    <p role="status">正在读取默认提示词…</p>
+                  ) : (
+                    <p role="alert" className="text-sm text-destructive">
+                      无法读取默认提示词，请刷新后重试。
+                    </p>
+                  )}
+                  <dl className="grid gap-3 rounded-lg border p-3 text-sm sm:grid-cols-4">
+                    <div>
+                      <dt className="text-muted-foreground">选中总数</dt>
+                      <dd className="text-lg font-medium">{ids.length}</dd>
+                    </div>
+                    <div>
+                      <dt className="text-muted-foreground">待分析</dt>
+                      <dd className="text-lg font-medium">
+                        {preview.data?.counts.pending ?? '—'}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-muted-foreground">已有总结</dt>
+                      <dd className="text-lg font-medium">
+                        {preview.data?.counts.already_summarized ?? '—'}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className="text-muted-foreground">失败重试</dt>
+                      <dd className="text-lg font-medium">
+                        {preview.data?.counts.failed ?? '—'}
+                      </dd>
+                    </div>
+                  </dl>
+                  {preview.isFetching && (
+                    <p role="status">正在核对当前选材状态…</p>
+                  )}
+                  {preview.isError && (
+                    <p role="alert" className="text-sm text-destructive">
+                      无法确认当前选材状态，请返回第一步刷新后重试。
+                    </p>
+                  )}
+                  {preview.data?.counts.active ? (
+                    <p role="alert" className="text-sm text-destructive">
+                      有 {preview.data.counts.active}{' '}
+                      条内容正在处理中，请刷新内容库后再提交。
+                    </p>
+                  ) : null}
+                  <div className="rounded-lg bg-muted/50 p-3 text-sm">
+                    <p>当前模型：{provider.data?.model ?? '未配置'}</p>
+                    {provider.data?.base_url && (
+                      <p className="mt-1 wrap-anywhere text-muted-foreground">
+                        {provider.data.base_url}
+                      </p>
+                    )}
+                    {!modelConfigured && (
+                      <p className="mt-2 text-destructive">
+                        尚未配置 AI 模型，确认生成报告暂不可用。请前往{' '}
+                        <Link className="underline" to="/settings#ai">
+                          设置
+                        </Link>
+                        。
+                      </p>
+                    )}
+                    {modelConfigured && (
+                      <Link
+                        className="mt-2 inline-block underline"
+                        to="/settings#ai"
+                      >
+                        前往设置修改模型
+                      </Link>
+                    )}
+                  </div>
+                  {active && (
+                    <p role="alert" className="text-sm text-destructive">
+                      已有报告正在生成，提交会被服务端拒绝；可以先保留本次准备。
+                    </p>
+                  )}
+                  {activeError && (
+                    <p role="alert" className="text-sm text-destructive">
+                      {activeError}
+                    </p>
+                  )}
+                  {start.isError && (
+                    <div className="space-y-2">
+                      <p role="alert" className="text-sm text-destructive">
+                        {analysisErrorMessage(start.error)}
+                      </p>
+                      {isAmbiguousAnalysisError(start.error) && intent && (
+                        <Button
+                          variant="outline"
+                          onClick={() => start.mutate(intent)}
+                        >
+                          重试提交（保持原选材）
+                        </Button>
+                      )}
+                      {!isAmbiguousAnalysisError(start.error) && (
+                        <Button
+                          variant="outline"
+                          onClick={() => {
+                            start.reset()
+                            setIntent(null)
+                            clearPendingIntent()
+                          }}
+                        >
+                          返回修改
+                        </Button>
+                      )}
+                    </div>
+                  )}
+                  {storageError && (
+                    <p role="alert" className="text-sm text-destructive">
+                      浏览器无法保存本次提交草稿，尚未发送。
+                    </p>
+                  )}
                 </div>
-                <div>
-                  <dt className="text-muted-foreground">待分析</dt>
-                  <dd className="text-lg font-medium">
-                    {preview.data?.counts.pending ?? '—'}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-muted-foreground">已有总结</dt>
-                  <dd className="text-lg font-medium">
-                    {preview.data?.counts.already_summarized ?? '—'}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-muted-foreground">失败重试</dt>
-                  <dd className="text-lg font-medium">
-                    {preview.data?.counts.failed ?? '—'}
-                  </dd>
-                </div>
-              </dl>
-              {preview.isFetching && <p role="status">正在核对当前选材状态…</p>}
-              {preview.isError && (
-                <p role="alert" className="text-sm text-destructive">
-                  无法确认当前选材状态，请返回第一步刷新后重试。
-                </p>
               )}
-              {preview.data?.counts.active ? (
-                <p role="alert" className="text-sm text-destructive">
-                  有 {preview.data.counts.active}{' '}
-                  条内容正在处理中，请刷新内容库后再提交。
-                </p>
-              ) : null}
-              <div className="rounded-lg bg-muted/50 p-3 text-sm">
-                <p>当前模型：{provider.data?.model ?? '未配置'}</p>
-                {provider.data?.base_url && (
-                  <p className="mt-1 wrap-anywhere text-muted-foreground">
-                    {provider.data.base_url}
-                  </p>
-                )}
-                {!modelConfigured && (
-                  <p className="mt-2 text-destructive">
-                    尚未配置 AI 模型，确认生成报告暂不可用。请前往{' '}
-                    <Link className="underline" to="/settings#ai">
-                      设置
-                    </Link>
-                    。
-                  </p>
-                )}
-                {modelConfigured && (
-                  <Link
-                    className="mt-2 inline-block underline"
-                    to="/settings#ai"
+              <DialogFooter className="sticky -bottom-6 z-10 border-t bg-background py-3">
+                {step > 1 && (
+                  <Button
+                    variant="outline"
+                    disabled={start.isPending}
+                    onClick={() => setStep((value) => (value - 1) as 1 | 2 | 3)}
                   >
-                    前往设置修改模型
-                  </Link>
+                    上一步
+                  </Button>
                 )}
-              </div>
-              {active && (
-                <p role="alert" className="text-sm text-destructive">
-                  已有报告正在生成，提交会被服务端拒绝；可以先保留本次准备。
-                </p>
-              )}
-              {activeError && (
-                <p role="alert" className="text-sm text-destructive">
-                  {activeError}
-                </p>
-              )}
-              {start.isError && (
-                <div className="space-y-2">
-                  <p role="alert" className="text-sm text-destructive">
-                    {analysisErrorMessage(start.error)}
-                  </p>
-                  {isAmbiguousAnalysisError(start.error) && intent && (
-                    <Button
-                      variant="outline"
-                      onClick={() => start.mutate(intent)}
-                    >
-                      重试提交（保持原选材）
-                    </Button>
-                  )}
-                  {!isAmbiguousAnalysisError(start.error) && (
-                    <Button
-                      variant="outline"
-                      onClick={() => {
-                        start.reset()
-                        setIntent(null)
-                        clearPendingIntent()
-                      }}
-                    >
-                      返回修改
-                    </Button>
-                  )}
-                </div>
-              )}
-              {storageError && (
-                <p role="alert" className="text-sm text-destructive">
-                  浏览器无法保存本次提交草稿，尚未发送。
-                </p>
-              )}
+                <Button
+                  variant="outline"
+                  disabled={start.isPending}
+                  onClick={() => close(false)}
+                >
+                  暂时关闭
+                </Button>
+                {step < 3 ? (
+                  <Button
+                    disabled={
+                      step === 1
+                        ? ids.length === 0
+                        : !initialValid || !settings.data
+                    }
+                    onClick={() => setStep((value) => (value + 1) as 1 | 2 | 3)}
+                  >
+                    下一步
+                  </Button>
+                ) : (
+                  <Button
+                    disabled={!canSubmit}
+                    aria-busy={start.isPending}
+                    onClick={submit}
+                  >
+                    {start.isPending ? '正在创建报告…' : '开始生成'}
+                  </Button>
+                )}
+              </DialogFooter>
             </div>
-          )}
-          <DialogFooter className="sticky -bottom-6 z-10 border-t bg-background py-3">
-            {step > 1 && (
-              <Button
-                variant="outline"
-                disabled={start.isPending}
-                onClick={() => setStep((value) => (value - 1) as 1 | 2 | 3)}
-              >
-                上一步
-              </Button>
-            )}
-            <Button
-              variant="outline"
-              disabled={start.isPending}
-              onClick={() => close(false)}
-            >
-              暂时关闭
-            </Button>
-            {step < 3 ? (
-              <Button
-                disabled={
-                  step === 1
-                    ? ids.length === 0
-                    : !initialValid || !settings.data
-                }
-                onClick={() => setStep((value) => (value + 1) as 1 | 2 | 3)}
-              >
-                下一步
-              </Button>
-            ) : (
-              <Button
-                disabled={!canSubmit}
-                aria-busy={start.isPending}
-                onClick={submit}
-              >
-                {start.isPending ? '正在创建报告…' : '开始生成'}
-              </Button>
-            )}
-          </DialogFooter>
+          </div>
         </DialogContent>
       </Dialog>
-      {detailId !== null && (
-        <ResultEvidence
-          key={detailId}
-          resultId={detailId}
-          selected={ids.includes(detailId)}
-          onSelect={(result) => updateSelection([...ids, result.id])}
-          onClose={() => setDetailId(null)}
-          asSheet
-        />
-      )}
     </>
   )
 }
@@ -1715,9 +1779,6 @@ function ReportDetailView({
 }) {
   const heading = useRef<HTMLHeadingElement>(null)
   const [params, setParams] = useSearchParams()
-  const sourceOffset = readOffset(params.get('report_sources_offset'))
-  const sectionOffset = readOffset(params.get('report_sections_offset'))
-  const sectionId = readId(params.get('report_section'))
   const resultId = readId(params.get('result'))
   const report = useQuery({
     queryKey: [...TOPIC_REPORTS_QUERY_KEY, 'detail', reportId],
@@ -1741,16 +1802,6 @@ function ReportDetailView({
     )
     return () => window.clearTimeout(timer)
   }, [reportId])
-  const change = (values: Record<string, number | null>) => {
-    setParams((current) => {
-      const next = new URLSearchParams(current)
-      for (const [key, value] of Object.entries(values)) {
-        if (value === null || value === 0) next.delete(key)
-        else next.set(key, String(value))
-      }
-      return next
-    })
-  }
   const closeResult = () => {
     setParams((current) => {
       const next = new URLSearchParams(current)
@@ -1767,18 +1818,26 @@ function ReportDetailView({
   }
   return (
     <>
-      <div className="w-full space-y-5">
-        <div className="flex flex-wrap items-center gap-3">
-          <Button variant="outline" className="min-h-10" onClick={onBack}>
-            <ArrowLeft aria-hidden /> 返回报告列表
+      <div className="mx-auto flex w-full max-w-3xl flex-col gap-8 pb-12">
+        <div className="flex flex-col items-start gap-5">
+          <Button variant="ghost" onClick={onBack}>
+            <ArrowLeft data-icon="inline-start" aria-hidden /> 返回报告列表
           </Button>
           <h2
             ref={heading}
             tabIndex={-1}
-            className="font-display text-xl outline-none"
+            className="font-display text-2xl leading-snug font-semibold wrap-anywhere outline-none sm:text-3xl"
           >
             {reportName}
           </h2>
+          {report.data?.finished_at && report.data.status === 'completed' && (
+            <time
+              dateTime={report.data.finished_at}
+              className="text-sm text-muted-foreground"
+            >
+              {formatEvidenceDate(report.data.finished_at)}
+            </time>
+          )}
         </div>
         {report.isPending && <p role="status">正在读取报告…</p>}
         {report.isError && (
@@ -1789,46 +1848,7 @@ function ReportDetailView({
             </Button>
           </div>
         )}
-        {report.data && (
-          <>
-            {record.data?.automation_run_id !== null &&
-              record.data?.automation_run_id !== undefined && (
-                <Link
-                  className={buttonVariants({
-                    variant: 'outline',
-                    className: 'min-h-10',
-                  })}
-                  to={`/automation-runs/${record.data.automation_run_id}`}
-                >
-                  查看对应自动任务
-                </Link>
-              )}
-            <section
-              aria-labelledby="report-detail-summary"
-              className="space-y-3"
-            >
-              <h3 id="report-detail-summary" className="sr-only">
-                报告摘要
-              </h3>
-              <ReportCoverage report={report.data} />
-            </section>
-            <ReportDetails
-              key={report.data.id}
-              report={report.data}
-              sourceOffset={sourceOffset}
-              sectionOffset={sectionOffset}
-              sectionId={sectionId}
-              onSourcePage={(offset) =>
-                change({ report_sources_offset: offset })
-              }
-              onSectionPage={(offset) =>
-                change({ report_sections_offset: offset })
-              }
-              onSection={(id) => change({ report_section: id })}
-              sourcesOpen={false}
-            />
-          </>
-        )}
+        {report.data && <ReadableReport report={report.data} />}
       </div>
       {resultId !== null && (
         <ResultEvidence

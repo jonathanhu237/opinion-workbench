@@ -475,7 +475,9 @@ class TopicReportService:
             candidate = await database_call(
                 self.repository.reuse_candidate, report.id, call.key
             )
-            if candidate is not None:
+            # An old engine's request hash cannot be reconstructed by the new
+            # engine. Version changes are cache misses, not storage corruption.
+            if candidate is not None and candidate["engine_version"] == ENGINE_VERSION:
                 original_context = await database_call(
                     self.repository.frozen_context, candidate["report_id"]
                 )
