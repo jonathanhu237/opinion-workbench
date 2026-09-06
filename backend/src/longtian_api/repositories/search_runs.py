@@ -206,6 +206,11 @@ class SearchRunRepository:
             _read_run(connection, run_id)
             return _collection_content_ids(connection, run_id)
 
+    def collection_term_content_ids(self, run_id: int) -> dict[int, set[str]]:
+        with _translate_storage_errors(), self._write_connection() as connection:
+            _read_run(connection, run_id)
+            return _collection_term_content_ids(connection, run_id)
+
     def mark_running(self, run_id: int) -> SearchRunRecord:
         with _translate_storage_errors(), self._write_connection() as connection:
             cursor = connection.execute(
@@ -383,6 +388,15 @@ class SearchRunRepository:
                 if (
                     item.platform_content_id not in admitted
                     and len(admitted) >= active["max_total_results"]
+                ):
+                    raise SearchRunNotActiveError
+            elif active["search_protocol_version"] == 2:
+                admitted = _collection_term_content_ids(connection, run_id).get(
+                    term_position, set()
+                )
+                if (
+                    item.platform_content_id not in admitted
+                    and len(admitted) >= active["max_results_per_term"]
                 ):
                     raise SearchRunNotActiveError
 
@@ -887,6 +901,27 @@ def _collection_content_ids(connection: sqlite3.Connection, run_id: int) -> set[
         (run_id, run_id),
     ).fetchall()
     return {str(row[0]) for row in rows}
+
+
+def _collection_term_content_ids(
+    connection: sqlite3.Connection, run_id: int
+) -> dict[int, set[str]]:
+    rows = connection.execute(
+        """SELECT DISTINCT links.term_position, contents.platform_content_id
+           FROM search_run_content_terms links
+           JOIN search_contents contents ON contents.id=links.search_content_id
+           WHERE links.run_id=? OR links.run_id IN (
+             SELECT sibling.search_run_id FROM search_batch_attempts current
+             JOIN search_batch_attempts sibling ON sibling.batch_id=current.batch_id
+               AND sibling.item_position=current.item_position
+             WHERE current.search_run_id=?
+           )""",
+        (run_id, run_id),
+    ).fetchall()
+    result: dict[int, set[str]] = {}
+    for row in rows:
+        result.setdefault(int(row[0]), set()).add(str(row[1]))
+    return result
 
 
 def _require_active_writer(connection: sqlite3.Connection, run_id: int) -> sqlite3.Row:

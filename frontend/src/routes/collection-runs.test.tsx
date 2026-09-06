@@ -228,7 +228,7 @@ describe('Weibo collection routes', () => {
   it('starts a Weibo-only collection from the selected monitoring rule', async () => {
     const user = userEvent.setup()
     const { router } = renderRoute()
-    const limit = await screen.findByRole('spinbutton', { name: '采集总上限' })
+    const limit = await screen.findByRole('spinbutton', { name: '每词最多采集' })
     expect(limit).toHaveValue(10)
     await waitFor(() => expect(limit).toBeEnabled())
     await user.clear(limit)
@@ -240,7 +240,6 @@ describe('Weibo collection routes', () => {
       expect(startSearchBatch).toHaveBeenCalledWith({
         monitoring_rule_id: 1,
         max_results_per_term: 7,
-        max_total_results: 7,
       }),
     )
     await waitFor(() =>
@@ -323,7 +322,7 @@ describe('Weibo collection routes', () => {
     })
     renderRoute('/collection-runs/31')
     expect(
-      await screen.findByText(/当前未能识别微博页面的工作状态/u),
+      await screen.findByText(/微博页面尚未完整加载，或页面结构暂时无法识别/u),
     ).toBeVisible()
     expect(
       screen.getByText(/以下搜索词未能完整获取：龙田街道（已保留 1 条）/u),

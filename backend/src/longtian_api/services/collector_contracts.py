@@ -188,6 +188,7 @@ class SearchCollector(Protocol):
         on_term_completed: SearchTermCompletedCallback,
         max_total_results: int | None = None,
         previous_content_ids: Sequence[str] = (),
+        previous_content_ids_by_term: Sequence[Sequence[str]] = (),
     ) -> SearchWorkerResult: ...
 
     async def open_result(

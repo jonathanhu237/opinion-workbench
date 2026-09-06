@@ -167,6 +167,9 @@ class BrowserFixture:
 
 
 def environment(tmp_path, pages, *, model=None, **runtime_options):
+    # These fixtures explicitly cover the historical comprehensive-search DOM.
+    # Latest-first default/per-term behavior is exercised in test_latest_collection.
+    runtime_options.setdefault("latest_first", False)
     browser = BrowserFixture(pages)
     runtime = NativeWeiboCollector(
         browser=browser, delay_seconds=0, ready_polls=2, **runtime_options

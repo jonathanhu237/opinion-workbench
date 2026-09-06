@@ -57,6 +57,7 @@ class NativeWeiboCollector:
         timeout_seconds=180,
         on_progress=None,
         enricher=None,
+        latest_first=True,
     ):
         self.browser = browser
         self.delay_seconds = delay_seconds
@@ -65,6 +66,7 @@ class NativeWeiboCollector:
         self.max_requests = max_requests
         self.timeout_seconds = timeout_seconds
         self.on_progress = on_progress
+        self.latest_first = latest_first
         if enricher is None:
             from longtian_api.services.weibo_enrichment import WeiboEnricher
 
@@ -72,6 +74,7 @@ class NativeWeiboCollector:
         self.enricher = enricher
 
     supports_manual_acquisition = True
+    supports_per_term_resume_budget = True
     supported_platforms = frozenset({"wb"})
 
     @property
@@ -93,6 +96,7 @@ class NativeWeiboCollector:
         on_term_completed,
         max_total_results=None,
         previous_content_ids=(),
+        previous_content_ids_by_term=(),
     ):
         if platform != "wb":
             return SearchWorkerResult("browser_unavailable")
@@ -105,7 +109,7 @@ class NativeWeiboCollector:
                 on_item=on_item,
                 on_term_completed=on_term_completed,
             )
-        found = False
+        found = any(previous_content_ids_by_term)
         pages = 0
         deadline = monotonic() + self.timeout_seconds
         incomplete_terms: list[SearchTermDiagnostic] = []
@@ -121,11 +125,21 @@ class NativeWeiboCollector:
             await self.browser.start(max_requests=self.max_requests)
             for position, term in enumerate(terms):
                 await on_progress(position, len(terms))
-                url = "https://s.weibo.com/weibo?" + urlencode({"q": term})
+                previous = (
+                    set(previous_content_ids_by_term[position])
+                    if position < len(previous_content_ids_by_term)
+                    else set()
+                )
+                url = (
+                    "https://s.weibo.com/realtime?"
+                    + urlencode({"q": term, "rd": "realtime", "tw": "realtime"})
+                    if self.latest_first
+                    else "https://s.weibo.com/weibo?" + urlencode({"q": term})
+                )
                 seen, visited = set(), set()
                 recovery_attempted = False
                 incomplete_reason: SearchTermIncompleteReason | None = None
-                while url:
+                while url and len(previous | seen) < max_results_per_term:
                     if monotonic() >= deadline:
                         raise BrowserBudgetExceeded("time")
                     if pages >= self.max_pages:
@@ -145,20 +159,24 @@ class NativeWeiboCollector:
                         if monotonic() >= deadline:
                             raise BrowserBudgetExceeded("time")
                         parsed = read_search_page(
-                            *(await self.browser.snapshot()), term
+                            *(await self.browser.snapshot()),
+                            term,
+                            latest=self.latest_first,
                         )
-                        if parsed.state != "pending":
+                        if parsed.state not in ("pending", "empty_page"):
                             break
                         if poll + 1 < self.ready_polls:
                             await asyncio.sleep(0.25)
                     if parsed is None:
                         parsed = read_search_page(
-                            *(await self.browser.snapshot()), term
+                            *(await self.browser.snapshot()),
+                            term,
+                            latest=self.latest_first,
                         )
                     for item in parsed.items:
-                        if (
-                            item.content_id not in seen
-                            and len(seen) < max_results_per_term
+                        if item.content_id not in seen and (
+                            item.content_id in previous
+                            or len(previous | seen) < max_results_per_term
                         ):
                             await on_item(position, item)
                             seen.add(item.content_id)
@@ -170,7 +188,7 @@ class NativeWeiboCollector:
                         recovery_attempted = True
                         url = parsed.view_all_url
                         continue
-                    if parsed.state not in ("results", "empty"):
+                    if parsed.state not in ("results", "empty", "empty_page"):
                         if recovery_attempted and parsed.state == "pending":
                             incomplete_reason = "view_all_unresolved"
                             break
@@ -180,7 +198,10 @@ class NativeWeiboCollector:
                             else parsed.state
                         )
                         return result(state)
-                    if len(seen) >= max_results_per_term or parsed.state == "empty":
+                    if (
+                        len(previous | seen) >= max_results_per_term
+                        or parsed.state == "empty"
+                    ):
                         break
                     url = parsed.next_url
                     if url:
@@ -285,7 +306,7 @@ class NativeWeiboCollector:
                                 parsed = read_search_page(
                                     *(await self.browser.snapshot()), term, latest=True
                                 )
-                                if parsed.state != "pending":
+                                if parsed.state not in ("pending", "empty_page"):
                                     break
                                 if poll + 1 < self.ready_polls:
                                     await asyncio.sleep(0.25)
@@ -297,7 +318,7 @@ class NativeWeiboCollector:
                             else:
                                 recovered.add(position)
                                 urls[position] = parsed.view_all_url
-                        elif parsed.state in ("results", "empty"):
+                        elif parsed.state in ("results", "empty", "empty_page"):
                             urls[position] = parsed.next_url
                         else:
                             return SearchWorkerResult(

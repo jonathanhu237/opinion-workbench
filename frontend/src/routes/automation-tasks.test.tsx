@@ -14,6 +14,8 @@ import {
   fetchAutomationTask,
   fetchAutomationTasks,
   deleteAutomationTask,
+  createAutomationTask,
+  replaceAutomationTask,
   runAutomationTaskNow,
 } from '@/lib/api/automation-workflows'
 import { analysisSettingsFixture } from '@/lib/api/analysis-fixtures'
@@ -29,7 +31,10 @@ import {
   cacheSavedAutomationRun,
 } from '@/hooks/use-automation-workflows'
 import { AutomationRunDetail } from '@/routes/automation-run-detail'
-import { nextRunPreview } from '@/routes/automation-task-editor'
+import {
+  AutomationTaskEditor,
+  nextRunPreview,
+} from '@/routes/automation-task-editor'
 import { AutomationTaskRuns, AutomationTasks } from '@/routes/automation-tasks'
 import {
   automationRun,
@@ -45,6 +50,8 @@ vi.mock('@/lib/api/automation-workflows', async (importOriginal) => ({
   fetchAutomationTask: vi.fn(),
   fetchAutomationTasks: vi.fn(),
   deleteAutomationTask: vi.fn(),
+  createAutomationTask: vi.fn(),
+  replaceAutomationTask: vi.fn(),
   runAutomationTaskNow: vi.fn(),
 }))
 
@@ -163,6 +170,67 @@ beforeEach(() => {
 })
 
 describe('automation task route', () => {
+  it('saves an edited historical total limit as an independent per-term limit', async () => {
+    const user = userEvent.setup()
+    const task = automationTask({ max_results_per_term: 10, max_total_results: 25 })
+    vi.mocked(replaceAutomationTask).mockResolvedValue(
+      automationTask({ max_total_results: null }),
+    )
+    renderRoute(
+      [{
+        path: '/',
+        element: <AutomationTaskEditor task={task} onClose={vi.fn()} onSaved={vi.fn()} />,
+      }],
+      '/',
+    )
+    expect(
+      await screen.findByRole('spinbutton', { name: '每词最多采集' }),
+    ).toHaveValue(10)
+    expect(screen.getByText(/保存后将改为每词上限/u)).toBeVisible()
+    const save = screen.getByRole('button', { name: '保存自动任务' })
+    await waitFor(() => expect(save).toBeEnabled())
+    await user.click(save)
+    await waitFor(() =>
+      expect(replaceAutomationTask).toHaveBeenCalledWith(
+        task.id,
+        expect.objectContaining({
+          max_results_per_term: 10,
+          max_total_results: null,
+          expected_revision: task.revision,
+        }),
+      ),
+    )
+  })
+
+  it('creates a new task with ten results per keyword and no shared cap', async () => {
+    const user = userEvent.setup()
+    vi.mocked(createAutomationTask).mockResolvedValue(
+      automationTask({ max_total_results: null }),
+    )
+    renderRoute(
+      [{
+        path: '/',
+        element: <AutomationTaskEditor task={null} onClose={vi.fn()} onSaved={vi.fn()} />,
+      }],
+      '/',
+    )
+    expect(
+      await screen.findByRole('spinbutton', { name: '每词最多采集' }),
+    ).toHaveValue(10)
+    await user.type(screen.getByRole('textbox', { name: '任务名称' }), '独立额度')
+    await user.click(screen.getByRole('combobox', { name: '监控规则' }))
+    await user.click(await screen.findByRole('option', { name: /公共事务/u }))
+    await user.click(screen.getByRole('button', { name: '创建自动任务' }))
+    await waitFor(() =>
+      expect(createAutomationTask).toHaveBeenCalledWith(
+        expect.objectContaining({
+          max_results_per_term: 10,
+          max_total_results: null,
+        }),
+      ),
+    )
+  })
+
   it('shows task-specific goal, fixed pipeline copy and run actions', async () => {
     const user = userEvent.setup()
     renderRoute(

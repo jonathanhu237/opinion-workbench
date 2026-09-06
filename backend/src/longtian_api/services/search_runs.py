@@ -94,6 +94,8 @@ class SearchRunRepositoryProtocol(Protocol):
 
     def collection_content_ids(self, run_id: int) -> set[str]: ...
 
+    def collection_term_content_ids(self, run_id: int) -> dict[int, set[str]]: ...
+
     def mark_running(self, run_id: int) -> SearchRunRecord: ...
 
     def set_progress(self, run_id: int, term_position: int) -> None: ...
@@ -585,6 +587,16 @@ class SearchRunService:
                     "previous_content_ids": await database_call(
                         self._repository.collection_content_ids, record.id
                     ),
+                }
+            elif getattr(self._worker, "supports_per_term_resume_budget", False):
+                previous = await database_call(
+                    self._repository.collection_term_content_ids, record.id
+                )
+                latest_options = {
+                    "previous_content_ids_by_term": tuple(
+                        tuple(previous.get(position, ()))
+                        for position in range(start, len(record.terms))
+                    )
                 }
             async with asyncio.timeout(self._search_timeout_seconds):
                 result = await self._worker.search(

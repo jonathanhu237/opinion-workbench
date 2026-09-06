@@ -64,7 +64,7 @@ function failureReasonGuidance(
   reason: SearchFailureReason,
 ) {
   const guidance: Record<SearchFailureReason, string> = {
-    page_state_unrecognized: `当前未能识别${platformName}页面的工作状态。请打开平台，确认没有停留在登录或安全验证页面，处理后再重新采集。`,
+    page_state_unrecognized: `${platformName}页面尚未完整加载，或页面结构暂时无法识别。请打开平台查看页面，待加载完成后继续采集；如果反复出现，请检查采集器兼容性。已保存的结果会保留。`,
     search_context_unavailable: `无法确认${platformName}的搜索会话或必要登录信息。请检查应用打开的专用谷歌浏览器中的平台会话，确认后再重新采集。`,
     search_response_incompatible: `收到的${platformName}搜索响应格式与采集器不兼容，需要更新采集器后再试；重新打开平台也无法修复这个问题。`,
     search_results_incompatible: `收到的${platformName}结果条目无法被当前采集器安全识别，需要更新采集器后再试；已经保存的结果仍会保留。`,

@@ -4,13 +4,13 @@ import { collectionLimitLabel } from '@/lib/collection-limit'
 import { automationTaskUpdatePayload } from '@/lib/api/automation-workflows'
 import { automationTask } from '@/lib/api/automation-workflows.fixtures'
 
-describe('collection total limit', () => {
-  it('distinguishes latest total limits from legacy per-term limits', () => {
+describe('collection per-term limit', () => {
+  it('distinguishes per-term limits from historical total limits', () => {
     expect(
       collectionLimitLabel({ max_results_per_term: 10, max_total_results: 25 }),
-    ).toBe('最新优先 · 合计最多 25 条')
+    ).toBe('合计最多 25 条（历史配置）')
     expect(collectionLimitLabel({ max_results_per_term: 10 })).toBe(
-      '每词最多 10 条（旧配置）',
+      '每词最多 10 条',
     )
   })
 

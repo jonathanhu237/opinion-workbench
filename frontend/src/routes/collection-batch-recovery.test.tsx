@@ -169,7 +169,7 @@ describe('manual batch recovery', () => {
   )
 
   it.each([
-    ['page_state_unrecognized', '当前未能识别微博页面的工作状态。'],
+    ['page_state_unrecognized', '微博页面尚未完整加载，或页面结构暂时无法识别。'],
     ['search_context_unavailable', '无法确认微博的搜索会话或必要登录信息。'],
     [
       'search_response_incompatible',

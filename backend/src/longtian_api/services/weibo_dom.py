@@ -200,6 +200,62 @@ def _view_all_search_url(root, url: str, term: str) -> str | None:
     return None
 
 
+def _empty_paged_results(root, url: str, term: str) -> SearchPage | None:
+    """Recognize an empty rendered result page, not a blank/loading document.
+
+    Realtime search can render no cards while still exposing further pages.
+    Require the platform's pager and matching current/adjacent page evidence;
+    the collector must still poll before accepting this provisional state.
+    """
+    pagers = root.xpath("//*[@id='pl_feedlist_index']/*[" + css_class("m-page2") + "]")
+    if len(pagers) != 1:
+        return None
+    pager = pagers[0]
+    current = pager.xpath(
+        ".//ul[" + css_class("page-list") + "]/li[" + css_class("cur") + "]/a[@href]"
+    )
+    page_values = parse_qs(urlsplit(url).query).get("page", ["1"])
+    if (
+        len(current) != 1
+        or len(page_values) != 1
+        or not re.fullmatch(r"[1-9][0-9]{0,3}", page_values[0])
+    ):
+        return None
+    number = int(page_values[0])
+
+    def page_number(link):
+        target = _search_link(link.get("href", ""), url, term, view_all=False)
+        if target is None:
+            return None, None
+        values = parse_qs(urlsplit(target).query).get("page", [])
+        return (int(values[0]), target) if len(values) == 1 else (None, None)
+
+    if page_number(current[0])[0] != number or text_of(current[0]) != str(number):
+        return None
+    next_url = None
+    adjacent = False
+    for direction, expected in (("prev", number - 1), ("next", number + 1)):
+        links = pager.xpath(
+            ".//a["
+            + css_class(direction)
+            + "][@href][not("
+            + css_class("disabled")
+            + ") and not(@aria-disabled='true')]"
+        )
+        if len(links) > 1:
+            return SearchPage("search_pagination_incompatible")
+        if links:
+            target_number, target = page_number(links[0])
+            if target_number != expected:
+                return SearchPage("search_pagination_incompatible")
+            adjacent = True
+            if direction == "next":
+                next_url = target
+    if not adjacent:
+        return None
+    return SearchPage("empty_page", next_url=next_url)
+
+
 def read_search_page(url, raw, status, term, *, latest=False):
     root = document(raw)
     blocked = barrier(root, url, status)
@@ -265,8 +321,17 @@ def read_search_page(url, raw, status, term, *, latest=False):
         empty = root.xpath("//*[" + css_class("card-no-result") + "]")
         if empty and any(word in text_of(empty[0]) for word in ("未找到", "没有找到")):
             return SearchPage("empty")
+        paged = _empty_paged_results(root, url, term)
+        if paged is not None:
+            return paged
         return SearchPage("pending")
-    next_links = root.xpath("//a[" + css_class("next") + "][@href]")
+    next_links = root.xpath(
+        "//a["
+        + css_class("next")
+        + "][@href][not("
+        + css_class("disabled")
+        + ") and not(@aria-disabled='true')]"
+    )
     next_url = None
     if next_links:
         next_url = _search_link(

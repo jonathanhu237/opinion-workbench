@@ -53,11 +53,11 @@ import {
 
 const startSchema = z.object({
   ruleId: z.string().min(1, '请选择监控规则。'),
-  maxTotalResults: z.coerce
+  maxResultsPerTerm: z.coerce
     .number<number>()
     .int('请输入整数。')
-    .min(1, '采集总上限至少为 1 条。')
-    .max(50, '采集总上限最多为 50 条。'),
+    .min(1, '每词采集上限至少为 1 条。')
+    .max(50, '每词采集上限最多为 50 条。'),
 })
 
 type StartValues = z.infer<typeof startSchema>
@@ -274,7 +274,7 @@ export function CollectionRuns() {
     mode: 'onBlur',
     defaultValues: {
       ruleId: '',
-      maxTotalResults: 10,
+      maxResultsPerTerm: 10,
     },
   })
   const startMutation = useMutation({
@@ -309,8 +309,7 @@ export function CollectionRuns() {
       }
       const batch = await startMutation.mutateAsync({
         monitoring_rule_id: rule.id,
-        max_results_per_term: values.maxTotalResults,
-        max_total_results: values.maxTotalResults,
+        max_results_per_term: values.maxResultsPerTerm,
       })
       await queryClient.invalidateQueries({
         queryKey: SEARCH_BATCHES_QUERY_KEY,
@@ -384,12 +383,12 @@ export function CollectionRuns() {
                 />
 
                 <Controller
-                  name="maxTotalResults"
+                  name="maxResultsPerTerm"
                   control={form.control}
                   render={({ field, fieldState }) => (
                     <Field data-invalid={fieldState.invalid}>
                       <FieldLabel htmlFor="collection-limit">
-                        采集总上限
+                        每词最多采集
                       </FieldLabel>
                       <Input
                         {...field}
@@ -418,7 +417,7 @@ export function CollectionRuns() {
               </div>
 
               <p className="text-sm text-muted-foreground">
-                默认使用微博实时搜索，最新优先。多个搜索词轮流采集，去重后合计不超过上限；采集完成后仍可自行选材生成报告。
+                每个搜索词按最新优先采集，分别计算上限；不足上限时按实际数量保存，跨词重复内容会合并。采集完成后仍可自行选材生成报告。
               </p>
               <div className="flex min-h-11 items-center gap-3 rounded-lg border border-border bg-card px-3 text-sm">
                 <img
