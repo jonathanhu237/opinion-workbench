@@ -33,6 +33,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
+import { collectionLimitLabel } from '@/lib/collection-limit'
 import {
   useAutomationOccurrences,
   useAutomationRuns,
@@ -254,10 +255,8 @@ function AutomationTaskCard({
               {automationScheduleLabel(task.schedule)}
             </p>
             <p>
-              <span className="font-medium text-foreground">
-                每个搜索词上限：
-              </span>
-              {task.max_results_per_term} 条
+              <span className="font-medium text-foreground">采集上限：</span>
+              {collectionLimitLabel(task)}
             </p>
             <p>
               <span className="font-medium text-foreground">下一次：</span>

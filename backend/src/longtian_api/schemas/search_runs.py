@@ -65,6 +65,7 @@ class SearchRunCreate(BaseModel):
     # omit a redundant platform choice.
     platform: SearchPlatform = "wb"
     max_results_per_term: int = Field(default=10, ge=1, le=50)
+    max_total_results: int | None = Field(default=None, ge=1, le=50)
 
     @model_validator(mode="after")
     def validate_current_platform(self) -> "SearchRunCreate":
@@ -91,6 +92,7 @@ class SearchRunSummary(BaseModel):
     rule_name: str
     term_count: int
     max_results_per_term: int
+    max_total_results: int | None = Field(default=None, ge=1, le=50)
     status: SearchRunStatus
     failure_reason: SearchFailureReason | None
     execution_limit: ExecutionLimit | None = None
@@ -125,8 +127,7 @@ class SearchRunDetail(SearchRunSummary):
     @model_validator(mode="after")
     def validate_diagnostic_terms(self) -> "SearchRunDetail":
         if any(
-            self.terms[item.position] != item.term
-            for item in self.incomplete_terms
+            self.terms[item.position] != item.term for item in self.incomplete_terms
         ):
             raise ValueError("incomplete diagnostic term does not match run terms")
         return self

@@ -118,6 +118,7 @@ class AutomationTaskCreate(StrictModel):
         max_length=MAX_PLATFORMS,
     )
     max_results_per_term: int = Field(default=10, ge=1, le=50)
+    max_total_results: int | None = Field(default=None, ge=1, le=50)
     # ``analysis_goal`` is retained as a private compatibility mirror for
     # clients written before v18.  New callers submit one choice per stage.
     analysis_goal: str | None = Field(
@@ -181,6 +182,7 @@ class AutomationTaskCreateRequest(StrictModel):
         max_length=MAX_PLATFORMS,
     )
     max_results_per_term: int = Field(default=10, ge=1, le=50)
+    max_total_results: int | None = Field(default=None, ge=1, le=50)
     initial_prompt: PromptChoice
     report_prompt: PromptChoice
     schedule: AutomationSchedule
@@ -214,6 +216,7 @@ class AutomationSnapshot(StrictModel):
     terms: list[str] = Field(min_length=1, max_length=100)
     platforms: list[SearchPlatform] = Field(min_length=1, max_length=MAX_PLATFORMS)
     max_results_per_term: int = Field(ge=1, le=50)
+    max_total_results: int | None = Field(default=None, ge=1, le=50)
     analysis_goal: str = Field(min_length=1, max_length=MAX_ANALYSIS_GOAL_LENGTH)
     analysis_goal_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
     ai_configuration_revision: int | None = Field(
@@ -369,6 +372,7 @@ class AutomationTask(StrictModel):
     rule_state: Literal["enabled", "disabled", "deleted", "invalid"]
     platforms: list[SearchPlatform] = Field(min_length=1, max_length=MAX_PLATFORMS)
     max_results_per_term: int = Field(ge=1, le=50)
+    max_total_results: int | None = Field(default=None, ge=1, le=50)
     analysis_goal: str = Field(min_length=1, max_length=MAX_ANALYSIS_GOAL_LENGTH)
     initial_prompt: PromptSnapshot | None = None
     report_prompt: PromptSnapshot | None = None

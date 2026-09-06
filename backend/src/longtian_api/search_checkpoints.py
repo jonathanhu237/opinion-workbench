@@ -106,6 +106,15 @@ def item_checkpoint(
         """,
         (batch_id, position),
     ).fetchall()
+    batch = connection.execute(
+        "SELECT * FROM search_batches WHERE id=?", (batch_id,)
+    ).fetchone()
+    if (
+        batch is not None
+        and "max_total_results" in batch.keys()
+        and batch["max_total_results"] is not None
+    ):
+        return _total_checkpoint(connection, batch, item, terms, runs, unavailable)
     proven: set[int] = set()
     sources: set[str] = set()
     for number, run in enumerate(runs, 1):
@@ -216,3 +225,62 @@ def item_checkpoint(
         basis,
         True,
     )
+
+
+def _total_checkpoint(connection, batch, item, terms, runs, unavailable):
+    """Round-robin retries rescan all terms, sharing the durable unique budget.
+
+    A per-term end here means its bounded allocation ended, not that all search
+    results were exhausted. Partial attempts cannot prove a reusable prefix.
+    """
+    content_ids = set()
+    for number, run in enumerate(runs, 1):
+        snapshot = connection.execute(
+            "SELECT position,value FROM search_run_terms "
+            "WHERE run_id=? ORDER BY position",
+            (run["id"],),
+        ).fetchall()
+        if (
+            item is None
+            or run["platform"] != item["platform"]
+            or run["attempt_number"] != number
+            or run["max_total_results"] != batch["max_total_results"]
+            or run["execution_start_term_position"] != 0
+            or run["search_protocol_version"] != 2
+            or [tuple(row) for row in snapshot] != [tuple(row) for row in terms]
+            or (
+                run["current_term_position"] is not None
+                and not 0 <= run["current_term_position"] < len(terms)
+            )
+        ):
+            return unavailable
+        content_ids.update(
+            row[0]
+            for row in connection.execute(
+                "SELECT search_content_id FROM search_run_contents WHERE run_id=?",
+                (run["id"],),
+            )
+        )
+        if len(content_ids) > batch["max_total_results"]:
+            return unavailable
+        proofs = connection.execute(
+            "SELECT * FROM search_run_term_completions WHERE run_id=?", (run["id"],)
+        ).fetchall()
+        for proof in proofs:
+            count = connection.execute(
+                "SELECT COUNT(*) FROM search_run_content_terms "
+                "WHERE run_id=? AND term_position=?",
+                (run["id"], proof["term_position"]),
+            ).fetchone()[0]
+            if (
+                proof["proof"] != "worker_term_completed"
+                or proof["completed_at"] is None
+                or not 0 <= proof["term_position"] < len(terms)
+                or proof["result_count"] != count
+            ):
+                return unavailable
+        if run["status"] in COMPLETED_RUN_STATUSES:
+            if len(proofs) != len(terms) or number != len(runs):
+                return unavailable
+            return Checkpoint(len(terms), 0, None, "explicit", True)
+    return Checkpoint(0, len(terms), 0, "unknown", True)

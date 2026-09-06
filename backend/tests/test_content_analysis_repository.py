@@ -43,7 +43,9 @@ def old_projection(database):
         projection = {}
         for table in tables:
             columns = [
-                row[1] for row in connection.execute(f'PRAGMA table_info("{table}")')
+                row[1]
+                for row in connection.execute(f'PRAGMA table_info("{table}")')
+                if row[1] != "max_total_results"
             ]
             if table == "search_runs":
                 columns = [

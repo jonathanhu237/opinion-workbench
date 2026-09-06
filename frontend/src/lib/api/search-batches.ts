@@ -134,6 +134,7 @@ const summaryShape = {
   platform_count: z.number().int().min(1).max(1),
   terminal_item_count: z.number().int().min(0).max(1),
   max_results_per_term: z.number().int().min(1).max(50),
+  max_total_results: z.number().int().min(1).max(50).nullish(),
   status: searchBatchStatusSchema,
   control_revision: nonnegativeSafeIntegerSchema,
   current_item_position: z.number().int().min(0).max(0).nullable(),
@@ -238,6 +239,8 @@ const searchBatchDetailSchema = z
           item.latest_attempt &&
           (item.latest_attempt.run.max_results_per_term !==
             value.max_results_per_term ||
+            (item.latest_attempt.run.max_total_results ?? null) !==
+              (value.max_total_results ?? null) ||
             (item.recovery_available &&
               (item.latest_attempt.run.term_count !== value.term_count ||
                 (item.latest_attempt.run.current_term_position !== null &&
@@ -472,6 +475,7 @@ export async function startSearchBatch(
     monitoring_rule_id: number
     platforms?: SearchPlatform[]
     max_results_per_term: number
+    max_total_results?: number
   },
   signal?: AbortSignal,
 ) {

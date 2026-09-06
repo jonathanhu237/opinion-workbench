@@ -228,13 +228,19 @@ describe('Weibo collection routes', () => {
   it('starts a Weibo-only collection from the selected monitoring rule', async () => {
     const user = userEvent.setup()
     const { router } = renderRoute()
+    const limit = await screen.findByRole('spinbutton', { name: '采集总上限' })
+    expect(limit).toHaveValue(10)
+    await waitFor(() => expect(limit).toBeEnabled())
+    await user.clear(limit)
+    await user.type(limit, '7')
     await user.click(await screen.findByRole('combobox', { name: '监控规则' }))
     await user.click(await screen.findByRole('option', { name: /社区规则/u }))
     await user.click(screen.getByRole('button', { name: '开始采集' }))
     await waitFor(() =>
       expect(startSearchBatch).toHaveBeenCalledWith({
         monitoring_rule_id: 1,
-        max_results_per_term: 10,
+        max_results_per_term: 7,
+        max_total_results: 7,
       }),
     )
     await waitFor(() =>

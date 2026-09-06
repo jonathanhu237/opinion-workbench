@@ -624,7 +624,7 @@ def test_rediscovery_of_a_failed_summary_is_repeated_and_does_not_retry_analysis
     from topic_report_fixtures import TextPipelineClient, finish
 
     model = TextPipelineClient()
-    model.answers["initial"] = ["invalid"]
+    model.answers["initial"] = ["invalid", "invalid"]
     app, browser = environment(
         tmp_path, [CARD] + [EMPTY] * 4 + [CARD] + [EMPTY] * 4, model=model
     )
@@ -644,7 +644,7 @@ def test_rediscovery_of_a_failed_summary_is_repeated_and_does_not_retry_analysis
         assert generation["analysis"]["counts"]["failed"] == 1
         second = collect(client)
         assert (second["new_count"], second["repeated_count"]) == (0, 1)
-        assert model.counts["initial"] == 1
+        assert model.counts["initial"] == 2
         assert len(browser.visits) == 10
 
 

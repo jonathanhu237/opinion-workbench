@@ -111,6 +111,7 @@ const snapshotSchema = z
     terms: z.array(z.string().min(1).max(200)).min(1).max(100),
     platforms: platformListSchema,
     max_results_per_term: safeId.max(50),
+    max_total_results: safeId.max(50).nullish(),
     analysis_goal: z.string().min(1).max(MAX_AUTOMATION_GOAL_LENGTH),
     analysis_goal_hash: z.string().regex(/^[a-f0-9]{64}$/u),
     initial_prompt: initialPromptSnapshotSchema.optional(),
@@ -303,6 +304,7 @@ const taskSchema = z
     rule_state: z.enum(['enabled', 'disabled', 'deleted', 'invalid']),
     platforms: platformListSchema,
     max_results_per_term: safeId.max(50),
+    max_total_results: safeId.max(50).nullish(),
     analysis_goal: z.string().min(1).max(MAX_AUTOMATION_GOAL_LENGTH),
     initial_prompt: initialPromptSnapshotSchema.optional(),
     report_prompt: reportPromptSnapshotSchema.optional(),
@@ -380,6 +382,7 @@ const createSchema = z.strictObject({
   monitoring_rule_id: safeId,
   platforms: defaultPlatformListSchema,
   max_results_per_term: safeId.max(50),
+  max_total_results: safeId.max(50).nullish(),
   initial_prompt: promptChoiceSchema,
   report_prompt: promptChoiceSchema,
   schedule: automationScheduleSchema,
@@ -874,6 +877,9 @@ export function automationTaskUpdatePayload(
     name: task.name,
     monitoring_rule_id: task.monitoring_rule_id,
     max_results_per_term: task.max_results_per_term,
+    ...(task.max_total_results != null
+      ? { max_total_results: task.max_total_results }
+      : {}),
     initial_prompt: promptChoiceFromSnapshot(task.initial_prompt),
     report_prompt: promptChoiceFromSnapshot(task.report_prompt),
     schedule: task.schedule,

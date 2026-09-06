@@ -124,6 +124,7 @@ class AutomationTaskRecord:
     latest_run: AutomationRunRecord | None
     initial_prompt: PromptSnapshot | None = None
     report_prompt: PromptSnapshot | None = None
+    max_total_results: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -247,17 +248,18 @@ class AutomationWorkflowRepository:
                 raise AutomationTaskNameConflictError
             cursor = connection.execute(
                 """INSERT INTO automation_tasks(
-                  name,normalized_name,monitoring_rule_id,max_results_per_term,analysis_goal,
+                  name,normalized_name,monitoring_rule_id,max_results_per_term,max_total_results,analysis_goal,
                   initial_prompt_mode,initial_prompt_version_id,
                   report_prompt_mode,report_prompt_version_id,schedule_kind,
                   interval_minutes,daily_time,timezone,enabled,revision,next_due_at,
                   anchor_at,created_at,updated_at)
-                  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,0,1,NULL,NULL,?,?)""",
+                  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,1,NULL,NULL,?,?)""",
                 (
                     payload.name,
                     identity,
                     payload.monitoring_rule_id,
                     payload.max_results_per_term,
+                    payload.max_total_results,
                     _prompt_mirror(report_prompt, payload.analysis_goal),
                     initial_prompt.mode,
                     initial_prompt.version_id,
@@ -309,7 +311,7 @@ class AutomationWorkflowRepository:
                 raise AutomationTaskNameConflictError
             connection.execute(
                 """UPDATE automation_tasks SET name=?,normalized_name=?,
-                  monitoring_rule_id=?,max_results_per_term=?,analysis_goal=?,
+                  monitoring_rule_id=?,max_results_per_term=?,max_total_results=?,analysis_goal=?,
                   initial_prompt_mode=?,initial_prompt_version_id=?,
                   report_prompt_mode=?,report_prompt_version_id=?,schedule_kind=?,
                   interval_minutes=?,daily_time=?,timezone=?,enabled=?,
@@ -320,6 +322,7 @@ class AutomationWorkflowRepository:
                     identity,
                     payload.monitoring_rule_id,
                     payload.max_results_per_term,
+                    payload.max_total_results,
                     _prompt_mirror(report_prompt, payload.analysis_goal),
                     initial_prompt.mode,
                     initial_prompt.version_id,
@@ -1201,6 +1204,7 @@ def _read_task(connection: sqlite3.Connection, task_id: int) -> AutomationTaskRe
         ),
         platforms=platforms,
         max_results_per_term=int(row["max_results_per_term"]),
+        max_total_results=row["max_total_results"],
         analysis_goal=str(row["analysis_goal"]),
         schedule_kind=cast(AutomationScheduleKind, row["schedule_kind"]),
         interval_minutes=row["interval_minutes"],

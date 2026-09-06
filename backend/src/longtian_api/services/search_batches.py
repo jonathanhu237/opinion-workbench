@@ -72,6 +72,7 @@ class SearchBatchRepositoryProtocol(Protocol):
         terms: Sequence[str],
         platforms: Sequence[SearchPlatform],
         max_results_per_term: int,
+        max_total_results: int | None = None,
         workflow_operation_key: str | None = None,
     ) -> SearchBatchRecord: ...
 
@@ -192,6 +193,7 @@ class SearchBatchService:
         terms: Sequence[str],
         platforms: Sequence[SearchPlatform],
         max_results_per_term: int,
+        max_total_results: int | None = None,
         operation_key: str,
     ) -> SearchBatchDetail:
         """Admit one workflow collection using its frozen snapshot.
@@ -208,6 +210,7 @@ class SearchBatchService:
                 terms=terms,
                 platforms=platforms,
                 max_results_per_term=max_results_per_term,
+                max_total_results=max_total_results,
                 operation_key=operation_key,
             )
         )
@@ -220,6 +223,7 @@ class SearchBatchService:
         terms: Sequence[str],
         platforms: Sequence[SearchPlatform],
         max_results_per_term: int,
+        max_total_results: int | None = None,
         operation_key: str,
     ) -> SearchBatchDetail:
         existing_lookup = getattr(self._repository, "workflow_batch", None)
@@ -253,6 +257,11 @@ class SearchBatchService:
                         terms=tuple(terms),
                         platforms=tuple(platforms),
                         max_results_per_term=max_results_per_term,
+                        **(
+                            {"max_total_results": max_total_results}
+                            if max_total_results is not None
+                            else {}
+                        ),
                         workflow_operation_key=operation_key,
                     )
                 except TypeError:
@@ -266,6 +275,11 @@ class SearchBatchService:
                         terms=tuple(terms),
                         platforms=tuple(platforms),
                         max_results_per_term=max_results_per_term,
+                        **(
+                            {"max_total_results": max_total_results}
+                            if max_total_results is not None
+                            else {}
+                        ),
                     )
             except BaseException:
                 await self._browser_operations.release(owner)
@@ -321,6 +335,11 @@ class SearchBatchService:
                     terms=tuple(rule.terms),
                     platforms=platforms,
                     max_results_per_term=payload.max_results_per_term,
+                    **(
+                        {"max_total_results": payload.max_total_results}
+                        if payload.max_total_results is not None
+                        else {}
+                    ),
                 )
             except SearchBatchRepositoryUnavailableError:
                 await self._browser_operations.release(owner)
@@ -804,6 +823,7 @@ def _to_run_summary(record: SearchRunRecord) -> SearchRunSummary:
         rule_name=record.rule_name,
         term_count=len(record.terms),
         max_results_per_term=record.max_results_per_term,
+        max_total_results=record.max_total_results,
         status=record.status,
         failure_reason=record.failure_reason,
         execution_limit=record.execution_limit,
@@ -833,9 +853,7 @@ def _to_attempt(record: SearchBatchAttemptRecord) -> SearchBatchAttempt:
     )
 
 
-def _to_item(
-    record: SearchBatchItemRecord, terms: tuple[str, ...]
-) -> SearchBatchItem:
+def _to_item(record: SearchBatchItemRecord, terms: tuple[str, ...]) -> SearchBatchItem:
     return SearchBatchItem(
         position=record.position,
         platform=record.platform,
@@ -882,6 +900,7 @@ def _to_summary(record: SearchBatchRecord) -> SearchBatchSummary:
         platform_count=len(record.items),
         terminal_item_count=terminal_count,
         max_results_per_term=record.max_results_per_term,
+        max_total_results=record.max_total_results,
         status=record.status,
         control_revision=record.control_revision,
         current_item_position=record.current_item_position,

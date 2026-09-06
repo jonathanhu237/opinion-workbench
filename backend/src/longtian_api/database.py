@@ -4,7 +4,7 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
-CURRENT_DATABASE_VERSION = 29
+CURRENT_DATABASE_VERSION = 30
 DEFAULT_RULE_NAME = "龙田街道及四个社区"
 DEFAULT_RULE_TERMS = (
     "龙田街道",
@@ -136,8 +136,29 @@ class Database:
                 _migrate_to_version_28(connection)
             if version < 29:
                 _migrate_to_version_29(connection)
+            if version < 30:
+                _migrate_to_version_30(connection)
         finally:
             connection.close()
+
+
+def _migrate_to_version_30(connection: sqlite3.Connection) -> None:
+    from longtian_api.migrations.search_total_limit import migrate
+
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        version = _read_user_version(connection)
+        if version >= 30:
+            connection.rollback()
+            return
+        if version != 29:
+            raise DatabaseVersionError("Unsupported database migration source version.")
+        migrate(connection)
+        connection.execute("PRAGMA user_version = 30")
+        connection.commit()
+    except BaseException:
+        connection.rollback()
+        raise
 
 
 def _migrate_to_version_29(connection: sqlite3.Connection) -> None:

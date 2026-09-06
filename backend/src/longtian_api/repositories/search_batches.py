@@ -76,6 +76,7 @@ class SearchBatchRecord:
     created_at: str
     started_at: str | None
     finished_at: str | None
+    max_total_results: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,6 +199,7 @@ class SearchBatchRepository:
         terms: Sequence[str],
         platforms: Sequence[SearchPlatform],
         max_results_per_term: int,
+        max_total_results: int | None = None,
         workflow_operation_key: str | None = None,
     ) -> SearchBatchRecord:
         with self._connection(write=True) as connection:
@@ -208,6 +210,7 @@ class SearchBatchRepository:
                 terms=terms,
                 platforms=platforms,
                 max_results_per_term=max_results_per_term,
+                max_total_results=max_total_results,
                 workflow_operation_key=workflow_operation_key,
             )
 
@@ -277,6 +280,7 @@ class SearchBatchRepository:
                 terms=tuple(rule.terms),
                 platforms=platforms,
                 max_results_per_term=schedule["max_results_per_term"],
+                max_total_results=schedule["max_total_results"],
             )
             connection.execute(
                 """UPDATE collection_occurrences
@@ -335,8 +339,9 @@ class SearchBatchRepository:
             cursor = connection.execute(
                 """INSERT INTO search_runs (monitoring_rule_id, platform, rule_name,
                    max_results_per_term, status, created_at,
-                   execution_start_term_position, search_protocol_version)
-                   VALUES (?, ?, ?, ?, 'queued', ?, ?, 2)""",
+                   execution_start_term_position, search_protocol_version,
+                   max_total_results)
+                   VALUES (?, ?, ?, ?, 'queued', ?, ?, 2, ?)""",
                 (
                     batch["monitoring_rule_id"],
                     item["platform"],
@@ -344,6 +349,7 @@ class SearchBatchRepository:
                     batch["max_results_per_term"],
                     timestamp,
                     checkpoint.next_position,
+                    batch["max_total_results"],
                 ),
             )
             run_id = int(cursor.lastrowid)
@@ -711,6 +717,7 @@ def _insert_batch(
     terms: Sequence[str],
     platforms: Sequence[SearchPlatform],
     max_results_per_term: int,
+    max_total_results: int | None = None,
     workflow_operation_key: str | None = None,
 ) -> SearchBatchRecord:
     """One insertion owner shared by manual and occurrence-backed admission."""
@@ -718,14 +725,15 @@ def _insert_batch(
     cursor = connection.execute(
         """INSERT INTO search_batches
           (monitoring_rule_id,rule_name,max_results_per_term,status,created_at,
-           workflow_operation_key)
-          VALUES (?,?,?,'queued',?,?)""",
+           workflow_operation_key,max_total_results)
+          VALUES (?,?,?,'queued',?,?,?)""",
         (
             monitoring_rule_id,
             rule_name,
             max_results_per_term,
             timestamp,
             workflow_operation_key,
+            max_total_results,
         ),
     )
     batch_id = int(cursor.lastrowid)
@@ -984,6 +992,7 @@ def _read_batch(connection: sqlite3.Connection, batch_id: int) -> SearchBatchRec
         rule_name=row["rule_name"],
         terms=terms,
         max_results_per_term=int(row["max_results_per_term"]),
+        max_total_results=row["max_total_results"],
         status=row["status"],
         control_revision=int(row["control_revision"]),
         current_item_position=row["current_item_position"],

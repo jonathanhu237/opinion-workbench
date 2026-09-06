@@ -30,7 +30,7 @@ def test_independent_neutral_media_understanding_and_unique_settlement(tmp_path)
             tmp_path, count=10
         )
         worker.partial.add("1008")
-        model.item_answers = [UNDERSTANDING] * 8 + ["invalid model JSON"]
+        model.item_answers = [UNDERSTANDING] * 8 + ["invalid model JSON"] * 2
         admission = await service.create(request(database))
         await finish(service)
         job = service.repository.read(admission.job.id)
@@ -40,8 +40,8 @@ def test_independent_neutral_media_understanding_and_unique_settlement(tmp_path)
             and job.counts.input_incomplete == 0
             and job.counts.failed == 1
         )
-        assert job.usage.attempted_requests == job.usage.accounted_requests == 10
-        assert len(worker.calls) == 10 and len(model.calls) == 10
+        assert job.usage.attempted_requests == job.usage.accounted_requests == 11
+        assert len(worker.calls) == 10 and len(model.calls) == 11
         assert all(stage == "analysis" for stage, _ in model.calls)
         assert coordinator._owner is None
         items = service.repository.items(job.id).items
@@ -78,7 +78,7 @@ def test_zero_successes_still_publish_one_normally_settled_handoff(tmp_path, out
         if outcome == "input_incomplete":
             worker.partial.update({"1000", "1001"})
         else:
-            model.item_answers = ["invalid JSON", "invalid JSON"]
+            model.item_answers = ["invalid JSON"] * 4
         admission = await service.create(request(database))
         await finish(service)
         job = service.repository.read(admission.job.id)
@@ -102,7 +102,7 @@ def test_zero_successes_still_publish_one_normally_settled_handoff(tmp_path, out
         assert ResultsRepository(database).list().active_count == 0
         assert ResultsRepository(database).list().eligible_count == 0
         assert len(worker.calls) == 2
-        assert len(model.calls) == 2
+        assert len(model.calls) == (2 if outcome == "input_incomplete" else 4)
         assert all(stage == "analysis" for stage, _ in model.calls)
         assert coordinator._owner is None
         await service.shutdown()
@@ -228,7 +228,7 @@ def test_failed_known_new_input_cannot_resurrect_old_compatible_text(tmp_path):
         await finish(service)
         old = service.repository.items(first.job.id).items[0]
         worker.body = "已知新正文：同名地点发生变化。"
-        model.item_answers = ["invalid"]
+        model.item_answers = ["invalid", "invalid"]
         refresh = await service.create(
             request(database, kind="reanalysis", result_ids=[1], force_refresh=True)
         )
@@ -241,7 +241,7 @@ def test_failed_known_new_input_cannot_resurrect_old_compatible_text(tmp_path):
         retry = await service.create(request(database, kind="retry", result_ids=[1]))
         await finish(service)
         assert service.repository.read(retry.job.id).counts.reused == 0
-        assert len(worker.calls) == len(model.calls) == 3
+        assert len(worker.calls) == 3 and len(model.calls) == 4
         assert service.repository.attempt(old.id) == old
         await service.shutdown()
 

@@ -55,6 +55,7 @@ const summaryShape = {
   rule_name: z.string(),
   term_count: z.number().int().positive().max(20),
   max_results_per_term: z.number().int().min(1).max(50),
+  max_total_results: z.number().int().min(1).max(50).nullish(),
   status: searchRunStatusSchema,
   failure_reason: searchFailureReasonSchema.nullable(),
   execution_limit: z.enum(['requests', 'pages', 'time']).nullable().optional(),
@@ -386,6 +387,7 @@ export async function startSearchRun(
     monitoring_rule_id: number
     platform?: SearchPlatform
     max_results_per_term: number
+    max_total_results?: number
   },
   signal?: AbortSignal,
 ) {

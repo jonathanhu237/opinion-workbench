@@ -105,6 +105,11 @@ class CollectionScheduleService:
                 rule=rule,
                 platforms=tuple(p for p in SEARCH_PLATFORMS if p in payload.platforms),
                 max_results_per_term=payload.max_results_per_term,
+                **(
+                    {"max_total_results": payload.max_total_results}
+                    if payload.max_total_results is not None
+                    else {}
+                ),
                 interval_minutes=minutes,
                 enabled=enabled,
                 now=utc(self._clock()),

@@ -57,6 +57,7 @@ class SearchRunRecord:
     search_protocol_version: int = 2
     execution_limit: ExecutionLimit | None = None
     incomplete_terms: tuple[CollectorSearchTermDiagnostic, ...] = ()
+    max_total_results: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,6 +167,7 @@ class SearchRunRepository:
         rule_name: str,
         terms: Sequence[str],
         max_results_per_term: int,
+        max_total_results: int | None = None,
     ) -> SearchRunRecord:
         with _translate_storage_errors(), self._write_connection() as connection:
             timestamp = _utc_timestamp()
@@ -174,8 +176,9 @@ class SearchRunRepository:
                 INSERT INTO search_runs (
                   monitoring_rule_id, platform, rule_name, max_results_per_term,
                   status, current_term_position, created_at, started_at, finished_at,
-                  execution_start_term_position, search_protocol_version
-                ) VALUES (?, ?, ?, ?, 'queued', NULL, ?, NULL, NULL, 0, 2)
+                  execution_start_term_position, search_protocol_version,
+                  max_total_results
+                ) VALUES (?, ?, ?, ?, 'queued', NULL, ?, NULL, NULL, 0, 2, ?)
                 """,
                 (
                     monitoring_rule_id,
@@ -183,6 +186,7 @@ class SearchRunRepository:
                     rule_name,
                     max_results_per_term,
                     timestamp,
+                    max_total_results,
                 ),
             )
             run_id = cursor.lastrowid
@@ -196,6 +200,11 @@ class SearchRunRepository:
                 ((run_id, position, value) for position, value in enumerate(terms)),
             )
             return _read_run(connection, run_id)
+
+    def collection_content_ids(self, run_id: int) -> set[str]:
+        with _translate_storage_errors(), self._write_connection() as connection:
+            _read_run(connection, run_id)
+            return _collection_content_ids(connection, run_id)
 
     def mark_running(self, run_id: int) -> SearchRunRecord:
         with _translate_storage_errors(), self._write_connection() as connection:
@@ -214,7 +223,7 @@ class SearchRunRepository:
     def set_progress(self, run_id: int, term_position: int) -> None:
         with _translate_storage_errors(), self._write_connection() as connection:
             run = _require_active_writer(connection, run_id)
-            if run["search_protocol_version"] == 2:
+            if run["search_protocol_version"] == 2 and run["max_total_results"] is None:
                 current = run["current_term_position"]
                 expected = (
                     run["execution_start_term_position"]
@@ -265,10 +274,16 @@ class SearchRunRepository:
             if (
                 run["search_protocol_version"] != 2
                 or term_position != run["current_term_position"]
-                or term_position != run["execution_start_term_position"] + completed
+                or (
+                    run["max_total_results"] is None
+                    and term_position
+                    != run["execution_start_term_position"] + completed
+                )
                 or type(item_count) is not int
                 or item_count != count
-                or not 0 <= item_count <= run["max_results_per_term"]
+                or not 0
+                <= item_count
+                <= (run["max_total_results"] or run["max_results_per_term"])
             ):
                 raise SearchRunNotActiveError
             timestamp = _utc_timestamp()
@@ -296,7 +311,9 @@ class SearchRunRepository:
                     or not 0 <= diagnostic.position < 20
                     or diagnostic.reason != "view_all_unresolved"
                     or type(diagnostic.result_count) is not int
-                    or not 0 <= diagnostic.result_count <= run["max_results_per_term"]
+                    or not 0
+                    <= diagnostic.result_count
+                    <= (run["max_total_results"] or run["max_results_per_term"])
                     or connection.execute(
                         "SELECT 1 FROM search_run_terms "
                         "WHERE run_id = ? AND position = ?",
@@ -360,6 +377,14 @@ class SearchRunRepository:
             ).fetchone()
             if term is None:
                 raise sqlite3.IntegrityError("invalid term position")
+
+            if active["max_total_results"] is not None:
+                admitted = _collection_content_ids(connection, run_id)
+                if (
+                    item.platform_content_id not in admitted
+                    and len(admitted) >= active["max_total_results"]
+                ):
+                    raise SearchRunNotActiveError
 
             content_row = connection.execute(
                 """
@@ -785,6 +810,7 @@ def _read_run(
         rule_name=str(row["rule_name"]),
         terms=terms,
         max_results_per_term=int(row["max_results_per_term"]),
+        max_total_results=row["max_total_results"],
         status=str(row["status"]),  # type: ignore[arg-type]
         current_term_position=(
             int(row["current_term_position"])
@@ -845,6 +871,22 @@ def assemble_result(
         last_observed_at=str(row["last_observed_at"]),
         matched_terms=matched_terms,
     )
+
+
+def _collection_content_ids(connection: sqlite3.Connection, run_id: int) -> set[str]:
+    rows = connection.execute(
+        """SELECT DISTINCT contents.platform_content_id
+           FROM search_run_contents links
+           JOIN search_contents contents ON contents.id=links.search_content_id
+           WHERE links.run_id=? OR links.run_id IN (
+             SELECT sibling.search_run_id FROM search_batch_attempts current
+             JOIN search_batch_attempts sibling ON sibling.batch_id=current.batch_id
+               AND sibling.item_position=current.item_position
+             WHERE current.search_run_id=?
+           )""",
+        (run_id, run_id),
+    ).fetchall()
+    return {str(row[0]) for row in rows}
 
 
 def _require_active_writer(connection: sqlite3.Connection, run_id: int) -> sqlite3.Row:

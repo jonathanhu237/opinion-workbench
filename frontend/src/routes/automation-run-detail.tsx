@@ -28,6 +28,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
+import { collectionLimitLabel } from '@/lib/collection-limit'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -58,7 +59,7 @@ const stageLabels: Record<AutomationStage['name'], string> = {
 }
 
 const stageDescriptions: Record<AutomationStage['name'], string> = {
-  collection: '按本次任务设置、微博和每个搜索词上限获取内容。',
+  collection: '按本次任务保存的搜索规则和采集上限获取微博内容。',
   initial_analysis: '先理解正文、图片、视频等可用内容。',
   topic_report: '按本次任务的分析目标判断相关性，并生成报告。',
 }
@@ -294,7 +295,7 @@ function SnapshotCard({ run }: { run: AutomationRun }) {
         <div>
           <p className="text-muted-foreground">微博与采集上限</p>
           <p className="mt-1 font-medium">
-            {platforms} · 每个搜索词最多 {run.snapshot.max_results_per_term} 条
+            {platforms} · {collectionLimitLabel(run.snapshot)}
           </p>
         </div>
         <div>

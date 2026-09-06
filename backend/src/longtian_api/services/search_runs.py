@@ -89,7 +89,10 @@ class SearchRunRepositoryProtocol(Protocol):
         rule_name: str,
         terms: tuple[str, ...],
         max_results_per_term: int,
+        max_total_results: int | None = None,
     ) -> SearchRunRecord: ...
+
+    def collection_content_ids(self, run_id: int) -> set[str]: ...
 
     def mark_running(self, run_id: int) -> SearchRunRecord: ...
 
@@ -262,6 +265,11 @@ class SearchRunService:
                     rule_name=rule.name,
                     terms=tuple(rule.terms),
                     max_results_per_term=payload.max_results_per_term,
+                    **(
+                        {"max_total_results": payload.max_total_results}
+                        if payload.max_total_results is not None
+                        else {}
+                    ),
                 )
             except SearchRunRepositoryUnavailableError:
                 await self._browser_operations.release(owner)
@@ -570,12 +578,21 @@ class SearchRunService:
                     ),
                 )
 
+            latest_options = {}
+            if record.max_total_results is not None:
+                latest_options = {
+                    "max_total_results": record.max_total_results,
+                    "previous_content_ids": await database_call(
+                        self._repository.collection_content_ids, record.id
+                    ),
+                }
             async with asyncio.timeout(self._search_timeout_seconds):
                 result = await self._worker.search(
                     request_id=request_id,
                     platform=record.platform,
                     terms=record.terms[start:],
                     max_results_per_term=record.max_results_per_term,
+                    **latest_options,
                     on_progress=on_progress,
                     on_item=on_item,
                     on_term_completed=on_term_completed,
@@ -660,6 +677,7 @@ def _to_summary(record: SearchRunRecord) -> SearchRunSummary:
         rule_name=record.rule_name,
         term_count=len(record.terms),
         max_results_per_term=record.max_results_per_term,
+        max_total_results=record.max_total_results,
         status=record.status,
         failure_reason=record.failure_reason,
         execution_limit=record.execution_limit,

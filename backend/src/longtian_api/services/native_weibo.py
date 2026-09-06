@@ -1,6 +1,7 @@
 """Project-owned, bounded rendered-browser discovery. No legacy fallback."""
 
 import asyncio
+from collections import deque
 from time import monotonic
 from urllib.parse import parse_qsl, urlencode, urlsplit
 
@@ -90,9 +91,20 @@ class NativeWeiboCollector:
         on_progress,
         on_item,
         on_term_completed,
+        max_total_results=None,
+        previous_content_ids=(),
     ):
         if platform != "wb":
             return SearchWorkerResult("browser_unavailable")
+        if max_total_results is not None:
+            return await self._search_latest(
+                terms=terms,
+                limit=max_total_results,
+                previous_content_ids=previous_content_ids,
+                on_progress=on_progress,
+                on_item=on_item,
+                on_term_completed=on_term_completed,
+            )
         found = False
         pages = 0
         deadline = monotonic() + self.timeout_seconds
@@ -197,6 +209,131 @@ class NativeWeiboCollector:
             return result("timed_out", execution_limit="time")
         except BrowserUnavailable:
             return result("browser_unavailable")
+        finally:
+            await self.browser.freeze()
+
+    async def _search_latest(
+        self,
+        *,
+        terms,
+        limit,
+        previous_content_ids,
+        on_progress,
+        on_item,
+        on_term_completed,
+    ):
+        """Take one fresh item per term per round, with one shared unique cap."""
+        seen = set(previous_content_ids)
+        per_term = [set() for _ in terms]
+        queues = [deque() for _ in terms]
+        urls = [
+            "https://s.weibo.com/realtime?"
+            + urlencode({"q": term, "rd": "realtime", "tw": "realtime"})
+            for term in terms
+        ]
+        visited = [set() for _ in terms]
+        recovered = set()
+        incomplete = set()
+        completed = set()
+        deadline = monotonic() + self.timeout_seconds
+        pages = 0
+        try:
+            await self.browser.start(max_requests=self.max_requests)
+            while len(seen) < limit and any(
+                urls[i] or queues[i] for i in range(len(terms))
+            ):
+                for position, term in enumerate(terms):
+                    if len(seen) >= limit:
+                        break
+                    if position in completed:
+                        continue
+                    await on_progress(position, len(terms))
+                    # Duplicate-only pages don't consume this term's turn.
+                    fetched = False
+                    while len(seen) < limit:
+                        if monotonic() >= deadline:
+                            raise BrowserBudgetExceeded("time")
+                        if queues[position]:
+                            item = queues[position].popleft()
+                            if item.content_id in per_term[position]:
+                                continue
+                            # Record all matched terms for admitted content, but
+                            # only a distinct item consumes a slot or a turn.
+                            await on_item(position, item)
+                            per_term[position].add(item.content_id)
+                            if item.content_id not in seen:
+                                seen.add(item.content_id)
+                                break
+                            continue
+                        url = urls[position]
+                        if not url or fetched:
+                            break
+                        if pages >= self.max_pages:
+                            raise BrowserBudgetExceeded("pages")
+                        identity = _search_url_identity(url)
+                        if identity in visited[position]:
+                            return SearchWorkerResult("search_pagination_incompatible")
+                        visited[position].add(identity)
+                        if pages:
+                            await asyncio.sleep(self.delay_seconds)
+                        pages += 1
+                        fetched = True
+                        async with asyncio.timeout(max(0, deadline - monotonic())):
+                            await self.browser.navigate(url)
+                            parsed = None
+                            for poll in range(self.ready_polls):
+                                parsed = read_search_page(
+                                    *(await self.browser.snapshot()), term, latest=True
+                                )
+                                if parsed.state != "pending":
+                                    break
+                                if poll + 1 < self.ready_polls:
+                                    await asyncio.sleep(0.25)
+                        queues[position].extend(parsed.items)
+                        if parsed.state == "omitted":
+                            if position in recovered or parsed.view_all_url is None:
+                                incomplete.add(position)
+                                urls[position] = None
+                            else:
+                                recovered.add(position)
+                                urls[position] = parsed.view_all_url
+                        elif parsed.state in ("results", "empty"):
+                            urls[position] = parsed.next_url
+                        else:
+                            return SearchWorkerResult(
+                                "page_state_unrecognized"
+                                if parsed.state == "pending"
+                                else parsed.state
+                            )
+                    if not urls[position] and not queues[position]:
+                        await on_term_completed(
+                            position,
+                            len(per_term[position]),
+                            "view_all_unresolved" if position in incomplete else None,
+                        )
+                        completed.add(position)
+            for position in range(len(terms)):
+                if position in completed:
+                    continue
+                await on_progress(position, len(terms))
+                await on_term_completed(
+                    position,
+                    len(per_term[position]),
+                    "view_all_unresolved" if position in incomplete else None,
+                )
+            return SearchWorkerResult(
+                "completed_with_incomplete"
+                if incomplete
+                else "completed_with_results"
+                if seen
+                else "completed_empty"
+            )
+        except BrowserBudgetExceeded as error:
+            return SearchWorkerResult("timed_out", execution_limit=error.limit)
+        except TimeoutError:
+            return SearchWorkerResult("timed_out", execution_limit="time")
+        except BrowserUnavailable:
+            return SearchWorkerResult("browser_unavailable")
         finally:
             await self.browser.freeze()
 

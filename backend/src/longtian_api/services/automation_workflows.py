@@ -931,6 +931,11 @@ class AutomationWorkflowService:
                     terms=tuple(snapshot.terms),
                     platforms=tuple(snapshot.platforms),
                     max_results_per_term=snapshot.max_results_per_term,
+                    **(
+                        {"max_total_results": snapshot.max_total_results}
+                        if snapshot.max_total_results is not None
+                        else {}
+                    ),
                     operation_key=attempt.operation_key,
                 )
             else:
@@ -939,6 +944,11 @@ class AutomationWorkflowService:
                         monitoring_rule_id=snapshot.monitoring_rule_id,
                         platforms=list(snapshot.platforms),
                         max_results_per_term=snapshot.max_results_per_term,
+                        **(
+                            {"max_total_results": snapshot.max_total_results}
+                            if snapshot.max_total_results is not None
+                            else {}
+                        ),
                     )
                 )
             child_id = _value(child, "id")
@@ -1368,6 +1378,7 @@ class AutomationWorkflowService:
             terms=list(terms),
             platforms=list(task.platforms),
             max_results_per_term=task.max_results_per_term,
+            max_total_results=task.max_total_results,
             analysis_goal=report_mirror,
             # ``analysis_goal`` is the bounded legacy mirror retained in the
             # snapshot for v17 readers.  Keep its hash truthful when a new
@@ -1462,6 +1473,7 @@ class AutomationWorkflowService:
             rule_state=record.rule_state,
             platforms=list(record.platforms),
             max_results_per_term=record.max_results_per_term,
+            max_total_results=record.max_total_results,
             analysis_goal=record.analysis_goal,
             initial_prompt=record.initial_prompt,
             report_prompt=record.report_prompt,

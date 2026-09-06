@@ -1,4 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { collectionLimitLabel } from '@/lib/collection-limit'
 import {
   ArrowLeft,
   ArrowRight,
@@ -222,9 +223,11 @@ function BatchRail({
                       </p>
                     )}
                     <p className="mt-2 text-sm text-muted-foreground">
-                      {item.recovery_available
-                        ? `搜索词进度：${item.completed_term_count} / ${batch.term_count}`
-                        : '无法确认从哪里继续'}
+                      {batch.max_total_results != null
+                        ? `已采集 ${item.total_count} / ${batch.max_total_results} 条（去重）`
+                        : item.recovery_available
+                          ? `搜索词进度：${item.completed_term_count} / ${batch.term_count}`
+                          : '无法确认从哪里继续'}
                     </p>
                     {run &&
                       item.status !== 'running' &&
@@ -544,6 +547,9 @@ export function CollectionBatchDetail() {
             · {batch.term_count} 个搜索词 · 创建于{' '}
             {formatLocalDate(batch.created_at)}
           </p>
+          <p className="mt-2 text-sm text-muted-foreground">
+            {collectionLimitLabel(batch)}
+          </p>
         </div>
         {canCancel && batch.status !== 'paused_for_manual_action' && (
           <Button
@@ -572,20 +578,26 @@ export function CollectionBatchDetail() {
                 {batchPauseGuidance(pausedItem)}
               </p>
               <p className="text-sm">
-                已确认完成 {pausedItem.completed_term_count} /{' '}
-                {batch.term_count} 个搜索词，剩余{' '}
-                {pausedItem.remaining_term_count} 个。
-                {pausedItem.next_term_position !== null && (
+                {batch.max_total_results != null ? (
+                  `已保留 ${pausedItem.total_count} 条。继续后仍按最新优先轮流检索，重复命中不占新名额，整批合计最多 ${batch.max_total_results} 条。`
+                ) : (
                   <>
-                    {' '}
-                    继续时将从“{batch.terms[pausedItem.next_term_position]}
-                    ”开始。
+                    已确认完成 {pausedItem.completed_term_count} /{' '}
+                    {batch.term_count} 个搜索词，剩余{' '}
+                    {pausedItem.remaining_term_count} 个。
+                    {pausedItem.next_term_position !== null && (
+                      <>
+                        {' '}
+                        继续时将从“{batch.terms[pausedItem.next_term_position]}
+                        ”开始。
+                      </>
+                    )}
+                    {pausedItem.remaining_term_count === 0 &&
+                      pausedItem.recovery_available && (
+                        <> 所有搜索词均已完成，继续后将结束本次采集。</>
+                      )}
                   </>
                 )}
-                {pausedItem.remaining_term_count === 0 &&
-                  pausedItem.recovery_available && (
-                    <> 所有搜索词均已完成，继续后将结束本次采集。</>
-                  )}
               </p>
               {!pausedItem.recovery_available && (
                 <p

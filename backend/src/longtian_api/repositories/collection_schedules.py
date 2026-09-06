@@ -45,6 +45,7 @@ class ScheduleRecord:
     created_at: str
     updated_at: str
     latest_occurrence: CollectionOccurrence | None
+    max_total_results: int | None = None
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,7 @@ class OccurrenceClaim:
     monitoring_rule_id: int | None
     platforms: tuple[SearchPlatform, ...]
     max_results_per_term: int
+    max_total_results: int | None = None
 
 
 class CollectionScheduleRepository:
@@ -95,6 +97,7 @@ class CollectionScheduleRepository:
         rule: MonitoringRuleRecord | None,
         platforms: tuple[SearchPlatform, ...],
         max_results_per_term: int,
+        max_total_results: int | None = None,
         interval_minutes: int,
         enabled: bool,
         now: datetime,
@@ -119,6 +122,7 @@ class CollectionScheduleRepository:
                 rule.id if rule else None,
                 rule_name,
                 max_results_per_term,
+                max_total_results,
                 interval_minutes,
                 int(enabled),
                 timestamp if enabled else None,
@@ -128,15 +132,15 @@ class CollectionScheduleRepository:
             if old is None:
                 cursor = connection.execute(
                     """INSERT INTO collection_schedules(monitoring_rule_id,rule_name,
-                      max_results_per_term,interval_minutes,enabled,anchor_at,next_due_at,
-                      updated_at,created_at) VALUES (?,?,?,?,?,?,?,?,?)""",
+                      max_results_per_term,max_total_results,interval_minutes,enabled,anchor_at,next_due_at,
+                      updated_at,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)""",
                     (*values, timestamp),
                 )
                 schedule_id = int(cursor.lastrowid)
             else:
                 connection.execute(
                     """UPDATE collection_schedules SET monitoring_rule_id=?,rule_name=?,
-                      max_results_per_term=?,interval_minutes=?,enabled=?,anchor_at=?,
+                      max_results_per_term=?,max_total_results=?,interval_minutes=?,enabled=?,anchor_at=?,
                       next_due_at=?,updated_at=?,revision=revision+1 WHERE id=?""",
                     (*values, schedule_id),
                 )
@@ -246,6 +250,7 @@ class CollectionScheduleRepository:
                             monitoring_rule_id=row["monitoring_rule_id"],
                             platforms=_platforms(connection, row["id"]),
                             max_results_per_term=row["max_results_per_term"],
+                            max_total_results=row["max_total_results"],
                         )
                     )
             return len(rows) if missed_reason is not None else claims
@@ -326,6 +331,7 @@ def _read_schedule(connection: sqlite3.Connection, schedule_id: int) -> Schedule
         rule=_rule(connection, row["monitoring_rule_id"]),
         platforms=_platforms(connection, schedule_id),
         max_results_per_term=row["max_results_per_term"],
+        max_total_results=row["max_total_results"],
         interval_minutes=row["interval_minutes"],
         enabled=bool(row["enabled"]),
         revision=row["revision"],

@@ -69,6 +69,7 @@ class CollectionScheduleCreate(SearchBatchCreate):
 class CollectionScheduleReplace(CollectionScheduleCreate):
     monitoring_rule_id: int | None = Field(ge=1, le=MAX_SAFE_INTEGER)
     max_results_per_term: int = Field(ge=1, le=50)
+    max_total_results: int | None = Field(default=None, ge=1, le=50)
     expected_revision: int = Field(ge=1, lt=MAX_SAFE_INTEGER)
     enabled: bool
 
@@ -135,6 +136,7 @@ class CollectionSchedule(BaseModel):
     rule_state: Literal["enabled", "disabled", "deleted", "invalid"]
     platforms: list[SearchPlatform] = Field(min_length=1, max_length=1)
     max_results_per_term: int = Field(ge=1, le=50)
+    max_total_results: int | None = Field(default=None, ge=1, le=50)
     interval_minutes: int = Field(ge=1, le=MAX_INTERVAL_MINUTES)
     enabled: bool
     revision: int = Field(ge=1, le=MAX_SAFE_INTEGER)

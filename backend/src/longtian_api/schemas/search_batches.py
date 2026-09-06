@@ -90,6 +90,7 @@ class SearchBatchCreate(BaseModel):
         default_factory=lambda: ["wb"], min_length=1, max_length=1
     )
     max_results_per_term: int = Field(default=10, ge=1, le=50)
+    max_total_results: int | None = Field(default=None, ge=1, le=50)
 
     @model_validator(mode="after")
     def validate_unique_platforms(self) -> "SearchBatchCreate":
@@ -139,6 +140,7 @@ class SearchBatchSummary(BaseModel):
     platform_count: int = Field(ge=1, le=1)
     terminal_item_count: int = Field(ge=0, le=1)
     max_results_per_term: int
+    max_total_results: int | None = Field(default=None, ge=1, le=50)
     status: SearchBatchStatus
     control_revision: int = Field(ge=0)
     current_item_position: int | None = Field(default=None, ge=0, le=0)

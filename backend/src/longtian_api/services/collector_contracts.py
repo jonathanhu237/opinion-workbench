@@ -186,6 +186,8 @@ class SearchCollector(Protocol):
         on_progress: SearchProgressCallback,
         on_item: SearchItemCallback,
         on_term_completed: SearchTermCompletedCallback,
+        max_total_results: int | None = None,
+        previous_content_ids: Sequence[str] = (),
     ) -> SearchWorkerResult: ...
 
     async def open_result(

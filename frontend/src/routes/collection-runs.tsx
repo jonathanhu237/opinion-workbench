@@ -27,6 +27,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { useMonitoringRules } from '@/hooks/use-monitoring-rules'
+import { collectionLimitLabel } from '@/lib/collection-limit'
 import { useSearchBatches } from '@/hooks/use-search-batches'
 import { useSearchRuns } from '@/hooks/use-search-runs'
 import { usePlatformConnections } from '@/hooks/use-platform-connections'
@@ -52,11 +53,11 @@ import {
 
 const startSchema = z.object({
   ruleId: z.string().min(1, '请选择监控规则。'),
-  maxResultsPerTerm: z.coerce
+  maxTotalResults: z.coerce
     .number<number>()
     .int('请输入整数。')
-    .min(1, '每个搜索词至少采集 1 条。')
-    .max(50, '每个搜索词最多采集 50 条。'),
+    .min(1, '采集总上限至少为 1 条。')
+    .max(50, '采集总上限最多为 50 条。'),
 })
 
 type StartValues = z.infer<typeof startSchema>
@@ -157,8 +158,7 @@ function BatchHistory({ batches }: { batches: SearchBatchSummary[] }) {
             <TableCell>
               <p className="max-w-72 truncate font-medium">{batch.rule_name}</p>
               <p className="mt-1 text-xs text-muted-foreground">
-                {batch.term_count} 个搜索词 · 每词最多{' '}
-                {batch.max_results_per_term} 条
+                {batch.term_count} 个搜索词 · {collectionLimitLabel(batch)}
               </p>
             </TableCell>
             <TableCell>
@@ -274,7 +274,7 @@ export function CollectionRuns() {
     mode: 'onBlur',
     defaultValues: {
       ruleId: '',
-      maxResultsPerTerm: 10,
+      maxTotalResults: 10,
     },
   })
   const startMutation = useMutation({
@@ -309,7 +309,8 @@ export function CollectionRuns() {
       }
       const batch = await startMutation.mutateAsync({
         monitoring_rule_id: rule.id,
-        max_results_per_term: values.maxResultsPerTerm,
+        max_results_per_term: values.maxTotalResults,
+        max_total_results: values.maxTotalResults,
       })
       await queryClient.invalidateQueries({
         queryKey: SEARCH_BATCHES_QUERY_KEY,
@@ -383,12 +384,12 @@ export function CollectionRuns() {
                 />
 
                 <Controller
-                  name="maxResultsPerTerm"
+                  name="maxTotalResults"
                   control={form.control}
                   render={({ field, fieldState }) => (
                     <Field data-invalid={fieldState.invalid}>
                       <FieldLabel htmlFor="collection-limit">
-                        每词最多采集
+                        采集总上限
                       </FieldLabel>
                       <Input
                         {...field}
@@ -416,6 +417,9 @@ export function CollectionRuns() {
                 </Button>
               </div>
 
+              <p className="text-sm text-muted-foreground">
+                默认使用微博实时搜索，最新优先。多个搜索词轮流采集，去重后合计不超过上限；采集完成后仍可自行选材生成报告。
+              </p>
               <div className="flex min-h-11 items-center gap-3 rounded-lg border border-border bg-card px-3 text-sm">
                 <img
                   src={searchPlatformPresenters.wb.logoSrc}

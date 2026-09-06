@@ -148,7 +148,8 @@ def _search_link(value: str, base: str, term: str, *, view_all: bool) -> str | N
     if (
         parts.scheme != "https"
         or parts.netloc != "s.weibo.com"
-        or parts.path != "/weibo"
+        or parts.path not in ("/weibo", "/realtime")
+        or parts.path != urlsplit(base).path
     ):
         return None
     query = parse_qs(parts.query)
@@ -199,7 +200,7 @@ def _view_all_search_url(root, url: str, term: str) -> str | None:
     return None
 
 
-def read_search_page(url, raw, status, term):
+def read_search_page(url, raw, status, term, *, latest=False):
     root = document(raw)
     blocked = barrier(root, url, status)
     if blocked:
@@ -207,7 +208,7 @@ def read_search_page(url, raw, status, term):
     parts = urlsplit(url)
     if (
         parts.hostname != "s.weibo.com"
-        or parts.path != "/weibo"
+        or parts.path != ("/realtime" if latest else "/weibo")
         or parse_qs(parts.query).get("q") != [term]
     ):
         return SearchPage("search_context_unavailable")

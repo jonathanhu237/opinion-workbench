@@ -61,11 +61,11 @@ const formSchema = z
   .object({
     name: z.string().max(80, '任务名称不能超过 80 个字符。'),
     ruleId: z.string(),
-    maxResultsPerTerm: z.coerce
+    maxTotalResults: z.coerce
       .number<number>()
       .int('请输入整数。')
-      .min(1, '每个搜索词至少采集 1 条。')
-      .max(50, '每个搜索词最多采集 50 条。'),
+      .min(1, '采集总上限至少为 1 条。')
+      .max(50, '采集总上限最多为 50 条。'),
     initialPrompt: promptChoiceSchema,
     reportPrompt: promptChoiceSchema,
     scheduleKind: z.enum(['interval', 'daily']),
@@ -141,7 +141,8 @@ function initialValues(task: AutomationTask | null): FormValues {
       task?.monitoring_rule_id === null || task === null
         ? ''
         : String(task.monitoring_rule_id),
-    maxResultsPerTerm: task?.max_results_per_term ?? 10,
+    maxTotalResults:
+      task?.max_total_results ?? task?.max_results_per_term ?? 10,
     initialPrompt: choiceFromSnapshot(task?.initial_prompt),
     reportPrompt: choiceFromSnapshot(task?.report_prompt),
     scheduleKind: schedule?.kind ?? 'interval',
@@ -299,7 +300,8 @@ function makePayload(values: FormValues): AutomationTaskCreate {
   return {
     name: values.name.trim(),
     monitoring_rule_id: Number(values.ruleId),
-    max_results_per_term: values.maxResultsPerTerm,
+    max_results_per_term: values.maxTotalResults,
+    max_total_results: values.maxTotalResults,
     initial_prompt: values.initialPrompt,
     report_prompt: values.reportPrompt,
     schedule:
@@ -510,12 +512,12 @@ export function AutomationTaskEditor({
             />
 
             <Controller
-              name="maxResultsPerTerm"
+              name="maxTotalResults"
               control={form.control}
               render={({ field, fieldState }) => (
                 <Field data-invalid={fieldState.invalid}>
                   <FieldLabel htmlFor="automation-task-limit">
-                    每个搜索词最多采集
+                    采集总上限
                   </FieldLabel>
                   <Input
                     {...field}
@@ -534,6 +536,12 @@ export function AutomationTaskEditor({
             />
           </div>
 
+          <p className="text-sm text-muted-foreground">
+            默认使用微博实时搜索，最新优先。多个搜索词轮流采集，去重后共用一个总上限。
+            {task !== null && task.max_total_results == null
+              ? ' 此任务原为每词上限，保存后将改为这里设置的采集总上限；历史运行不变。'
+              : ''}
+          </p>
           <div className="flex min-h-11 items-center gap-3 rounded-lg border border-border bg-card px-3 text-sm">
             <span className="font-medium">采集平台：微博</span>
             <span className="text-muted-foreground">当前版本仅支持微博</span>
