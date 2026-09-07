@@ -151,10 +151,10 @@ function ManualRecovery({ value }: { value: ReportGeneration }) {
     <div className="rounded-lg border p-3 text-sm" role="status">
       <p>
         {value.pause_reason === 'login_required'
-          ? '微博需要重新登录。'
+          ? '当前平台需要重新登录。'
           : value.pause_reason === 'platform_blocked_or_rate_limited'
-            ? '微博提示限流，请等待并在专用浏览器确认状态。'
-            : '微博需要完成安全验证。'}
+            ? '当前平台提示限流，请等待并在专用浏览器确认状态。'
+            : '当前平台需要完成安全验证。'}
         已保存的结果不会丢失，其他依赖浏览器的任务也会等待；已有正文的报告仍可处理。
       </p>
       <p className="mt-2">
@@ -166,7 +166,7 @@ function ManualRecovery({ value }: { value: ReportGeneration }) {
           disabled={control.isPending}
           onClick={() => control.mutate('manual-page')}
         >
-          打开微博专用窗口
+          打开平台专用窗口
         </Button>
         <Button
           disabled={control.isPending}

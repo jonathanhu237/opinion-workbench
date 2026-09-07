@@ -8,6 +8,7 @@ from longtian_api.repositories.analysis_settings import resolve_prompt_choice
 from longtian_api.repositories.analysis_shared import AnalysisRepository, timestamp
 from longtian_api.repositories.content_analyses import ContentAnalysisRepository
 from longtian_api.repositories.generation_selection import eligibility, select_library
+from longtian_api.schemas.ai_summaries import SummaryFailure
 from longtian_api.schemas.analysis_evidence import SavedInput
 from longtian_api.schemas.report_generations import (
     GenerationCreate,
@@ -20,6 +21,7 @@ from longtian_api.schemas.report_generations import (
 )
 from longtian_api.schemas.topic_report_engine import ProviderIntent
 from longtian_api.schemas.topic_reports import ExplicitSelection, ReportPrompt
+from longtian_api.services.ai_analysis import MODEL_INPUT_VERSION
 from longtian_api.services.analysis_errors import AnalysisError
 from longtian_api.services.summary_errors import failure
 from longtian_api.services.topic_report_errors import (
@@ -293,7 +295,8 @@ class ReportGenerationRepository(AnalysisRepository):
             placeholders = ",".join("?" for _ in selected_ids)
             rows = connection.execute(
                 f"""SELECT cl.content_id,cl.active_job_id,
-                    cl.active_legacy_summary_id,cl.legacy_state,a.status
+                    cl.active_legacy_summary_id,cl.legacy_state,a.status,
+                    a.analysis_input_version
                     FROM content_analysis_claims cl
                     LEFT JOIN content_analysis_attempts a
                       ON a.id=cl.latest_attempt_id
@@ -312,10 +315,19 @@ class ReportGenerationRepository(AnalysisRepository):
                     or row["status"] in ("queued", "acquiring", "analysing")
                 ):
                     active += 1
-                elif row["status"] == "completed" or row["legacy_state"] == (
-                    "legacy_completed"
+                elif (
+                    row["status"] == "completed"
+                    and row["analysis_input_version"] == MODEL_INPUT_VERSION
                 ):
                     summarized += 1
+                elif row["status"] == "completed" or row["legacy_state"] in (
+                    "legacy_completed",
+                    "legacy_attempted",
+                ):
+                    # Historical summaries are retained for historical reports,
+                    # but never satisfy a new text-only selection. They are
+                    # pending so admission creates a fresh understanding.
+                    pending += 1
                 elif row["status"] in (
                     "failed",
                     "input_incomplete",
@@ -424,9 +436,15 @@ class ReportGenerationRepository(AnalysisRepository):
             JOIN content_analysis_claims cl ON cl.content_id=a.content_id
             WHERE a.content_id=? AND a.id<? AND a.observation_hash=?
             AND a.status='completed' AND a.reused_from_attempt_id IS NULL
+            AND a.analysis_input_version=?
             AND a.input_fingerprint=cl.known_input_fingerprint
             ORDER BY a.id DESC LIMIT 1""",
-            (attempt["content_id"], attempt["id"], attempt["observation_hash"]),
+            (
+                attempt["content_id"],
+                attempt["id"],
+                attempt["observation_hash"],
+                MODEL_INPUT_VERSION,
+            ),
         ).fetchone()
         if cached is not None:
             value = self._analyses._attempt(cached)
@@ -448,16 +466,22 @@ class ReportGenerationRepository(AnalysisRepository):
                 return
         material = connection.execute(
             """SELECT input_json,input_fingerprint FROM content_materials
-            WHERE content_id=? AND observation_hash=?""",
-            (attempt["content_id"], attempt["observation_hash"]),
+            WHERE content_id=? AND observation_hash=? AND analysis_input_version=?""",
+            (attempt["content_id"], attempt["observation_hash"], MODEL_INPUT_VERSION),
         ).fetchone()
         if material is None:
             material = connection.execute(
                 """SELECT input_json,input_fingerprint FROM content_analysis_attempts
                 WHERE content_id=? AND id<? AND observation_hash=?
+                AND analysis_input_version=?
                 AND input_json IS NOT NULL
                 AND input_fingerprint IS NOT NULL ORDER BY id DESC LIMIT 1""",
-                (attempt["content_id"], attempt["id"], attempt["observation_hash"]),
+                (
+                    attempt["content_id"],
+                    attempt["id"],
+                    attempt["observation_hash"],
+                    MODEL_INPUT_VERSION,
+                ),
             ).fetchone()
         if material is not None:
             SavedInput.model_validate_json(material["input_json"])
@@ -594,6 +618,34 @@ class ReportGenerationRepository(AnalysisRepository):
             ).fetchone()
             return self._generation(connection, row[0]) if row else None
 
+    def all_attempts_text_insufficient(self, job_id: int) -> bool:
+        """Return true only for a job whose every source lacked usable text.
+
+        A report shell is a valid business result for this case.  Requiring the
+        persisted acquisition failure shape keeps model, storage, and browser
+        failures from being misreported as a completed text-insufficient run.
+        """
+        with self.connection() as connection:
+            rows = connection.execute(
+                """SELECT status,error_json FROM content_analysis_attempts
+                WHERE job_id=? ORDER BY position""",
+                (job_id,),
+            ).fetchall()
+            if not rows:
+                return False
+            for row in rows:
+                if row["status"] not in {"input_incomplete", "unsupported"}:
+                    return False
+                if not row["error_json"]:
+                    return False
+                try:
+                    error = SummaryFailure.model_validate_json(row["error_json"])
+                except (TypeError, ValueError):
+                    return False
+                if error.stage != "acquisition" or error.code != "input_incomplete":
+                    return False
+            return True
+
     def cancel_generation(self, generation_id, expected_revision):
         """Freeze terminal guards before stopping transport; no late publication."""
         with self.connection(write=True) as connection:
@@ -608,12 +660,14 @@ class ReportGenerationRepository(AnalysisRepository):
                                 WHERE m.content_id=a.content_id),
                     input_fingerprint=(SELECT m.input_fingerprint
                                        FROM content_materials m
-                                       WHERE m.content_id=a.content_id)
+                                       WHERE m.content_id=a.content_id),
+                    analysis_input_version=?
                 WHERE job_id=? AND status='acquiring' AND input_json IS NULL
                 AND EXISTS(SELECT 1 FROM content_materials m
                     WHERE m.content_id=a.content_id
-                    AND m.observation_hash=a.observation_hash)""",
-                (row["analysis_job_id"],),
+                    AND m.observation_hash=a.observation_hash
+                    AND m.analysis_input_version=?)""",
+                (MODEL_INPUT_VERSION, row["analysis_job_id"], MODEL_INPUT_VERSION),
             )
             self._analyses._finish(connection, row["analysis_job_id"], "cancelled")
             status = "cancelled"

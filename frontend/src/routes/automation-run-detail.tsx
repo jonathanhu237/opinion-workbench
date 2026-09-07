@@ -59,8 +59,8 @@ const stageLabels: Record<AutomationStage['name'], string> = {
 }
 
 const stageDescriptions: Record<AutomationStage['name'], string> = {
-  collection: '按本次任务保存的搜索规则和采集上限获取微博内容。',
-  initial_analysis: '先理解正文、图片、视频等可用内容。',
+  collection: '按本次任务保存的搜索规则和采集上限获取各平台内容。',
+  initial_analysis: '先理解正文和平台提供的文字内容。',
   topic_report: '按本次任务的分析目标判断相关性，并生成报告。',
 }
 
@@ -248,7 +248,7 @@ function RunActionDialog({
           </AlertDialogTitle>
           <AlertDialogDescription>
             {retry
-              ? `将从“${failed ? stageLabels[failed.name] : '失败阶段'}”重新开始，已完成的阶段不会重复。任务设置、微博和两阶段提示词保持不变。`
+              ? `将从“${failed ? stageLabels[failed.name] : '失败阶段'}”重新开始，已完成的阶段不会重复。任务设置、平台范围和两阶段提示词保持不变。`
               : '取消会停止当前阶段并阻止后续阶段启动，已经保存的采集结果、初步分析和报告历史不会删除。'}
           </AlertDialogDescription>
         </AlertDialogHeader>
@@ -276,7 +276,7 @@ function SnapshotCard({ run }: { run: AutomationRun }) {
       <CardHeader className="border-b">
         <h2 className="font-display text-xl">本次任务设置</h2>
         <p className="text-sm leading-6 text-muted-foreground">
-          编辑自动任务不会改变本次运行。重试时仍使用原来的规则、微博、采集上限和两阶段提示词。
+          编辑自动任务不会改变本次运行。重试时仍使用原来的规则、平台范围、采集上限和两阶段提示词。
         </p>
       </CardHeader>
       <CardContent className="grid gap-4 pt-5 text-sm sm:grid-cols-2">
@@ -293,7 +293,7 @@ function SnapshotCard({ run }: { run: AutomationRun }) {
           </p>
         </div>
         <div>
-          <p className="text-muted-foreground">微博与采集上限</p>
+          <p className="text-muted-foreground">平台与采集上限</p>
           <p className="mt-1 font-medium">
             {platforms} · {collectionLimitLabel(run.snapshot)}
           </p>

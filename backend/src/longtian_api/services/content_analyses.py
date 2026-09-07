@@ -349,7 +349,11 @@ class ContentAnalysisService:
         configuration,
         prompt,
         *,
-        allow_preview=True,
+        # Search-card title/snippet is discovery evidence only.  It cannot
+        # stand in for the original post's complete text in the automatic
+        # text-understanding pipeline.  Keep the flag as an explicit escape
+        # hatch for callers that intentionally exercise preview analysis.
+        allow_preview=False,
         stop_on_systemic_error=False,
     ):
         source = attempt.source
@@ -364,6 +368,10 @@ class ContentAnalysisService:
             snippet=source.snippet,
             matched_terms=tuple(source.matched_terms),
             collection_active=False,
+            publisher_name=source.publisher_name,
+            published_at_text=source.published_at_text,
+            hashtags=tuple(source.hashtags),
+            interaction_stats=dict(source.interaction_stats),
         )
         usage = None
         try:

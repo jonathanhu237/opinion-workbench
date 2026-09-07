@@ -183,6 +183,10 @@ class SummarySource(StrictModel):
     content_url: str = Field(min_length=1, max_length=2048)
     published_at_text: str = Field(max_length=100)
     matched_terms: list[str] = Field(min_length=1, max_length=MAX_TERMS_PER_RULE)
+    hashtags: list[str] = Field(default_factory=list, max_length=32)
+    interaction_stats: dict[str, int | None] = Field(default_factory=dict)
+    creator_hash: str = Field(default="", pattern=r"^(?:|[0-9a-f]{16})$")
+    publisher_name: str = Field(default="", max_length=100)
 
     @model_validator(mode="after")
     def valid_identity(self) -> Self:
@@ -190,6 +194,23 @@ class SummarySource(StrictModel):
             self.platform, self.platform_content_id, self.content_url
         ):
             raise ValueError("invalid source identity")
+        if any(not tag or len(tag) > 50 for tag in self.hashtags):
+            raise ValueError("invalid hashtags")
+        name = self.publisher_name
+        masked = (
+            not name
+            or name == "*"
+            or (len(name) == 2 and name.endswith("*"))
+            or (len(name) == 5 and name[1:4] == "***")
+        )
+        if bool(self.creator_hash) != bool(name) or not masked:
+            raise ValueError("invalid masked publisher")
+        if any(
+            key not in {"likes", "comments", "shares", "favorites"}
+            or (value is not None and (type(value) is not int or value < 0))
+            for key, value in self.interaction_stats.items()
+        ):
+            raise ValueError("invalid interaction stats")
         return self
 
 

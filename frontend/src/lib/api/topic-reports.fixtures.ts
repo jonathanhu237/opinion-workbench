@@ -90,6 +90,7 @@ export function reportFixture(values: Partial<ReportRun> = {}): ReportRun {
       composition: reportUsage(1),
       total: reportUsage(9),
     },
+    collection_gaps: [],
     root_section_id: 501,
     empty_reason: null,
     queue_reason: null,

@@ -871,8 +871,14 @@ class ContentAnalysisRepository(AnalysisRepository):
             row = self._active(connection, attempt_id)
             connection.execute(
                 """UPDATE content_analysis_attempts SET
-                  input_json=?,input_fingerprint=? WHERE id=?""",
-                (content.model_dump_json(), input_fingerprint, attempt_id),
+                  input_json=?,input_fingerprint=?,analysis_input_version=?
+                  WHERE id=?""",
+                (
+                    content.model_dump_json(),
+                    input_fingerprint,
+                    MODEL_INPUT_VERSION,
+                    attempt_id,
+                ),
             )
             if input_fingerprint is not None:
                 connection.execute(
@@ -939,9 +945,10 @@ class ContentAnalysisRepository(AnalysisRepository):
               JOIN content_analysis_claims cl ON cl.content_id=a.content_id
               WHERE a.cache_key=? AND a.id<? AND a.status='completed' AND
                 a.reused_from_attempt_id IS NULL
+                AND a.analysis_input_version=?
                 AND a.input_fingerprint=cl.known_input_fingerprint ORDER BY a.id
                   DESC LIMIT 1""",
-                (row["cache_key"], attempt_id),
+                (row["cache_key"], attempt_id, MODEL_INPUT_VERSION),
             ).fetchone()
             if cached is None:
                 return False
@@ -959,11 +966,13 @@ class ContentAnalysisRepository(AnalysisRepository):
             connection.execute(
                 """UPDATE content_analysis_attempts SET
                   status='completed',input_json=?,input_fingerprint=?,
+              analysis_input_version=?,
               output_json=?,reused_from_attempt_id=?,started_at=?,finished_at=?
                 WHERE id=?""",
                 (
                     cached["input_json"],
                     cached["input_fingerprint"],
+                    MODEL_INPUT_VERSION,
                     cached["output_json"],
                     cached["id"],
                     timestamp(),

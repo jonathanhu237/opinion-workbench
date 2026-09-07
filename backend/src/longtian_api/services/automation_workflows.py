@@ -987,10 +987,19 @@ class AutomationWorkflowService:
         # global observations deliberately do not enter this run.
         # An empty completed batch is a valid collection result. Insertion
         # count is observability, never stage success.
+        collection_total = len(items) or len(entries)
+        collection_success = completed_items if items else len(inserted)
         return (
             child_id,
             True,
-            _StageMetrics(input_count=len(entries), success_count=len(inserted)),
+            _StageMetrics(
+                # Count platform items even when a failed platform produced
+                # no content. This keeps the automation run's collection gap
+                # visible alongside the successful platform results.
+                input_count=collection_total,
+                success_count=collection_success,
+                failure_count=max(0, collection_total - collection_success),
+            ),
         )
 
     async def _execute_analysis(

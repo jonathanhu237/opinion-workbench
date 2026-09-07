@@ -173,7 +173,9 @@ class WorkbenchLatestReport(StrictModel):
     created_at: UtcTimestamp
     finished_at: UtcTimestamp
     overview: str | None = Field(min_length=1, max_length=2000)
-    empty_reason: Literal["no_ready_sources", "no_relevant_sources"] | None
+    empty_reason: (
+        Literal["no_ready_sources", "no_relevant_sources", "text_insufficient"] | None
+    )
     coverage: Coverage
 
     @model_validator(mode="after")

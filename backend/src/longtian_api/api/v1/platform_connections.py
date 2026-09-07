@@ -25,7 +25,7 @@ _ERROR_RESPONSES = {
 async def list_platform_connections(
     service: PlatformConnectionServiceDep,
 ) -> PlatformConnectionListResponse:
-    """List the current in-memory Weibo connection projection."""
+    """List the current in-memory platform connection projections."""
     return await service.list_connections()
 
 

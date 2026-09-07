@@ -21,19 +21,18 @@ SUMMARY_ERRORS = {
 }
 
 FAILURE_MESSAGES: dict[FailureCode, str] = {
-    "input_incomplete": "原文或图片、视频不完整，未提交模型分析。",
+    "input_incomplete": "原帖文字不完整，未提交模型分析。",
     "source_changed": "原始内容已更新，请重新生成汇总。",
     "source_active": "采集任务重新开始，暂未读取这条内容。",
     "browser_operation_active": "浏览器正在执行其他操作，请结束后重新生成汇总。",
     "browser_unavailable": (
-        "专用浏览器不可用，本次任务已停止。"
-        "请在平台账号中检查浏览器后重新生成。"
+        "专用浏览器不可用，本次任务已停止。请在平台账号中检查浏览器后重新生成。"
     ),
     "acquisition_failed": "原文暂时无法读取，请检查平台登录或验证状态。",
     "source_access_denied": "平台暂时拒绝访问，未能读取原文；未判定为安全验证。",
     "source_content_unavailable": "原帖已删除或不可读取，未使用搜索摘要代替正文。",
     "platform_not_supported": (
-        "该采集结果尚未完成正文和媒体补全；已有内容及成功总结仍可使用。"
+        "该采集结果尚未完成正文补全；已有内容及成功总结仍可使用。"
     ),
     "source_structure_changed": "原文返回结构无法识别，未提交模型。",
     "acquisition_timed_out": "原文获取超过本次时限，未自动重试。",
@@ -41,7 +40,7 @@ FAILURE_MESSAGES: dict[FailureCode, str] = {
         "已保存材料不足以分析，且此获取路径尚未接入；未访问平台账号。"
     ),
     "invalid_enrichment": "原文数据未通过校验，未提交模型分析。",
-    "unsupported_model": "当前模型尚未支持此类多模态输入，请检查 AI 配置。",
+    "unsupported_model": "当前模型配置不支持本次文字输入，请检查 AI 配置。",
     "request_too_large": "内容超过本次分析限制，未提交模型。",
     "invalid_json": "模型返回的内容不是有效 JSON，请重新生成汇总。",
     "invalid_schema": "模型返回的分析格式不正确，请重新生成汇总。",

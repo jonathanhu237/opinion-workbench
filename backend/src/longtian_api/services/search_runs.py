@@ -1,6 +1,7 @@
 """Orchestrate durable one-shot platform searches through the shared worker."""
 
 import asyncio
+import inspect
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +16,7 @@ from longtian_api.repositories.search_runs import (
     SearchResultRecord,
     SearchRunNotActiveError,
     SearchRunNotFoundError,
+    SearchRunOrdering,
     SearchRunRecord,
     SearchRunRepository,
     SearchRunRepositoryUnavailableError,
@@ -37,7 +39,10 @@ from longtian_api.search_failure_reasons import (
     SearchFailureReason,
     is_search_failure_reason,
 )
-from longtian_api.search_platforms import SearchPlatform
+from longtian_api.search_platforms import (
+    SearchPlatform,
+    is_valid_search_content_url,
+)
 from longtian_api.services.browser_operations import (
     BrowserOperationCoordinator,
     BrowserOperationOwner,
@@ -90,6 +95,7 @@ class SearchRunRepositoryProtocol(Protocol):
         terms: tuple[str, ...],
         max_results_per_term: int,
         max_total_results: int | None = None,
+        ordering: SearchRunOrdering | None = None,
     ) -> SearchRunRecord: ...
 
     def collection_content_ids(self, run_id: int) -> set[str]: ...
@@ -235,12 +241,22 @@ class SearchRunService:
     def supports_platform(self, platform):
         return supports_platform(self._worker, platform)
 
+    def ordering_for_platform(self, platform: SearchPlatform) -> SearchRunOrdering:
+        """Describe the ordering the injected collector will actually use."""
+
+        # The native Weibo adapter exposes its latest-first switch.  Other
+        # platform adapters currently preserve the order rendered by the
+        # platform search page, so callers must label that order as observed.
+        if platform == "wb" and getattr(self._worker, "latest_first", False):
+            return "latest"
+        return "platform"
+
     async def start_run(self, payload: SearchRunCreate) -> SearchRunDetail:
         if not self.supports_platform(payload.platform):
             raise SearchRunError(
                 status_code=409,
                 code="search_platform_not_available",
-                message="当前版本仅支持微博采集。",
+                message="该平台尚未接入当前采集器，历史内容仍可查看。",
             )
         rule = await self.load_rule(payload.monitoring_rule_id)
         if len(rule.terms) > MAX_SEARCH_TERMS:
@@ -260,19 +276,28 @@ class SearchRunService:
             if not await self._browser_operations.try_claim(owner):
                 raise _browser_operation_active()
             try:
-                record = await asyncio.to_thread(
-                    self._repository.create_run,
-                    monitoring_rule_id=rule.id,
-                    platform=payload.platform,
-                    rule_name=rule.name,
-                    terms=tuple(rule.terms),
-                    max_results_per_term=payload.max_results_per_term,
-                    **(
-                        {"max_total_results": payload.max_total_results}
-                        if payload.max_total_results is not None
-                        else {}
-                    ),
-                )
+                create_kwargs = {
+                    "monitoring_rule_id": rule.id,
+                    "platform": payload.platform,
+                    "rule_name": rule.name,
+                    "terms": tuple(rule.terms),
+                    "max_results_per_term": payload.max_results_per_term,
+                    "ordering": self.ordering_for_platform(payload.platform),
+                }
+                if payload.max_total_results is not None:
+                    create_kwargs["max_total_results"] = payload.max_total_results
+                try:
+                    record = await asyncio.to_thread(
+                        self._repository.create_run, **create_kwargs
+                    )
+                except TypeError:
+                    # Keep injected pre-ordering repositories usable in tests
+                    # and during a rolling local upgrade. Production storage
+                    # accepts and persists the marker above.
+                    create_kwargs.pop("ordering", None)
+                    record = await asyncio.to_thread(
+                        self._repository.create_run, **create_kwargs
+                    )
             except SearchRunRepositoryUnavailableError:
                 await self._browser_operations.release(owner)
                 raise _storage_unavailable() from None
@@ -348,7 +373,13 @@ class SearchRunService:
             raise _result_not_found() from None
         except SearchRunRepositoryUnavailableError:
             raise _storage_unavailable() from None
-        if target.platform != "wb" or not self.supports_platform(target.platform):
+        target_url = getattr(target, "content_url", None)
+        if target_url is not None and not is_valid_search_content_url(
+            target.platform, target.platform_content_id, target_url
+        ):
+            # A malformed historical row must never become a browser target.
+            raise _open_not_supported()
+        if not self.supports_platform(target.platform):
             raise _open_not_supported()
 
         request_id = uuid4()
@@ -371,11 +402,21 @@ class SearchRunService:
         try:
             try:
                 async with asyncio.timeout(self._open_timeout_seconds):
-                    result = await self._worker.open_result(
-                        request_id=request_id,
-                        term=target.matched_terms[0],
-                        content_id=target.platform_content_id,
-                    )
+                    kwargs = {
+                        "request_id": request_id,
+                        "term": target.matched_terms[0],
+                        "content_id": target.platform_content_id,
+                    }
+                    parameters = inspect.signature(self._worker.open_result).parameters
+                    if "platform" in parameters or any(
+                        p.kind is inspect.Parameter.VAR_KEYWORD
+                        for p in parameters.values()
+                    ):
+                        kwargs.update(
+                            platform=target.platform,
+                            content_url=target_url,
+                        )
+                    result = await self._worker.open_result(**kwargs)
             except (AuthWorkerError, TimeoutError):
                 return SearchResultOpenResponse(outcome="internal_error")
             return SearchResultOpenResponse(outcome=result.outcome)
@@ -562,6 +603,13 @@ class SearchRunService:
                     )
 
             async def on_item(position: int, item: SearchWorkerItem) -> None:
+                if not is_valid_search_content_url(
+                    record.platform, item.content_id, item.content_url
+                ):
+                    # Worker output is untrusted at this boundary.  Reject a
+                    # malformed identity before it can reach SQLite or a
+                    # browser-opening path.
+                    raise AuthWorkerError
                 observed_at = _timestamp_from_epoch_milliseconds(item.discovered_at)
                 await database_call(
                     self._repository.observe_item,
@@ -577,6 +625,8 @@ class SearchRunService:
                         published_at_text=item.published_at_text,
                         content_url=item.content_url,
                         observed_at=observed_at,
+                        hashtags=item.hashtags,
+                        interaction_stats=item.interaction_stats,
                     ),
                 )
 
@@ -709,6 +759,7 @@ def _to_summary(record: SearchRunRecord) -> SearchRunSummary:
             )
             for diagnostic in record.incomplete_terms
         ),
+        ordering=record.ordering,
     )
 
 
@@ -728,6 +779,8 @@ def _to_result(record: SearchResultRecord) -> SearchResult:
         publisher_name=record.publisher_name,
         published_at_text=record.published_at_text,
         content_url=record.content_url,
+        hashtags=record.hashtags,
+        interaction_stats=record.interaction_stats,
         kind=record.discovery_kind,
         matched_terms=record.matched_terms,
         first_seen_at=record.first_seen_at,

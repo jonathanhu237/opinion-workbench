@@ -1,4 +1,8 @@
+import douyinLogo from '@/assets/platforms/douyin.svg'
+import kuaishouLogo from '@/assets/platforms/kuaishou.svg'
+import toutiaoLogo from '@/assets/platforms/toutiao.svg'
 import weiboLogo from '@/assets/platforms/weibo.svg'
+import xiaohongshuLogo from '@/assets/platforms/xiaohongshu.svg'
 import {
   SEARCH_PLATFORM_ORDER,
   SearchRunApiError,
@@ -19,7 +23,11 @@ import type {
 export const searchPlatformOrder = SEARCH_PLATFORM_ORDER
 
 export const searchPlatformPresenters = {
+  toutiao: { label: '今日头条', logoSrc: toutiaoLogo },
   wb: { label: '微博', logoSrc: weiboLogo },
+  ks: { label: '快手', logoSrc: kuaishouLogo },
+  dy: { label: '抖音', logoSrc: douyinLogo },
+  xhs: { label: '小红书', logoSrc: xiaohongshuLogo },
 } satisfies Record<SearchPlatform, { label: string; logoSrc: string }>
 
 const statusLabels: Record<SearchRunStatus, string> = {
@@ -131,6 +139,10 @@ export function searchRunDisplayLabel(run: SearchRunPresentation) {
     return '采集未完整覆盖'
   }
   return searchRunStatusLabel(run.status, run.failure_reason)
+}
+
+export function searchRunOrderingLabel(run: Pick<SearchRunSummary, 'ordering'>) {
+  return run.ordering === 'latest' ? '最新优先' : '平台实际顺序'
 }
 
 export function searchRunStatusGuidance(
@@ -249,13 +261,13 @@ export function batchPauseGuidance(item: SearchBatchItem) {
     case 'manual_challenge_required':
       return '平台要求安全验证。请在应用专用的谷歌浏览器中打开平台完成验证，再继续采集。'
     case 'platform_blocked_or_rate_limited':
-      return '微博暂时限制了访问。可以打开微博检查，稍后继续，或先跳过本次采集。'
+      return '平台暂时限制了访问。可以打开平台检查，稍后继续，或先跳过本次采集。'
     case 'browser_unavailable':
       return '应用专用的谷歌浏览器暂时不可用。请重新打开采集或重试；应用会在需要时自动启动。'
     case 'timed_out':
       return '采集等待超时。请检查网络和平台页面后继续。'
     default:
-      return '本次采集未能完成。可以打开微博检查后继续，或先跳过本次采集。'
+      return '本次采集未能完成。可以打开平台检查后继续，或先跳过本次采集。'
   }
 }
 
@@ -275,11 +287,11 @@ export const openOutcomeMessages: Record<SearchResultOpenOutcome, string> = {
   opened: '已在应用专用的谷歌浏览器打开',
   content_not_found: '当前搜索中没有找到这条内容，请重新采集后再试。',
   content_unavailable: '这条内容暂时无法查看，可能已被删除或设为不可见。',
-  login_required: '请先在应用专用的谷歌浏览器中登录微博，然后重试。',
+  login_required: '请先在应用专用的谷歌浏览器中登录平台，然后重试。',
   manual_challenge_required:
-    '请在应用专用的谷歌浏览器中完成微博安全验证，然后重试。',
-  platform_blocked_or_rate_limited: '微博暂时限制了访问，请稍后再试。',
-  structure_changed: '微博页面发生变化，暂时无法打开这条内容。',
+    '请在应用专用的谷歌浏览器中完成平台安全验证，然后重试。',
+  platform_blocked_or_rate_limited: '平台暂时限制了访问，请稍后再试。',
+  structure_changed: '平台页面发生变化，暂时无法打开这条内容。',
   browser_unavailable:
     '应用专用的谷歌浏览器暂时不可用，请重试；应用会在需要时自动启动。',
   internal_error: '打开失败，请稍后重试。',

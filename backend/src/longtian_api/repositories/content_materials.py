@@ -7,6 +7,7 @@ from longtian_api.repositories.analysis_shared import (
 )
 from longtian_api.repositories.content_analyses import observation_hash
 from longtian_api.schemas.analysis_evidence import SavedInput
+from longtian_api.services.ai_analysis import MODEL_INPUT_VERSION
 from longtian_api.services.analysis_errors import AnalysisError
 from longtian_api.services.enrichment_models import (
     EnrichedContent,
@@ -27,11 +28,14 @@ class ContentMaterialRepository(AnalysisRepository):
                 raise AnalysisError("content_analysis_selection_conflict")
             digest = evidence_fingerprint(content)
             connection.execute(
-                """INSERT INTO content_materials VALUES (?,?,?,?,?,?)
+                """INSERT INTO content_materials
+                (content_id,observation_hash,input_json,input_fingerprint,saved_at,
+                 content_json,analysis_input_version) VALUES (?,?,?,?,?,?,?)
                 ON CONFLICT(content_id) DO UPDATE SET
                 observation_hash=excluded.observation_hash,input_json=excluded.input_json,
                 input_fingerprint=excluded.input_fingerprint,saved_at=excluded.saved_at,
-                content_json=excluded.content_json""",
+                content_json=excluded.content_json,
+                analysis_input_version=excluded.analysis_input_version""",
                 (
                     content_id,
                     observation_hash(source),
@@ -39,6 +43,7 @@ class ContentMaterialRepository(AnalysisRepository):
                     digest,
                     timestamp(),
                     content.model_dump_json(),
+                    MODEL_INPUT_VERSION,
                 ),
             )
             connection.execute(

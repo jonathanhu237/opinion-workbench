@@ -32,6 +32,7 @@ from longtian_api.schemas.topic_reports import (
     ACTIVE_REPORTS,
     ChildSection,
     CitationSource,
+    CollectionGap,
     Coverage,
     Judgment,
     NodeCounts,
@@ -50,7 +51,7 @@ from longtian_api.schemas.topic_reports import (
     ReportUsage,
     SourceState,
 )
-from longtian_api.services.ai_analysis import AIAnalysisError
+from longtian_api.services.ai_analysis import MODEL_INPUT_VERSION, AIAnalysisError
 from longtian_api.services.ai_client import MAX_USAGE_TOKENS, decode_model_json
 from longtian_api.services.analysis_errors import AnalysisError
 from longtian_api.services.model_retry import combined_usage, usage_records
@@ -266,6 +267,92 @@ class TopicReportRepository:
             error=saved_failure(node["error_json"]) if node else None,
         )
 
+    def _collection_gaps(self, connection, selection, report_id):
+        """Project failed platform items from every represented batch.
+
+        Workflow reports identify their collection child directly.  Manual and
+        interval reports can still be based on results discovered by a batch,
+        so use each frozen source's originating run to recover those batches.
+        This keeps collection gaps tied to the report's immutable source set.
+        """
+
+        batch_ids = []
+        selection_kind = (
+            selection.get("kind")
+            if isinstance(selection, dict)
+            else getattr(selection, "kind", None)
+        )
+        if selection_kind == "workflow_run":
+            workflow_run_id = (
+                selection.get("run_id")
+                if isinstance(selection, dict)
+                else getattr(selection, "run_id", None)
+            )
+            if not isinstance(workflow_run_id, int):
+                return ()
+            stage = connection.execute(
+                """SELECT child_id FROM automation_stage_attempts
+                   WHERE run_id=? AND stage='collection' AND child_kind='search_batch'
+                     AND child_id IS NOT NULL
+                   ORDER BY attempt_number DESC LIMIT 1""",
+                (workflow_run_id,),
+            ).fetchone()
+            if stage is not None:
+                batch_ids.append(int(stage["child_id"]))
+        else:
+            source_rows = connection.execute(
+                """SELECT source_json FROM topic_report_sources
+                   WHERE report_id=? ORDER BY position""",
+                (report_id,),
+            ).fetchall()
+            run_ids = []
+            for source_row in source_rows:
+                source = decode_model_json(source_row["source_json"])
+                if isinstance(source, dict) and isinstance(
+                    source.get("source_run_id"), int
+                ):
+                    run_ids.append(source["source_run_id"])
+            if run_ids:
+                placeholders = ",".join("?" for _ in run_ids)
+                batch_rows = connection.execute(
+                    f"""SELECT DISTINCT batch_id FROM search_batch_attempts
+                        WHERE search_run_id IN ({placeholders})""",
+                    run_ids,
+                ).fetchall()
+                batch_ids.extend(int(row["batch_id"]) for row in batch_rows)
+        batch_ids = tuple(dict.fromkeys(batch_ids))
+        if not batch_ids:
+            return ()
+        placeholders = ",".join("?" for _ in batch_ids)
+        rows = connection.execute(
+            f"""SELECT item.position,item.platform,item.status,
+                      run.status AS run_status,run.failure_reason
+                 FROM search_batch_items AS item
+                 LEFT JOIN search_batch_attempts AS attempt
+                   ON attempt.batch_id=item.batch_id
+                  AND attempt.item_position=item.position
+                  AND attempt.attempt_number=(
+                    SELECT MAX(latest.attempt_number)
+                      FROM search_batch_attempts AS latest
+                     WHERE latest.batch_id=item.batch_id
+                       AND latest.item_position=item.position)
+                 LEFT JOIN search_runs AS run ON run.id=attempt.search_run_id
+                WHERE item.batch_id IN ({placeholders})
+                  AND item.status IN ('failed','skipped','cancelled')
+                ORDER BY item.batch_id,item.position""",
+            batch_ids,
+        ).fetchall()
+        return tuple(
+            CollectionGap(
+                position=row["position"],
+                platform=row["platform"],
+                status=row["status"],
+                run_status=row["run_status"],
+                failure_reason=row["failure_reason"],
+            )
+            for row in rows
+        )
+
     def _read(self, connection, report_id):
         row = self._require(connection, report_id)
         if row["status"] == "completed":
@@ -285,6 +372,7 @@ class TopicReportRepository:
         ).fetchall()
         judgments = [node for node in nodes if node["kind"] == "judgment"]
         composition = [node for node in nodes if node["kind"] != "judgment"]
+        selection = decode_model_json(row["selection_json"])
         return ReportRun(
             id=report_id,
             request_id=row["request_id"],
@@ -292,7 +380,7 @@ class TopicReportRepository:
             initial_job_id=row["initial_job_id"],
             completion_event_id=row["completion_event_id"],
             parent_report_id=row["parent_report_id"],
-            selection=decode_model_json(row["selection_json"]),
+            selection=selection,
             status=row["status"],
             revision=row["revision"],
             configuration_revision=row["configuration_revision"],
@@ -313,6 +401,7 @@ class TopicReportRepository:
                 composition=aggregate_usage(composition),
                 total=aggregate_usage(nodes),
             ),
+            collection_gaps=self._collection_gaps(connection, selection, report_id),
             root_section_id=row["root_section_id"],
             empty_reason=row["empty_reason"],
             queue_reason=row["queue_reason"],
@@ -326,6 +415,37 @@ class TopicReportRepository:
     def read(self, report_id):
         with self.connection() as connection:
             return self._read(connection, report_id)
+
+    def all_sources_text_insufficient(self, report_id):
+        """Return true only when every frozen source lacks usable text."""
+        with self.connection() as connection:
+            rows = connection.execute(
+                """SELECT s.unavailable_reason,a.status,a.error_json
+                   FROM topic_report_sources s
+                   LEFT JOIN content_analysis_attempts a
+                     ON a.id=s.initial_attempt_id
+                   WHERE s.report_id=? ORDER BY s.position""",
+                (report_id,),
+            ).fetchall()
+            if not rows:
+                return False
+            for row in rows:
+                if row["unavailable_reason"] not in {
+                    "input_incomplete",
+                    "unsupported",
+                }:
+                    return False
+                if row["status"] != row["unavailable_reason"] or not row[
+                    "error_json"
+                ]:
+                    return False
+                try:
+                    error = SummaryFailure.model_validate_json(row["error_json"])
+                except (TypeError, ValueError):
+                    return False
+                if error.stage != "acquisition" or error.code != "input_incomplete":
+                    return False
+            return True
 
     def list(self, *, limit=50, before_id=None, initial_job_id=None, result_id=None):
         with self.connection() as connection:
@@ -631,6 +751,16 @@ class TopicReportRepository:
             if item.source.result_id != attempt["content_id"]:
                 raise ValueError("invalid initial source identity")
             source, first_seen = item.source, item.first_seen_at.isoformat()
+            # A completed attempt from an older input contract is historical
+            # evidence only.  Keep it visible in historical reports, but never
+            # freeze it into a new report through a caller that forgot to apply
+            # the current-version eligibility query.
+            if (
+                unavailable is None
+                and item.status == "completed"
+                and attempt["analysis_input_version"] != MODEL_INPUT_VERSION
+            ):
+                unavailable = "stale_evidence"
             if unavailable is None and item.status == "completed":
                 evidence_job_id = item.job_id
                 if item.reused_from_attempt_id is not None:
@@ -1013,8 +1143,17 @@ class TopicReportRepository:
                     eligible = connection.execute(
                         """SELECT * FROM content_analysis_attempts
                           WHERE content_id=? AND status='completed'
+                          AND analysis_input_version=?
                           AND input_fingerprint=? ORDER BY id DESC LIMIT 1""",
-                        (row["id"], row["known_input_fingerprint"]),
+                        (
+                            row["id"],
+                            # Reports created after the text-only cutover may
+                            # reuse only evidence written under this input
+                            # contract. Historical summaries remain readable
+                            # but never become new report evidence.
+                            MODEL_INPUT_VERSION,
+                            row["known_input_fingerprint"],
+                        ),
                     ).fetchone()
                     if eligible is not None:
                         if datetime.fromisoformat(eligible["first_seen_at"]) != (
@@ -1022,9 +1161,14 @@ class TopicReportRepository:
                         ):
                             raise ValueError("invalid eligible attempt identity")
                         attempt = eligible
-                    stale = (
-                        attempt["status"] == "completed"
-                        and attempt["input_fingerprint"]
+                    # A completed attempt from before the text-only cutover is
+                    # historical evidence, even when its fingerprint still
+                    # matches the current source.  It must not be frozen into
+                    # a new report; callers can explicitly re-run analysis to
+                    # create a current-version attempt first.
+                    stale = attempt["status"] == "completed" and (
+                        attempt["analysis_input_version"] != MODEL_INPUT_VERSION
+                        or attempt["input_fingerprint"]
                         != row["known_input_fingerprint"]
                     )
                     self._snapshot(

@@ -214,7 +214,7 @@ export function ResultsSettings({
             <DialogHeader>
               <DialogTitle>确认自动分析授权</DialogTitle>
               <DialogDescription>
-                新采集内容的正文、图片和视频会发送到以下模型服务，之后的文字报告也可能消耗
+                新采集内容的标题和正文会发送到以下模型服务，之后的文字报告也可能消耗
                 API 额度。历史内容和失败项不会自动重做。
               </DialogDescription>
             </DialogHeader>

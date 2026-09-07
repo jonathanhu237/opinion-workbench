@@ -33,6 +33,7 @@ import type {
   WorkbenchSnapshot,
 } from '@/lib/api/workbench'
 import { automationScheduleLabel } from '@/lib/api/automation-workflows'
+import type { SearchPlatform } from '@/lib/api/search-runs'
 import { cn } from '@/lib/utils'
 
 const dateFormatter = new Intl.DateTimeFormat('zh-CN', {
@@ -43,9 +44,13 @@ const dateFormatter = new Intl.DateTimeFormat('zh-CN', {
   hour12: false,
 })
 
-const platformLabels = {
+const platformLabels: Record<SearchPlatform, string> = {
+  toutiao: '今日头条',
   wb: '微博',
-} as const
+  ks: '快手',
+  dy: '抖音',
+  xhs: '小红书',
+}
 
 function formatTimestamp(value: string, timeZone?: string) {
   if (timeZone === undefined) return dateFormatter.format(new Date(value))
@@ -323,10 +328,14 @@ function ReportPanel({
             <p className="font-display text-xl leading-8">
               {report.empty_reason === 'no_ready_sources'
                 ? '这次没有可用的来源文本。'
-                : '这次没有足够相关的来源，未生成报告正文。'}
+                : report.empty_reason === 'text_insufficient'
+                  ? '文字信息不足，无法通过文字判断是否和舆情有关。'
+                  : '这次没有足够相关的来源，未生成报告正文。'}
             </p>
             <p className="mt-3 text-sm leading-6 text-muted-foreground">
-              任务已完成，但没有足够相关的内容，系统不会编造摘要。
+              {report.empty_reason === 'text_insufficient'
+                ? '请打开完整报告记录中的原文链接人工核查，系统不会编造摘要。'
+                : '任务已完成，但没有足够相关的内容，系统不会编造摘要。'}
             </p>
             <div className="mt-auto flex flex-wrap items-center justify-between gap-3 border-t pt-5">
               <p className="text-xs text-muted-foreground">

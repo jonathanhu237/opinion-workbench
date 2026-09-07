@@ -1,6 +1,7 @@
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { ArrowRight, LoaderCircle, Pause, Search } from 'lucide-react'
+import { useEffect, useRef } from 'react'
 import { Controller, useForm } from 'react-hook-form'
 import { Link, useNavigate } from 'react-router'
 import { z } from 'zod'
@@ -8,7 +9,16 @@ import { z } from 'zod'
 import { Badge } from '@/components/ui/badge'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Field, FieldError, FieldLabel } from '@/components/ui/field'
+import { Checkbox } from '@/components/ui/checkbox'
+import {
+  Field,
+  FieldContent,
+  FieldDescription,
+  FieldError,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import {
   Select,
@@ -41,6 +51,7 @@ import {
 } from '@/lib/api/search-batches'
 import {
   isActiveSearchRun,
+  SEARCH_PLATFORM_ORDER,
   type SearchRunStatus,
   type SearchRunSummary,
 } from '@/lib/api/search-runs'
@@ -53,6 +64,21 @@ import {
 
 const startSchema = z.object({
   ruleId: z.string().min(1, '请选择监控规则。'),
+  platforms: z
+    .array(z.enum(SEARCH_PLATFORM_ORDER))
+    .min(1, '至少选择一个采集平台。')
+    .max(5, '最多选择五个平台。')
+    .refine(
+      (platforms) =>
+        new Set(platforms).size === platforms.length &&
+        JSON.stringify(platforms) ===
+          JSON.stringify(
+            SEARCH_PLATFORM_ORDER.filter((platform) =>
+              platforms.includes(platform),
+            ),
+          ),
+      '请按平台目录顺序选择采集平台。',
+    ),
   maxResultsPerTerm: z.coerce
     .number<number>()
     .int('请输入整数。')
@@ -130,7 +156,7 @@ function BatchHistory({ batches }: { batches: SearchBatchSummary[] }) {
       <div className="rounded-lg border border-dashed p-8 text-center">
         <p className="font-medium">还没有采集任务</p>
         <p className="mt-1 text-sm text-muted-foreground">
-          选择监控规则，开始第一次微博采集。
+          选择监控规则，开始第一次多平台采集。
         </p>
       </div>
     )
@@ -165,7 +191,7 @@ function BatchHistory({ batches }: { batches: SearchBatchSummary[] }) {
               <span className="font-medium text-foreground">
                 {batch.terminal_item_count} / {batch.platform_count}
               </span>
-              <span className="ml-1 text-muted-foreground">个微博采集项</span>
+              <span className="ml-1 text-muted-foreground">个平台采集项</span>
             </TableCell>
             <TableCell className="text-muted-foreground">
               {formatLocalDate(batch.created_at)}
@@ -274,9 +300,19 @@ export function CollectionRuns() {
     mode: 'onBlur',
     defaultValues: {
       ruleId: '',
+      platforms: [],
       maxResultsPerTerm: 10,
     },
   })
+  const initializedPlatforms = useRef(false)
+  useEffect(() => {
+    if (!platformsQuery.isSuccess || initializedPlatforms.current) return
+    initializedPlatforms.current = true
+    form.setValue('platforms', availablePlatforms, {
+      shouldDirty: false,
+      shouldValidate: true,
+    })
+  }, [availablePlatforms, form, platformsQuery.isSuccess])
   const startMutation = useMutation({
     mutationFn: (input: Parameters<typeof startSearchBatch>[0]) =>
       startSearchBatch(input),
@@ -301,14 +337,25 @@ export function CollectionRuns() {
       return
     }
     try {
-      if (!platformsQuery.isSuccess || !availablePlatforms.includes('wb')) {
+      if (!platformsQuery.isSuccess || availablePlatforms.length === 0) {
         form.setError('root.server', {
-          message: '微博采集能力暂时不可用，请稍后重试。',
+          message: '没有可用的平台采集能力，请稍后重试。',
+        })
+        return
+      }
+      if (
+        values.platforms.some(
+          (platform) => !availablePlatforms.includes(platform),
+        )
+      ) {
+        form.setError('platforms', {
+          message: '所选平台当前不可用，请调整后再试。',
         })
         return
       }
       const batch = await startMutation.mutateAsync({
         monitoring_rule_id: rule.id,
+        platforms: values.platforms,
         max_results_per_term: values.maxResultsPerTerm,
       })
       await queryClient.invalidateQueries({
@@ -416,20 +463,77 @@ export function CollectionRuns() {
                 </Button>
               </div>
 
+              <Controller
+                name="platforms"
+                control={form.control}
+                render={({ field, fieldState }) => (
+                  <FieldSet
+                    data-invalid={fieldState.invalid}
+                    className="rounded-xl border bg-muted/25 p-4"
+                  >
+                    <FieldLegend variant="label">采集平台</FieldLegend>
+                    <FieldDescription id="collection-platforms-description">
+                      新任务默认选择全部五个平台，可以按本次需要调整；平台按目录顺序依次采集。
+                    </FieldDescription>
+                    <div
+                      role="group"
+                      aria-describedby="collection-platforms-description"
+                      className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3"
+                    >
+                      {SEARCH_PLATFORM_ORDER.map((platform) => {
+                        const connection = platformsQuery.data?.platforms.find(
+                          (item) => item.platform === platform,
+                        )
+                        const enabled = connection?.availability === 'enabled'
+                        const label = searchPlatformPresenters[platform].label
+                        return (
+                          <Field
+                            key={platform}
+                            orientation="horizontal"
+                            data-disabled={!enabled || controlsDisabled}
+                            className="rounded-lg border bg-background/70 p-3"
+                          >
+                            <Checkbox
+                              id={`collection-platform-${platform}`}
+                              checked={field.value.includes(platform)}
+                              disabled={!enabled || controlsDisabled}
+                              aria-invalid={fieldState.invalid}
+                              aria-label={`选择采集平台：${label}`}
+                              onCheckedChange={(checked) => {
+                                const next = checked
+                                  ? [...field.value, platform]
+                                  : field.value.filter(
+                                      (item) => item !== platform,
+                                    )
+                                field.onChange(
+                                  SEARCH_PLATFORM_ORDER.filter((item) =>
+                                    next.includes(item),
+                                  ),
+                                )
+                              }}
+                            />
+                            <FieldContent>
+                              <FieldLabel
+                                htmlFor={`collection-platform-${platform}`}
+                              >
+                                {label}
+                              </FieldLabel>
+                              {!enabled && (
+                                <FieldDescription>暂未接入</FieldDescription>
+                              )}
+                            </FieldContent>
+                          </Field>
+                        )
+                      })}
+                    </div>
+                    <FieldError errors={[fieldState.error]} />
+                  </FieldSet>
+                )}
+              />
+
               <p className="text-sm text-muted-foreground">
-                每个搜索词按最新优先采集，分别计算上限；不足上限时按实际数量保存，跨词重复内容会合并。采集完成后仍可自行选材生成报告。
+                平台支持最新排序时按最新优先，否则保留平台实际顺序；每个搜索词分别计算上限，不足上限时按实际数量保存，跨词重复内容会合并。采集完成后仍可自行选材生成报告。
               </p>
-              <div className="flex min-h-11 items-center gap-3 rounded-lg border border-border bg-card px-3 text-sm">
-                <img
-                  src={searchPlatformPresenters.wb.logoSrc}
-                  alt=""
-                  className="size-6"
-                />
-                <span className="font-medium">采集平台：微博</span>
-                <span className="text-muted-foreground">
-                  当前版本仅支持微博
-                </span>
-              </div>
 
               {form.formState.errors.root?.server?.message && (
                 <p role="alert" className="text-sm text-destructive">

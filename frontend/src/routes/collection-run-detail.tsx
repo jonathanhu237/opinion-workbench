@@ -20,6 +20,7 @@ import {
   incompleteTermsGuidance,
   searchPlatformPresenters,
   searchRunDisplayLabel,
+  searchRunOrderingLabel,
   searchRunStatusGuidance,
 } from '@/routes/search-run-presenters'
 import { cn } from '@/lib/utils'
@@ -265,6 +266,9 @@ export function CollectionRunDetail() {
               ))}
             </div>
           </div>
+          <p className="text-xs text-muted-foreground">
+            结果排序：{searchRunOrderingLabel(run)}
+          </p>
         </CardContent>
       </Card>
 

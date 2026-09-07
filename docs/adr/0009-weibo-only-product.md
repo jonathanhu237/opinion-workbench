@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: superseded by ADR-0010
 ---
 
 # 当前产品只保留微博平台能力

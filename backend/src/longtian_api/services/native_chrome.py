@@ -1,9 +1,9 @@
-"""Own one local Chrome process and one bounded Weibo page.
+"""Own one local Chrome process and one bounded platform page.
 
 This is application runtime code, not an agent browser-control utility. It never
 attaches to the daily browser, exports credential files, calls platform APIs, or
-changes fingerprints. The selected-post broker may receive only the dedicated
-Weibo session in memory; only coordination files are read from the profile.
+changes fingerprints. The collector receives only rendered DOM and scoped
+session state in memory; only coordination files are read from the profile.
 """
 
 import asyncio
@@ -21,6 +21,22 @@ from longtian_api.services.native_browser_contracts import (
     BrowserUnavailable,
 )
 from longtian_api.services.settled_tasks import settle
+
+_PLATFORM_DOMAINS = (
+    "weibo.com",
+    "weibo.cn",
+    "sinaimg.cn",
+    "sinajs.cn",
+    "sina.com.cn",
+    "toutiao.com",
+    "toutiaoimg.com",
+    "kuaishou.com",
+    "kwai.com",
+    "douyin.com",
+    "iesdouyin.com",
+    "xiaohongshu.com",
+    "xhscdn.com",
+)
 
 
 class ManagedChrome:
@@ -317,13 +333,7 @@ class ManagedChrome:
                 and parts.port in (None, 443)
                 and any(
                     host == domain or host.endswith("." + domain)
-                    for domain in (
-                        "weibo.com",
-                        "weibo.cn",
-                        "sinaimg.cn",
-                        "sinajs.cn",
-                        "sina.com.cn",
-                    )
+                    for domain in _PLATFORM_DOMAINS
                 )
             )
         except (KeyError, ValueError):
@@ -350,11 +360,16 @@ class ManagedChrome:
 
     async def navigate(self, url):
         parts = urlsplit(url)
-        if parts.scheme != "https" or parts.netloc not in (
-            "weibo.com",
-            "www.weibo.com",
-            "m.weibo.cn",
-            "s.weibo.com",
+        host = (parts.hostname or "").lower()
+        if (
+            parts.scheme != "https"
+            or parts.username
+            or parts.password
+            or parts.port not in (None, 443)
+            or not any(
+                host == domain or host.endswith("." + domain)
+                for domain in _PLATFORM_DOMAINS
+            )
         ):
             raise BrowserUnavailable()
         self._check()

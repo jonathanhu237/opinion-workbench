@@ -15,7 +15,13 @@ import {
 
 export const AUTOMATION_TASKS_QUERY_KEY = ['automation-tasks'] as const
 export const AUTOMATION_RUNS_QUERY_KEY = ['automation-runs'] as const
-export const AUTOMATION_PLATFORM_ORDER = ['wb'] as const
+export const AUTOMATION_PLATFORM_ORDER = [
+  'wb',
+  'dy',
+  'ks',
+  'xhs',
+  'toutiao',
+] as const
 export const MAX_AUTOMATION_INTERVAL_MINUTES = 43_200
 export const MAX_AUTOMATION_GOAL_LENGTH = 4_000
 
@@ -70,9 +76,23 @@ const runStatuses = [
 
 const platformListSchema = z
   .array(searchPlatformSchema)
-  .length(1)
-  .refine((platforms) => platforms[0] === 'wb', '当前版本仅支持微博采集。')
-const defaultPlatformListSchema = platformListSchema.default(['wb'])
+  .min(1)
+  .max(5)
+  .refine(
+    (platforms) => new Set(platforms).size === platforms.length,
+    '平台不能重复。',
+  )
+  .refine(
+    (platforms) =>
+      JSON.stringify(platforms) ===
+      JSON.stringify(
+        [...AUTOMATION_PLATFORM_ORDER].filter((p) => platforms.includes(p)),
+      ),
+    '平台顺序不正确。',
+  )
+const defaultPlatformListSchema = platformListSchema.default([
+  ...AUTOMATION_PLATFORM_ORDER,
+])
 
 const intervalScheduleSchema = z.strictObject({
   kind: z.literal('interval'),
@@ -406,9 +426,8 @@ export type AutomationTaskPage = z.infer<typeof taskPageSchema>
 export type AutomationOccurrencePage = z.infer<typeof occurrencePageSchema>
 export type AutomationRunPage = z.infer<typeof runPageSchema>
 export type AutomationPlatform = SearchPlatform
-// Callers do not need to repeat the fixed Weibo platform. The request schema
-// supplies it before the payload crosses the API boundary; response schemas
-// keep the stored provenance required.
+// New task callers receive the all-platform default while response schemas
+// continue to preserve the exact stored platform scope for existing tasks.
 export type AutomationTaskCreate = z.input<typeof createSchema>
 export type AutomationTaskReplace = z.input<typeof replaceSchema>
 export type AutomationTaskDelete = { expectedRevision: number }

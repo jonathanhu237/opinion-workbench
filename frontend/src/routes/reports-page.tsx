@@ -1178,17 +1178,17 @@ function GenerationProgress({
       )}
       {generation.analysis.queue_reason === 'browser_operation_active' && (
         <p className="rounded-lg border border-warning/40 bg-warning/5 p-3 text-sm">
-          微博浏览器操作正在进行，其他依赖浏览器的任务会等待。
+          平台浏览器操作正在进行，其他依赖浏览器的任务会等待。
         </p>
       )}
       {generation.pause_reason && (
         <div className="rounded-lg border p-3 text-sm">
           <p>
             {generation.pause_reason === 'login_required'
-              ? '微博需要重新登录。'
+              ? '当前平台需要重新登录。'
               : generation.pause_reason === 'platform_blocked_or_rate_limited'
-                ? '微博提示限流，请在专用浏览器确认状态。'
-                : '微博需要完成安全验证。'}
+                ? '当前平台提示限流，请在专用浏览器确认状态。'
+                : '当前平台需要完成安全验证。'}
             已保存的结果不会丢失。
           </p>
           <p className="mt-2">
@@ -1200,7 +1200,7 @@ function GenerationProgress({
               disabled={control.isPending}
               onClick={() => control.mutate('manual-page')}
             >
-              打开微博专用窗口
+              打开平台专用窗口
             </Button>
             <Button
               disabled={control.isPending}

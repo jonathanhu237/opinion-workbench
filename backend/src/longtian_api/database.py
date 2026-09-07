@@ -4,7 +4,7 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
-CURRENT_DATABASE_VERSION = 30
+CURRENT_DATABASE_VERSION = 36
 DEFAULT_RULE_NAME = "龙田街道及四个社区"
 DEFAULT_RULE_TERMS = (
     "龙田街道",
@@ -138,8 +138,98 @@ class Database:
                 _migrate_to_version_29(connection)
             if version < 30:
                 _migrate_to_version_30(connection)
+                version = 30
+            if version < 31:
+                _migrate_to_version_31(connection)
+                version = 31
+            if version < 32:
+                _migrate_to_version_32(connection)
+                version = 32
+            if version < 33:
+                _migrate_to_version_33(connection)
+                version = 33
+            if version < 34:
+                _migrate_to_version_34(connection)
+                version = 34
+            if version < 35:
+                _migrate_to_version_35(connection)
+                version = 35
+            if version < 36:
+                _migrate_to_version_36(connection)
+                version = 36
         finally:
             connection.close()
+
+
+def _migrate_to_version_33(connection: sqlite3.Connection) -> None:
+    from longtian_api.migrations.text_insufficient_report_v33 import migrate
+
+    previous_foreign_keys = connection.execute("PRAGMA foreign_keys").fetchone()[0]
+    previous_legacy_alter_table = connection.execute(
+        "PRAGMA legacy_alter_table"
+    ).fetchone()[0]
+    try:
+        connection.execute("PRAGMA foreign_keys = OFF")
+        connection.execute("PRAGMA legacy_alter_table = ON")
+        connection.execute("BEGIN IMMEDIATE")
+        version = _read_user_version(connection)
+        if version >= 33:
+            connection.rollback()
+            return
+        if version != 32:
+            raise DatabaseVersionError("Unsupported database migration source version.")
+        migrate(connection)
+        connection.execute("PRAGMA user_version = 33")
+        connection.commit()
+    except BaseException:
+        if connection.in_transaction:
+            connection.rollback()
+        raise
+    finally:
+        connection.execute(f"PRAGMA foreign_keys = {int(previous_foreign_keys)}")
+        connection.execute(
+            f"PRAGMA legacy_alter_table = {int(previous_legacy_alter_table)}"
+        )
+
+
+def _migrate_to_version_34(connection: sqlite3.Connection) -> None:
+    from longtian_api.migrations.text_only_prompt_v34 import migrate
+
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        version = _read_user_version(connection)
+        if version >= 34:
+            connection.rollback()
+            return
+        if version != 33:
+            raise DatabaseVersionError("Unsupported database migration source version.")
+        migrate(connection)
+        connection.execute("PRAGMA user_version = 34")
+        connection.commit()
+    except BaseException:
+        if connection.in_transaction:
+            connection.rollback()
+        raise
+
+
+def _migrate_to_version_35(connection: sqlite3.Connection) -> None:
+    from longtian_api.migrations.search_content_metadata_v35 import migrate
+
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        version = _read_user_version(connection)
+        if version >= 35:
+            connection.rollback()
+            return
+        if version != 34:
+            raise DatabaseVersionError("Unsupported database migration source version.")
+        migrate(connection)
+        connection.execute("PRAGMA user_version = 35")
+        connection.commit()
+    except BaseException:
+        if connection.in_transaction:
+            connection.rollback()
+        raise
 
 
 def _migrate_to_version_30(connection: sqlite3.Connection) -> None:
@@ -158,6 +248,57 @@ def _migrate_to_version_30(connection: sqlite3.Connection) -> None:
         connection.commit()
     except BaseException:
         connection.rollback()
+        raise
+
+
+def _migrate_to_version_31(connection: sqlite3.Connection) -> None:
+    from longtian_api.migrations.multi_platform_v31 import migrate
+
+    previous_foreign_keys = connection.execute("PRAGMA foreign_keys").fetchone()[0]
+    if previous_foreign_keys:
+        connection.execute("PRAGMA foreign_keys = OFF")
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        version = _read_user_version(connection)
+        if version >= 31:
+            connection.rollback()
+            return
+        if version != 30:
+            raise DatabaseVersionError("Unsupported database migration source version.")
+        migrate(connection)
+        connection.execute("PRAGMA user_version = 31")
+        connection.commit()
+        if previous_foreign_keys:
+            connection.execute("PRAGMA foreign_keys = ON")
+            if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
+                raise sqlite3.DatabaseError(
+                    "Foreign-key check failed after v31 migration"
+                )
+    except BaseException:
+        if connection.in_transaction:
+            connection.rollback()
+        if previous_foreign_keys:
+            connection.execute("PRAGMA foreign_keys = ON")
+        raise
+
+
+def _migrate_to_version_32(connection: sqlite3.Connection) -> None:
+    from longtian_api.migrations.text_only_cache_v32 import migrate
+
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        version = _read_user_version(connection)
+        if version >= 32:
+            connection.rollback()
+            return
+        if version != 31:
+            raise DatabaseVersionError("Unsupported database migration source version.")
+        migrate(connection)
+        connection.execute("PRAGMA user_version = 32")
+        connection.commit()
+    except BaseException:
+        if connection.in_transaction:
+            connection.rollback()
         raise
 
 
@@ -203,6 +344,26 @@ def _migrate_to_version_14(connection: sqlite3.Connection) -> None:
             raise DatabaseVersionError("Unsupported database migration source version.")
         migrate(connection)
         connection.execute("PRAGMA user_version = 14")
+        connection.execute("COMMIT")
+    except BaseException:
+        if connection.in_transaction:
+            connection.execute("ROLLBACK")
+        raise
+
+
+def _migrate_to_version_36(connection: sqlite3.Connection) -> None:
+    from longtian_api.migrations.search_run_ordering_v36 import migrate
+
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        version = _read_user_version(connection)
+        if version >= 36:
+            connection.execute("COMMIT")
+            return
+        if version != 35:
+            raise DatabaseVersionError("Unsupported database migration source version.")
+        migrate(connection)
+        connection.execute("PRAGMA user_version = 36")
         connection.execute("COMMIT")
     except BaseException:
         if connection.in_transaction:

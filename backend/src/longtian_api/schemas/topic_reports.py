@@ -21,7 +21,10 @@ from longtian_api.schemas.content_analyses import (
     AttemptStatus,
     valid_prose,
 )
+from longtian_api.schemas.search_runs import SearchRunStatus
 from longtian_api.schemas.topic_report_engine import ProviderIntent
+from longtian_api.search_failure_reasons import SearchFailureReason
+from longtian_api.search_platforms import SearchPlatform
 
 ReportStatus = Literal[
     "queued",
@@ -261,6 +264,16 @@ class ReportNodes(StrictModel):
     composition: NodeCounts
 
 
+class CollectionGap(StrictModel):
+    """A platform item that ended without contributing searchable content."""
+
+    position: Count
+    platform: SearchPlatform
+    status: Literal["failed", "skipped", "cancelled"]
+    run_status: SearchRunStatus | None
+    failure_reason: SearchFailureReason | None
+
+
 class ReportUsage(StrictModel):
     judgment: AnalysisUsage
     composition: AnalysisUsage
@@ -287,8 +300,11 @@ class ReportRun(StrictModel):
     coverage: Coverage
     nodes: ReportNodes
     usage: ReportUsage
+    collection_gaps: tuple[CollectionGap, ...] = ()
     root_section_id: PositiveId | None
-    empty_reason: Literal["no_ready_sources", "no_relevant_sources"] | None
+    empty_reason: (
+        Literal["no_ready_sources", "no_relevant_sources", "text_insufficient"] | None
+    )
     queue_reason: Literal["ai_operation_active"] | None
     recovery_reason: Literal["backend_restart"] | None
     error: ReportFailure | None
@@ -314,6 +330,10 @@ class ReportRun(StrictModel):
             raise ValueError("invalid empty report")
         if self.empty_reason == "no_ready_sources" and self.coverage.ready:
             raise ValueError("invalid empty ready coverage")
+        if self.empty_reason in {"no_ready_sources", "text_insufficient"} and (
+            self.coverage.ready or self.usage.total.attempted_requests
+        ):
+            raise ValueError("invalid empty input coverage")
         if self.empty_reason == "no_relevant_sources" and (
             self.coverage.ready == 0 or self.coverage.relevant or self.coverage.failed
         ):

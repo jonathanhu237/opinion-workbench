@@ -80,8 +80,7 @@ def migrate(connection: sqlite3.Connection) -> None:
     )
     quoted = ", ".join(f'"{column}"' for column in _COLUMNS)
     connection.execute(
-        f'INSERT INTO "search_runs_v28" ({quoted}) '
-        f'SELECT {quoted} FROM "search_runs"'
+        f'INSERT INTO "search_runs_v28" ({quoted}) SELECT {quoted} FROM "search_runs"'
     )
 
     sequence = connection.execute(

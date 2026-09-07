@@ -579,7 +579,7 @@ export function CollectionBatchDetail() {
               </p>
               <p className="text-sm">
                 {batch.max_total_results != null ? (
-                  `已保留 ${pausedItem.total_count} 条。继续后仍按最新优先轮流检索，重复命中不占新名额，整批合计最多 ${batch.max_total_results} 条。`
+                  `已保留 ${pausedItem.total_count} 条。继续后仍按平台实际顺序轮流检索，重复命中不占新名额，整批合计最多 ${batch.max_total_results} 条。`
                 ) : (
                   <>
                     已确认完成 {pausedItem.completed_term_count} /{' '}

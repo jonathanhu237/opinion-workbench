@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from pydantic import ValidationError
 
 from longtian_api.database import Database
+from longtian_api.repositories.analysis_shared import _metadata
 from longtian_api.repositories.search_runs import SearchResultSourceRecord
 from longtian_api.schemas.ai_summaries import (
     Decision,
@@ -66,6 +67,10 @@ class SummaryItemRecord:
             snippet=value.snippet,
             matched_terms=tuple(value.matched_terms),
             collection_active=False,
+            publisher_name=value.publisher_name,
+            published_at_text=value.published_at_text,
+            hashtags=tuple(value.hashtags),
+            interaction_stats=dict(value.interaction_stats),
         )
 
 
@@ -242,6 +247,7 @@ class SummaryRepository:
                 ]
                 if row["platform"] != source_run["platform"]:
                     raise ValueError("source platform mismatch")
+                hashtags, interaction_stats = _metadata(row)
                 source = SummarySource(
                     source_run_id=source_run_id,
                     result_id=row["id"],
@@ -253,6 +259,10 @@ class SummaryRepository:
                     content_url=row["content_url"],
                     published_at_text=row["published_at_text"],
                     matched_terms=matched,
+                    hashtags=hashtags,
+                    interaction_stats=interaction_stats,
+                    creator_hash=row["creator_hash"],
+                    publisher_name=row["publisher_name"],
                 )
                 # Relative display time ("刚刚" -> "昨天") is not changed content.
                 observation = fingerprint(

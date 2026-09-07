@@ -11,6 +11,7 @@ from longtian_api.database import Database
 from longtian_api.repositories.collection_schedules import _platforms, _rule
 from longtian_api.repositories.search_runs import (
     SearchResultRecord,
+    SearchRunOrdering,
     SearchRunRecord,
     SearchRunStatus,
     _read_run,
@@ -34,6 +35,11 @@ SUCCESS = {
     "completed_with_results",
     "completed_empty",
     "completed_with_incomplete",
+}
+MANUAL_PAUSE = {
+    "login_required",
+    "manual_challenge_required",
+    "platform_blocked_or_rate_limited",
 }
 
 
@@ -316,7 +322,12 @@ class SearchBatchRepository:
         record = self.get(batch_id)
         return next((item for item in record.items if item.status == "queued"), None)
 
-    def create_attempt(self, batch_id: int, position: int) -> SearchRunRecord:
+    def create_attempt(
+        self,
+        batch_id: int,
+        position: int,
+        ordering: SearchRunOrdering | None = None,
+    ) -> SearchRunRecord:
         with self._connection(write=True) as connection:
             batch = _batch_row(connection, batch_id)
             item = _item_row(connection, batch_id, position)
@@ -340,8 +351,8 @@ class SearchBatchRepository:
                 """INSERT INTO search_runs (monitoring_rule_id, platform, rule_name,
                    max_results_per_term, status, created_at,
                    execution_start_term_position, search_protocol_version,
-                   max_total_results)
-                   VALUES (?, ?, ?, ?, 'queued', ?, ?, 2, ?)""",
+                   max_total_results, ordering)
+                   VALUES (?, ?, ?, ?, 'queued', ?, ?, 2, ?, ?)""",
                 (
                     batch["monitoring_rule_id"],
                     item["platform"],
@@ -350,6 +361,8 @@ class SearchBatchRepository:
                     timestamp,
                     checkpoint.next_position,
                     batch["max_total_results"],
+                    ordering
+                    or ("latest" if item["platform"] == "wb" else "platform"),
                 ),
             )
             run_id = int(cursor.lastrowid)
@@ -402,14 +415,29 @@ class SearchBatchRepository:
             ):
                 raise SearchBatchStateChangedError
             success = run_status in SUCCESS
+            pause = run_status in MANUAL_PAUSE
+            # Authentication and platform safety barriers require the user to
+            # intervene before the same batch can continue. Other terminal
+            # failures belong to this platform item only; they are recorded as
+            # failed while the following platform items keep running.
+            item_status = (
+                "completed"
+                if success
+                else "paused_for_manual_action"
+                if pause
+                else "failed"
+            )
+            batch_status = (
+                "running" if success or not pause else "paused_for_manual_action"
+            )
             connection.execute(
                 """UPDATE search_batch_items SET status = ?, finished_at = ?,
                    pause_reason = ?, completion_basis = ? WHERE batch_id = ? AND
                    position = ?""",
                 (
-                    "completed" if success else "paused_for_manual_action",
-                    _utc_timestamp() if success else None,
-                    None if success else "attempt_failed",
+                    item_status,
+                    _utc_timestamp() if not pause else None,
+                    "attempt_failed" if pause else None,
                     "attempt_success" if success else None,
                     batch_id,
                     position,
@@ -419,7 +447,7 @@ class SearchBatchRepository:
                 """UPDATE search_batches SET status = ?, current_item_position = ?,
                    control_revision = control_revision + 1 WHERE id = ?""",
                 (
-                    "running" if success else "paused_for_manual_action",
+                    batch_status,
                     position,
                     batch_id,
                 ),

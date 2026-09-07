@@ -17,12 +17,12 @@ from longtian_api.schemas.analysis_settings import (
     PromptSnapshot,
 )
 from longtian_api.schemas.collection_schedules import UtcTimestamp
-from longtian_api.search_platforms import SearchPlatform
+from longtian_api.search_platforms import SEARCH_PLATFORMS, SearchPlatform
 
 MAX_SAFE_INTEGER = 9_007_199_254_740_991
 MAX_ANALYSIS_GOAL_LENGTH = 4_000
 MAX_INTERVAL_MINUTES = 43_200
-MAX_PLATFORMS = 1
+MAX_PLATFORMS = 5
 
 AutomationScheduleKind = Literal["interval", "daily"]
 AutomationTaskStatus = Literal[
@@ -83,7 +83,11 @@ def _valid_timezone(value: str) -> str:
 
 
 def _valid_platforms(value: list[SearchPlatform]) -> list[SearchPlatform]:
-    if value != ["wb"]:
+    if not 1 <= len(value) <= MAX_PLATFORMS or len(set(value)) != len(value):
+        raise ValueError("invalid platforms")
+    if tuple(value) != tuple(
+        platform for platform in SEARCH_PLATFORMS if platform in value
+    ):
         raise ValueError("platforms must use catalog order")
     return value
 
@@ -110,10 +114,8 @@ AutomationSchedule = Annotated[
 class AutomationTaskCreate(StrictModel):
     name: str = Field(min_length=1, max_length=80)
     monitoring_rule_id: int = Field(ge=1, le=MAX_SAFE_INTEGER)
-    # Platform provenance remains in stored snapshots, while admission derives
-    # the only currently supported platform when the caller omits this field.
     platforms: list[SearchPlatform] = Field(
-        default_factory=lambda: ["wb"],
+        default_factory=lambda: list(SEARCH_PLATFORMS),
         min_length=1,
         max_length=MAX_PLATFORMS,
     )
@@ -177,7 +179,7 @@ class AutomationTaskCreateRequest(StrictModel):
     name: str = Field(min_length=1, max_length=80)
     monitoring_rule_id: int = Field(ge=1, le=MAX_SAFE_INTEGER)
     platforms: list[SearchPlatform] = Field(
-        default_factory=lambda: ["wb"],
+        default_factory=lambda: list(SEARCH_PLATFORMS),
         min_length=1,
         max_length=MAX_PLATFORMS,
     )
@@ -195,6 +197,9 @@ class AutomationTaskReplaceRequest(AutomationTaskCreateRequest):
     """Strict public full-replacement payload for an existing task."""
 
     monitoring_rule_id: int | None = Field(ge=1, le=MAX_SAFE_INTEGER)
+    # Replacement is a full snapshot; omitting the platform list must not
+    # silently change an existing task's scope.
+    platforms: list[SearchPlatform] = Field(min_length=1, max_length=MAX_PLATFORMS)
     expected_revision: int = Field(ge=1, lt=MAX_SAFE_INTEGER)
     enabled: bool
 

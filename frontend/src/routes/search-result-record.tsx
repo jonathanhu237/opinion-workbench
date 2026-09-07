@@ -56,6 +56,36 @@ export function SearchResultRecord({ result }: { result: SearchResult }) {
           <dt className="text-xs text-muted-foreground">平台显示时间</dt>
           <dd className="mt-1">{result.published_at_text || '未显示'}</dd>
         </div>
+        {(result.hashtags?.length ||
+          Object.keys(result.interaction_stats ?? {}).length > 0) && (
+          <div>
+            <dt className="text-xs text-muted-foreground">平台文字信息</dt>
+            <dd className="mt-1 space-y-1">
+              {result.hashtags && result.hashtags.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {result.hashtags.map((tag) => (
+                    <Badge key={tag} variant="outline" className="font-normal">
+                      #{tag}
+                    </Badge>
+                  ))}
+                </div>
+              )}
+              {Object.entries(result.interaction_stats ?? {}).map(
+                ([key, value]) => (
+                  <span key={key} className="mr-2 text-muted-foreground">
+                    {{
+                      likes: '赞',
+                      comments: '评论',
+                      shares: '分享',
+                      favorites: '收藏',
+                    }[key] ?? key}{' '}
+                    {value ?? '未知'}
+                  </span>
+                ),
+              )}
+            </dd>
+          </div>
+        )}
         <div>
           <dt className="text-xs text-muted-foreground">发现记录</dt>
           <dd className="mt-1">

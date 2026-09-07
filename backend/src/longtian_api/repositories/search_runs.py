@@ -1,9 +1,10 @@
 """SQLite repository for durable product search runs and discoveries."""
 
+import json
 import sqlite3
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Literal, cast
 
@@ -33,7 +34,56 @@ SearchRunStatus = Literal[
     "cancelled",
     "internal_error",
 ]
+SearchRunOrdering = Literal["latest", "platform"]
 DiscoveryKind = Literal["new", "repeated"]
+
+
+def _metadata_json(hashtags, interaction_stats):
+    tags = []
+    for value in hashtags or ():
+        if not isinstance(value, str):
+            continue
+        value = " ".join(value.split())[:50]
+        if value and value not in tags:
+            tags.append(value)
+        if len(tags) >= 32:
+            break
+    stats = {}
+    for key, value in (interaction_stats or {}).items():
+        if key not in {"likes", "comments", "shares", "favorites"}:
+            continue
+        if value is None or (type(value) is int and 0 <= value <= 2**53 - 1):
+            stats[key] = value
+    return json.dumps(tags, ensure_ascii=False), json.dumps(
+        stats, ensure_ascii=False, sort_keys=True
+    )
+
+
+def _metadata_from_row(row):
+    try:
+        values = json.loads(row["hashtags_json"] or "[]")
+        hashtags = (
+            tuple(value for value in values if isinstance(value, str))
+            if isinstance(values, list)
+            else ()
+        )
+    except (IndexError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        hashtags = ()
+    try:
+        values = json.loads(row["interaction_stats_json"] or "{}")
+        interaction_stats = (
+            {
+                key: value
+                for key, value in values.items()
+                if key in {"likes", "comments", "shares", "favorites"}
+                and (value is None or (type(value) is int and 0 <= value <= 2**53 - 1))
+            }
+            if isinstance(values, dict)
+            else {}
+        )
+    except (IndexError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        interaction_stats = {}
+    return hashtags, interaction_stats
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +108,7 @@ class SearchRunRecord:
     execution_limit: ExecutionLimit | None = None
     incomplete_terms: tuple[CollectorSearchTermDiagnostic, ...] = ()
     max_total_results: int | None = None
+    ordering: SearchRunOrdering = "platform"
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +122,8 @@ class SearchContentInput:
     published_at_text: str
     content_url: str
     observed_at: str
+    hashtags: tuple[str, ...] = ()
+    interaction_stats: dict[str, int | None] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +144,8 @@ class SearchResultRecord:
     first_observed_at: str
     last_observed_at: str
     matched_terms: tuple[str, ...]
+    hashtags: tuple[str, ...] = ()
+    interaction_stats: dict[str, int | None] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +153,10 @@ class SearchResultOpenTargetRecord:
     platform: SearchPlatform
     platform_content_id: str
     matched_terms: tuple[str, ...]
+    # Historical in-process callers may only have the platform/id/terms
+    # projection.  Production rows always provide the canonical URL, while a
+    # missing default is rejected before any browser navigation.
+    content_url: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,6 +173,13 @@ class SearchResultSourceRecord:
     snippet: str
     matched_terms: tuple[str, ...]
     collection_active: bool
+    # Added after the original acquisition contract. Defaults keep old
+    # in-process callers valid while new source metadata travels with the
+    # frozen record.
+    publisher_name: str = ""
+    published_at_text: str = ""
+    hashtags: tuple[str, ...] = ()
+    interaction_stats: dict[str, int | None] = field(default_factory=dict)
 
 
 class SearchRunRepositoryError(Exception):
@@ -168,6 +234,7 @@ class SearchRunRepository:
         terms: Sequence[str],
         max_results_per_term: int,
         max_total_results: int | None = None,
+        ordering: SearchRunOrdering | None = None,
     ) -> SearchRunRecord:
         with _translate_storage_errors(), self._write_connection() as connection:
             timestamp = _utc_timestamp()
@@ -177,8 +244,8 @@ class SearchRunRepository:
                   monitoring_rule_id, platform, rule_name, max_results_per_term,
                   status, current_term_position, created_at, started_at, finished_at,
                   execution_start_term_position, search_protocol_version,
-                  max_total_results
-                ) VALUES (?, ?, ?, ?, 'queued', NULL, ?, NULL, NULL, 0, 2, ?)
+                  max_total_results, ordering
+                ) VALUES (?, ?, ?, ?, 'queued', NULL, ?, NULL, NULL, 0, 2, ?, ?)
                 """,
                 (
                     monitoring_rule_id,
@@ -187,6 +254,7 @@ class SearchRunRepository:
                     max_results_per_term,
                     timestamp,
                     max_total_results,
+                    ordering or ("latest" if platform == "wb" else "platform"),
                 ),
             )
             run_id = cursor.lastrowid
@@ -409,13 +477,17 @@ class SearchRunRepository:
             ).fetchone()
             created = content_row is None
             if created:
+                hashtags_json, interaction_stats_json = _metadata_json(
+                    item.hashtags, item.interaction_stats
+                )
                 cursor = connection.execute(
                     """
                     INSERT INTO search_contents (
                       platform, platform_content_id, content_type, title, snippet,
                       creator_hash, publisher_name, published_at_text, content_url,
-                      first_seen_at, last_seen_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                      first_seen_at, last_seen_at, hashtags_json,
+                      interaction_stats_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         platform,
@@ -429,6 +501,8 @@ class SearchRunRepository:
                         item.content_url,
                         item.observed_at,
                         item.observed_at,
+                        hashtags_json,
+                        interaction_stats_json,
                     ),
                 )
                 content_id = cursor.lastrowid
@@ -436,6 +510,9 @@ class SearchRunRepository:
                     raise sqlite3.DatabaseError("SQLite did not return a content ID")
             else:
                 content_id = int(content_row["id"])
+                hashtags_json, interaction_stats_json = _metadata_json(
+                    item.hashtags, item.interaction_stats
+                )
                 connection.execute(
                     """
                     UPDATE search_contents
@@ -449,6 +526,10 @@ class SearchRunRepository:
                         WHEN ? != '' THEN ? ELSE published_at_text
                       END,
                       content_url = CASE WHEN ? != '' THEN ? ELSE content_url END,
+                      hashtags_json = CASE WHEN ? != '[]' THEN ? ELSE hashtags_json END,
+                      interaction_stats_json = CASE
+                        WHEN ? != '{}' THEN ? ELSE interaction_stats_json
+                      END,
                       last_seen_at = MAX(last_seen_at, ?)
                     WHERE id = ?
                     """,
@@ -467,6 +548,10 @@ class SearchRunRepository:
                         item.published_at_text,
                         item.content_url,
                         item.content_url,
+                        hashtags_json,
+                        hashtags_json,
+                        interaction_stats_json,
+                        interaction_stats_json,
                         item.observed_at,
                         content_id,
                     ),
@@ -645,6 +730,7 @@ class SearchRunRepository:
                       contents.content_type, contents.title, contents.snippet,
                       contents.creator_hash, contents.publisher_name,
                       contents.published_at_text, contents.content_url,
+                      contents.hashtags_json, contents.interaction_stats_json,
                       contents.first_seen_at, contents.last_seen_at,
                       links.discovery_kind, links.first_observed_at,
                       links.last_observed_at
@@ -674,6 +760,7 @@ class SearchRunRepository:
         return SearchResultOpenTargetRecord(
             platform=source.platform,
             platform_content_id=source.platform_content_id,
+            content_url=source.content_url,
             matched_terms=source.matched_terms,
         )
 
@@ -690,6 +777,8 @@ class SearchRunRepository:
                     SELECT contents.platform, contents.platform_content_id,
                       contents.content_type, contents.content_url,
                       contents.title, contents.snippet,
+                      contents.publisher_name, contents.published_at_text,
+                      contents.hashtags_json, contents.interaction_stats_json,
                       runs.platform AS run_platform,
                       (runs.status IN ('queued', 'running') OR EXISTS (
                         SELECT 1 FROM search_batch_attempts AS attempts
@@ -726,6 +815,7 @@ class SearchRunRepository:
                 matched_terms = tuple(str(term["value"]) for term in term_rows)
                 if not matched_terms:
                     raise sqlite3.DatabaseError("Search result has no matched terms")
+                hashtags, interaction_stats = _metadata_from_row(row)
                 return SearchResultSourceRecord(
                     run_id=run_id,
                     result_id=result_id,
@@ -737,6 +827,10 @@ class SearchRunRepository:
                     snippet=str(row["snippet"]),
                     matched_terms=matched_terms,
                     collection_active=bool(row["collection_active"]),
+                    publisher_name=str(row["publisher_name"]),
+                    published_at_text=str(row["published_at_text"]),
+                    hashtags=hashtags,
+                    interaction_stats=interaction_stats,
                 )
             finally:
                 connection.close()
@@ -842,6 +936,7 @@ def _read_run(
         search_protocol_version=int(row["search_protocol_version"]),
         execution_limit=cast(ExecutionLimit | None, row["execution_limit"]),
         incomplete_terms=incomplete_terms,
+        ordering=cast(SearchRunOrdering, str(row["ordering"])),
     )
 
 
@@ -867,6 +962,7 @@ def assemble_result(
     row: sqlite3.Row, matched_terms: tuple[str, ...]
 ) -> SearchResultRecord:
     """Share the safe normalized projection with batch-wide result queries."""
+    hashtags, interaction_stats = _metadata_from_row(row)
     return SearchResultRecord(
         id=int(row["id"]),
         platform=cast(SearchPlatform, str(row["platform"])),
@@ -884,6 +980,8 @@ def assemble_result(
         first_observed_at=str(row["first_observed_at"]),
         last_observed_at=str(row["last_observed_at"]),
         matched_terms=matched_terms,
+        hashtags=hashtags,
+        interaction_stats=interaction_stats,
     )
 
 

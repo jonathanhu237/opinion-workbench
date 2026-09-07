@@ -156,7 +156,7 @@ const latestReportSchema = z
     finished_at: utcDateSchema,
     overview: z.string().trim().min(1).max(2000).nullable(),
     empty_reason: z
-      .enum(['no_ready_sources', 'no_relevant_sources'])
+      .enum(['no_ready_sources', 'no_relevant_sources', 'text_insufficient'])
       .nullable(),
     coverage: coverageSchema,
   })

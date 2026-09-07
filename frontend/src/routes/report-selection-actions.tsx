@@ -386,7 +386,7 @@ export function ReportSelectionActions({
             <div className="rounded-lg bg-muted/50 p-3 text-sm">
               <p>模型：{provider?.model ?? '未配置'}</p>
               <p className="mt-1 text-muted-foreground">
-                提交后会发送正文及必要媒体，可能产生模型调用和用量费用。模型设置和自动任务授权请到对应页面管理。
+                提交后会发送已保存的标题和正文，可能产生模型调用和用量费用。模型设置和自动任务授权请到对应页面管理。
               </p>
             </div>
             {preview.isPending && (

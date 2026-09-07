@@ -24,6 +24,7 @@ class ReportGenerationService:
         self.reports.on_manual_configuration_failure = self.block_configuration
         self.analyses.on_manual_acquisition_pause = self.pause
         self._paused_sessions = {}
+        self._paused_platforms = {}
         self._cancellations = {}
         self.analyses.on_manual_job_cancel = self.cancel_by_analysis
 
@@ -37,6 +38,7 @@ class ReportGenerationService:
             if value.status != "paused_for_manual_action":
                 await session.release_hold(abandon=True)
                 self._paused_sessions.pop(generation_id, None)
+                self._paused_platforms.pop(generation_id, None)
 
     async def pause(self, attempt, session, reason):
         async with self._admission:
@@ -49,6 +51,7 @@ class ReportGenerationService:
                 session.discard_manual_hold()
                 raise
             self._paused_sessions[generation_id] = session
+            self._paused_platforms[generation_id] = attempt.source.platform
 
     async def control(self, generation_id, payload, *, show=False):
         return await settle(self._control(generation_id, payload, show=show))
@@ -95,6 +98,7 @@ class ReportGenerationService:
         if value.report is not None:
             await self.reports.stop_owned(value.report.id)
         session = self._paused_sessions.pop(value.id, None)
+        self._paused_platforms.pop(value.id, None)
         if session is not None:
             await session.release_hold(abandon=True)
         self._launch()
@@ -120,7 +124,9 @@ class ReportGenerationService:
                 raise AnalysisError("content_analysis_unavailable")
             try:
                 if show:
-                    await session.show_manual("wb")
+                    await session.show_manual(
+                        self._paused_platforms.get(generation_id, "wb")
+                    )
                     return value
                 await session.prepare_resume()
             except ContentEnrichmentError:
@@ -130,6 +136,7 @@ class ReportGenerationService:
             )
             await session.release_hold()
             self._paused_sessions.pop(generation_id, None)
+            self._paused_platforms.pop(generation_id, None)
             await self.analyses.start_pending()
             self._launch()
             return value
@@ -188,10 +195,25 @@ class ReportGenerationService:
                             self.repository.read_generation, value.id
                         )
                         if current.analysis.counts.completed == 0:
-                            await database_call(
-                                self.repository.finish_generation, value.id, "failed"
+                            text_check = getattr(
+                                self.repository, "all_attempts_text_insufficient", None
                             )
-                            continue
+                            text_insufficient = (
+                                await database_call(text_check, current.analysis.id)
+                                if text_check is not None
+                                else False
+                            )
+                            if not text_insufficient:
+                                await database_call(
+                                    self.repository.finish_generation,
+                                    value.id,
+                                    "failed",
+                                )
+                                continue
+                        # A completed analysis job with no usable text still
+                        # produces a durable report shell. The report explains
+                        # that the selected sources need human review instead
+                        # of disappearing as a technical failure.
                         await database_call(self.repository.admit_report, value.id)
                     except AnalysisError:
                         current = await database_call(
@@ -237,3 +259,4 @@ class ReportGenerationService:
             for session in self._paused_sessions.values():
                 await session.release_hold(abandon=True)
             self._paused_sessions.clear()
+            self._paused_platforms.clear()

@@ -6,11 +6,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from longtian_api.search_failure_reasons import SearchFailureReason
-from longtian_api.search_platforms import (
-    SearchPlatform,
-    is_supported_search_platform,
-    is_valid_search_content_url,
-)
+from longtian_api.search_platforms import SearchPlatform, is_valid_search_content_url
 from longtian_api.services.native_browser_contracts import ExecutionLimit
 
 SearchRunStatus = Literal[
@@ -28,6 +24,7 @@ SearchRunStatus = Literal[
     "cancelled",
     "internal_error",
 ]
+SearchRunOrdering = Literal["latest", "platform"]
 SearchResultKind = Literal["new", "repeated"]
 SearchResultOpenOutcome = Literal[
     "opened",
@@ -60,18 +57,11 @@ class SearchRunCreate(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     monitoring_rule_id: int = Field(ge=1, le=9_223_372_036_854_775_807)
-    # The current collection surface is fixed to Weibo.  Keep the provenance
-    # field in the payload for stored run snapshots, while allowing callers to
-    # omit a redundant platform choice.
+    # A standalone run remains a single-platform primitive; omitting it keeps
+    # the historical Weibo default while the batch surface admits all five.
     platform: SearchPlatform = "wb"
     max_results_per_term: int = Field(default=10, ge=1, le=50)
     max_total_results: int | None = Field(default=None, ge=1, le=50)
-
-    @model_validator(mode="after")
-    def validate_current_platform(self) -> "SearchRunCreate":
-        if not is_supported_search_platform(self.platform):
-            raise ValueError("only Weibo is supported")
-        return self
 
 
 class SearchTermDiagnostic(BaseModel):
@@ -104,6 +94,7 @@ class SearchRunSummary(BaseModel):
     started_at: datetime | None
     finished_at: datetime | None
     incomplete_terms: tuple[SearchTermDiagnostic, ...] = ()
+    ordering: SearchRunOrdering = "platform"
 
     @model_validator(mode="after")
     def validate_failure_reason(self) -> "SearchRunSummary":
@@ -153,6 +144,8 @@ class SearchResult(BaseModel):
     publisher_name: str = Field(max_length=100)
     published_at_text: str = Field(max_length=100)
     content_url: str = Field(max_length=2048)
+    hashtags: tuple[str, ...] = Field(default=(), max_length=32)
+    interaction_stats: dict[str, int | None] = Field(default_factory=dict)
     kind: SearchResultKind
     matched_terms: tuple[str, ...]
     first_seen_at: datetime
@@ -175,6 +168,14 @@ class SearchResult(BaseModel):
         )
         if bool(self.creator_hash) != bool(name) or not masked:
             raise ValueError("invalid masked publisher")
+        if any(not tag or len(tag) > 50 for tag in self.hashtags):
+            raise ValueError("invalid hashtags")
+        if any(
+            key not in {"likes", "comments", "shares", "favorites"}
+            or (value is not None and (type(value) is not int or value < 0))
+            for key, value in self.interaction_stats.items()
+        ):
+            raise ValueError("invalid interaction stats")
         return self
 
 

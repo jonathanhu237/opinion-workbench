@@ -1,4 +1,4 @@
-"""Public FastAPI contracts for durable Weibo search batches."""
+"""Public FastAPI contracts for durable multi-platform search batches."""
 
 from datetime import datetime
 from typing import Literal
@@ -10,7 +10,7 @@ from longtian_api.schemas.search_runs import (
     SearchRunSummary,
     SearchTermDiagnostic,
 )
-from longtian_api.search_platforms import SearchPlatform
+from longtian_api.search_platforms import SEARCH_PLATFORMS, SearchPlatform
 
 SearchBatchStatus = Literal[
     "queued",
@@ -71,7 +71,7 @@ class SearchBatchRecover(SearchBatchCancel):
 
 
 class SearchBatchControl(SearchBatchRecover):
-    item_position: int = Field(ge=0, le=0)
+    item_position: int = Field(ge=0, le=4)
 
 
 class SearchBatchManualPageResponse(BaseModel):
@@ -84,18 +84,16 @@ class SearchBatchCreate(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
 
     monitoring_rule_id: int = Field(ge=1, le=9_223_372_036_854_775_807)
-    # The current product always admits Weibo.  Keep the persisted platform
-    # provenance in the response, but let callers omit a redundant choice.
     platforms: list[SearchPlatform] = Field(
-        default_factory=lambda: ["wb"], min_length=1, max_length=1
+        default_factory=lambda: list(SEARCH_PLATFORMS), min_length=1, max_length=5
     )
     max_results_per_term: int = Field(default=10, ge=1, le=50)
     max_total_results: int | None = Field(default=None, ge=1, le=50)
 
     @model_validator(mode="after")
     def validate_unique_platforms(self) -> "SearchBatchCreate":
-        if self.platforms != ["wb"]:
-            raise ValueError("only Weibo is supported")
+        if len(set(self.platforms)) != len(self.platforms):
+            raise ValueError("platforms must be unique")
         return self
 
 
@@ -109,7 +107,7 @@ class SearchBatchAttempt(BaseModel):
 class SearchBatchItem(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    position: int = Field(ge=0, le=0)
+    position: int = Field(ge=0)
     platform: SearchPlatform
     status: SearchBatchItemStatus
     attempt_count: int = Field(ge=0)
@@ -137,13 +135,13 @@ class SearchBatchSummary(BaseModel):
     monitoring_rule_id: int | None
     rule_name: str
     term_count: int
-    platform_count: int = Field(ge=1, le=1)
-    terminal_item_count: int = Field(ge=0, le=1)
+    platform_count: int
+    terminal_item_count: int
     max_results_per_term: int
     max_total_results: int | None = Field(default=None, ge=1, le=50)
     status: SearchBatchStatus
     control_revision: int = Field(ge=0)
-    current_item_position: int | None = Field(default=None, ge=0, le=0)
+    current_item_position: int | None
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None

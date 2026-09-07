@@ -218,11 +218,24 @@ class TopicReportService:
                 self._active_id = report.id
                 try:
                     if report.coverage.ready == 0:
+                        text_insufficient = False
+                        text_check = getattr(
+                            self.repository, "all_sources_text_insufficient", None
+                        )
+                        if text_check is not None:
+                            text_insufficient = await database_call(
+                                text_check, report.id
+                            )
+                        empty_reason = (
+                            "text_insufficient"
+                            if text_insufficient
+                            else "no_ready_sources"
+                        )
                         await database_call(
                             self.repository.finish,
                             report.id,
                             "empty",
-                            empty_reason="no_ready_sources",
+                            empty_reason=empty_reason,
                         )
                     else:
                         async with self._ai.operation(

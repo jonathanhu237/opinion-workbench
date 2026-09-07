@@ -1,11 +1,11 @@
-"""Coordinate the single native Weibo browser connection."""
+"""Coordinate native browser connections for the platform catalog."""
 
 import asyncio
 import os
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 from uuid import UUID, uuid4
 
 from longtian_api.schemas.platform_connections import (
@@ -16,6 +16,7 @@ from longtian_api.schemas.platform_connections import (
     PlatformConnectionListResponse,
     PlatformId,
 )
+from longtian_api.search_platforms import SEARCH_PLATFORMS
 from longtian_api.services.browser_operations import (
     BrowserOperationCoordinator,
     BrowserOperationOwner,
@@ -27,8 +28,17 @@ from longtian_api.services.collector_contracts import (
     AuthWorkerResult,
     CollectorFactory,
     CollectorRuntime,
+    supports_platform,
 )
 from longtian_api.services.native_chrome import native_collector_factory
+
+_AUTH_PLATFORM_BY_ID: dict[PlatformId, AuthPlatformId] = {
+    "wb": "wb",
+    "dy": "dy",
+    "ks": "ks",
+    "xhs": "xhs",
+    "toutiao": "toutiao",
+}
 
 Clock = Callable[[], datetime]
 
@@ -60,7 +70,9 @@ class PlatformConnectionService:
         if collector_factory is None:
             backend = os.environ.get("LONGTIAN_COLLECTOR_BACKEND", "native-weibo")
             if backend != "native-weibo":
-                raise ValueError("Only the native Weibo collector is supported.")
+                raise ValueError(
+                    "Unsupported collector backend; no fallback was started."
+                )
             collector_factory = native_collector_factory
         self._browser_profile_dir = (
             browser_profile_dir or _default_browser_profile_dir()
@@ -80,6 +92,14 @@ class PlatformConnectionService:
             on_progress=self._set_progress,
             on_session_disconnected=self._invalidate_connected,
         )
+        self._connections = {
+            platform: connection
+            if supports_platform(self._worker, platform)
+            else connection.model_copy(
+                update={"availability": "coming_soon", "status": "coming_soon"}
+            )
+            for platform, connection in self._connections.items()
+        }
 
     @property
     def worker(self) -> CollectorRuntime:
@@ -105,7 +125,7 @@ class PlatformConnectionService:
     async def start_attempt(self, platform: str) -> PlatformConnectionAttemptResponse:
         """Accept one non-blocking authentication attempt."""
         async with self._lock:
-            connection = self._connections.get(platform)
+            connection = self._connections.get(cast(PlatformId, platform))
             if connection is None:
                 raise PlatformConnectionError(
                     status_code=404,
@@ -119,6 +139,13 @@ class PlatformConnectionService:
                     status_code=409,
                     code="connection_attempt_active",
                     message="已有平台连接任务正在进行，请稍后重试。",
+                )
+            auth_platform = _AUTH_PLATFORM_BY_ID.get(connection.platform)
+            if connection.availability == "coming_soon" or auth_platform is None:
+                raise PlatformConnectionError(
+                    status_code=409,
+                    code="platform_not_available",
+                    message="该平台暂未接入。",
                 )
             attempt_id = uuid4()
             owner = BrowserOperationOwner("platform_connection", attempt_id)
@@ -137,7 +164,7 @@ class PlatformConnectionService:
             )
             self._connections[connection.platform] = accepted
             self._current_task = asyncio.create_task(
-                self._run_attempt("wb", attempt_id, owner),
+                self._run_attempt(auth_platform, attempt_id, owner),
                 name=f"platform-connection-{connection.platform}-{attempt_id}",
             )
             return PlatformConnectionAttemptResponse(
@@ -318,16 +345,24 @@ class PlatformConnectionService:
 
 
 def _initial_catalog() -> dict[PlatformId, PlatformConnection]:
+    labels = {
+        "wb": "微博",
+        "dy": "抖音",
+        "ks": "快手",
+        "xhs": "小红书",
+        "toutiao": "今日头条",
+    }
     return {
-        "wb": PlatformConnection(
-            platform="wb",
-            display_name="微博",
+        platform: PlatformConnection(
+            platform=platform,
+            display_name=labels[platform],
             availability="enabled",
             status="not_checked",
             guidance="none",
             last_checked_at=None,
             active_attempt_id=None,
-        ),
+        )
+        for platform in SEARCH_PLATFORMS
     }
 
 

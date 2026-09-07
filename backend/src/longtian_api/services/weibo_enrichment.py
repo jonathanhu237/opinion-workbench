@@ -116,6 +116,7 @@ class WeiboEnricher:
         budget,
         media_sink=None,
         on_content=None,
+        text_only=False,
     ):
         if platform != "wb":
             return EnrichmentWorkerResult("content_unavailable")
@@ -295,7 +296,14 @@ class WeiboEnricher:
                         max_media_bytes=budget.max_total_bytes,
                         max_images=budget.max_images,
                         max_videos=budget.max_videos,
+                        text_only=text_only,
                     )
+                    if text_only:
+                        content = project_text_only(
+                            parsed, content_id, content_url, budget
+                        )
+                        self.reset()
+                        return EnrichmentWorkerResult("completed", content=content)
                     inventory = media_inventory(parsed, budget)
                     checkpoint = {}
                     prefetched = _remap_prefetched(parsed, inventory, budget)
@@ -303,6 +311,12 @@ class WeiboEnricher:
                     acquisition_diagnostic = _diagnostic(parsed.get("diagnostic"))
                 else:
                     _, parsed, inventory, checkpoint = self._checkpoint
+                    if text_only:
+                        content = project_text_only(
+                            parsed, content_id, content_url, budget
+                        )
+                        self.reset()
+                        return EnrichmentWorkerResult("completed", content=content)
                     pending_pairs = _pending_upstream_pairs(
                         parsed, inventory, budget, checkpoint
                     )
@@ -649,6 +663,47 @@ def _post_text(post):
         )
     )
     return text, incomplete, raw == ""
+
+
+def project_text_only(parsed, identity, url, budget):
+    """Project a selected Weibo post without enumerating or downloading media."""
+    post = parsed["post"]
+    body, incomplete, _ = _post_text(post)
+    if "retweeted_status" in post:
+        original = post["retweeted_status"]
+        if isinstance(original, dict):
+            quoted, quote_incomplete, _ = _post_text(original)
+            if quoted:
+                body += "\n\n【转发附带原帖】\n" + quoted
+            incomplete = incomplete or quote_incomplete or not quoted
+        else:
+            incomplete = True
+    issues = []
+    coverage = "complete"
+    if not body:
+        coverage = "unavailable"
+        issues.append({"code": "text_unavailable", "asset_position": None})
+    elif incomplete:
+        coverage = "partial"
+        issues.append({"code": "text_incomplete", "asset_position": None})
+    if len(body) > budget.max_text_chars:
+        body = body[: budget.max_text_chars]
+        coverage = "partial"
+        issues.append({"code": "text_limit", "asset_position": None})
+    return EnrichedContent(
+        schema_version=1,
+        platform="wb",
+        content_id=identity,
+        content_url=url,
+        acquired_at=time.time_ns() // 1_000_000,
+        extractor_version="wb-enrichment-v1",
+        status="ready" if not issues else "partial" if body else "unavailable",
+        text={"title": "", "body": body, "coverage": coverage},
+        detected_modalities=["text"],
+        media_inventory_complete=True,
+        assets=[],
+        issues=issues,
+    )
 
 
 def project_text(parsed, identity, url, budget, *, inventory=None, diagnostic=None):

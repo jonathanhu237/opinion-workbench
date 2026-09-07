@@ -79,12 +79,12 @@ export function ResultsConfirmation({
           </div>
         </dl>
         <p className="text-sm leading-6 text-muted-foreground">
-          正文、图片和视频将发送到上述模型服务，可能消耗 API
+          标题和正文将发送到上述模型服务，可能消耗 API
           额度。每条分析结果都会单独保存，与报告是否生成无关。
           手动分析不会自动判断相关性或生成报告。失败项不会自动重做，新采集内容不加入本次任务。
           {confirmation.request.force_refresh
-            ? '本次将重新获取内容并分析，不复用旧版理解。'
-            : '仅复用兼容的已保存理解，不会把未读媒体当成完整内容。'}
+            ? '本次将重新获取原帖文字并分析，不复用旧版理解。'
+            : '仅复用兼容的已保存文字理解。'}
         </p>
         <PromptChoiceField
           id="manual-initial-prompt"

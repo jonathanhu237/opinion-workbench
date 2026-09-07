@@ -268,6 +268,7 @@ class GalleryComponent:
         max_media_bytes=MAX_MEDIA_BYTES,
         max_images=24,
         max_videos=1,
+        text_only=False,
     ):
         if not re.fullmatch(r"[1-9][0-9]{5,23}", content_id):
             raise ComponentError("invalid_identity")
@@ -292,6 +293,7 @@ class GalleryComponent:
             request_fetch=request_fetch,
             cookies=cookies,
             max_media_bytes=max_media_bytes,
+            mode="text_only" if text_only else "upstream",
             max_images=max_images,
             max_videos=max_videos,
         )
@@ -405,6 +407,8 @@ class GalleryComponent:
         max_images=24,
         max_videos=1,
     ):
+        if mode not in ("upstream", "upstream_media", "text_only"):
+            raise ComponentError("invalid_mode")
         process = await self._start()
         downloads = {}
         media_bytes = 0

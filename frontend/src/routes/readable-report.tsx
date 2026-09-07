@@ -122,6 +122,22 @@ export function ReadableReport({ report }: { report: ReportRun }) {
     enabled: report.status === 'completed' && report.root_section_id !== null,
     retry: false,
   })
+  if (report.status === 'empty')
+    return (
+      <article
+        aria-label="报告正文"
+        className="flex flex-col gap-6 text-base leading-8 wrap-anywhere"
+      >
+        <p className="rounded-lg bg-muted p-4 whitespace-pre-wrap">
+          {report.empty_reason === 'text_insufficient'
+            ? '文字信息不足，无法通过文字判断是否和舆情有关。请打开下方原文链接人工核查。'
+            : report.empty_reason === 'no_ready_sources'
+              ? '本次没有可用的文字材料，未形成舆情结论。原始内容和原因仍保留。'
+              : '相关性判断没有找到足够相关的内容，未形成报告正文。'}
+        </p>
+        <ReportMaterialNote report={report} />
+      </article>
+    )
   if (report.status !== 'completed')
     return <p role="status">报告尚未生成完成，请返回报告列表查看进度。</p>
   if (report.root_section_id === null)

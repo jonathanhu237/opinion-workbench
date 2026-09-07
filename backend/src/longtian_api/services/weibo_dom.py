@@ -23,6 +23,54 @@ def text_of(node):
     return " ".join(node.text_content().split())
 
 
+def _card_hashtags(card):
+    result = []
+    seen = set()
+    for value in [text_of(card), *card.xpath(".//a[contains(@href,'/k/')]/text()")]:
+        for match in re.finditer(r"#([^#\s]{1,50})#?", str(value)):
+            tag = " ".join(match.group(1).split())
+            if tag and tag not in seen:
+                result.append(tag)
+                seen.add(tag)
+            if len(result) >= 32:
+                return tuple(result)
+    return tuple(result)
+
+
+def _count(value):
+    match = re.fullmatch(r"(\d+(?:\.\d+)?)([万亿]?)", value.replace(",", ""))
+    if not match:
+        return None
+    result = int(
+        float(match.group(1)) * {"": 1, "万": 10_000, "亿": 100_000_000}[match.group(2)]
+    )
+    return result if result <= 2**53 - 1 else None
+
+
+def _card_interaction_stats(card):
+    result = {}
+    labels = " ".join(card.xpath(".//@aria-label"))
+    for match in re.finditer(
+        r"(?:(\d+(?:\.\d+)?[万亿]?)\s*(点赞|赞|评论|转发|分享|收藏)|"
+        r"(点赞|赞|评论|转发|分享|收藏)\s*(\d+(?:\.\d+)?[万亿]?))",
+        labels,
+    ):
+        raw = match.group(1) or match.group(4)
+        label = match.group(2) or match.group(3)
+        value = _count(raw)
+        key = {
+            "点赞": "likes",
+            "赞": "likes",
+            "评论": "comments",
+            "转发": "shares",
+            "分享": "shares",
+            "收藏": "favorites",
+        }[label]
+        if value is not None:
+            result.setdefault(key, value)
+    return result
+
+
 def safe_weibo_link(value, base):
     value = urljoin(base, value)
     try:
@@ -312,6 +360,8 @@ def read_search_page(url, raw, status, term, *, latest=False):
                 published_at_text=text_of(links[0])[:100],
                 content_url=f"https://m.weibo.cn/detail/{mid}",
                 discovered_at=int(time() * 1000),
+                hashtags=_card_hashtags(card),
+                interaction_stats=_card_interaction_stats(card),
             )
         )
     if not cards:

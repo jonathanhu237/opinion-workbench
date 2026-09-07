@@ -56,9 +56,7 @@ def list_report_records(
 
 
 @router.get("/records/report/{report_id}")
-def read_report_record(
-    report_id: ResourceId, service: Service
-) -> ReportRecord | None:
+def read_report_record(report_id: ResourceId, service: Service) -> ReportRecord | None:
     return service.repository.read_record_by_report(report_id)
 
 

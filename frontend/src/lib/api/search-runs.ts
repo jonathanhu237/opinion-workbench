@@ -3,7 +3,13 @@ import { z } from 'zod'
 import { getApiBaseUrl } from '@/lib/api/client'
 
 export const SEARCH_RUNS_QUERY_KEY = ['search-runs'] as const
-export const SEARCH_PLATFORM_ORDER = ['wb'] as const
+export const SEARCH_PLATFORM_ORDER = [
+  'wb',
+  'dy',
+  'ks',
+  'xhs',
+  'toutiao',
+] as const
 
 const activeStatuses = ['queued', 'running'] as const
 const terminalStatuses = [
@@ -23,7 +29,7 @@ export const searchRunStatusSchema = z.enum([
   ...activeStatuses,
   ...terminalStatuses,
 ])
-export const searchPlatformSchema = z.enum(['wb'] as const)
+export const searchPlatformSchema = z.enum(SEARCH_PLATFORM_ORDER)
 export const isoDateSchema = z.string().datetime({ offset: true })
 export const searchFailureReasonSchema = z.enum([
   'page_state_unrecognized',
@@ -67,6 +73,7 @@ const summaryShape = {
   started_at: isoDateSchema.nullable(),
   finished_at: isoDateSchema.nullable(),
   incomplete_terms: z.array(searchTermDiagnosticSchema).max(20).optional(),
+  ordering: z.enum(['latest', 'platform']).optional(),
 } as const
 export const searchRunSummarySchema = z
   .strictObject(summaryShape)
@@ -136,6 +143,13 @@ export const searchResultSchema = z
     publisher_name: z.string().max(100),
     published_at_text: z.string().max(100),
     content_url: z.string().url(),
+    hashtags: z.array(z.string().min(1).max(50)).max(32).optional(),
+    interaction_stats: z
+      .record(
+        z.enum(['likes', 'comments', 'shares', 'favorites']),
+        z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullable(),
+      )
+      .optional(),
     kind: z.enum(['new', 'repeated']),
     matched_terms: z.array(z.string()).min(1).max(20),
     first_seen_at: isoDateSchema,
@@ -232,7 +246,7 @@ const productErrorContracts: Record<
   invalid_request: { status: 422, message: '请求内容不正确。' },
   search_platform_not_available: {
     status: 409,
-    message: '当前版本仅支持微博采集，历史内容仍可查看。',
+    message: '该平台尚未接入当前采集器，历史内容仍可查看。',
   },
   monitoring_rule_not_found: { status: 404, message: '未找到该监控规则。' },
   monitoring_rule_disabled: {
@@ -287,6 +301,9 @@ export function isValidSearchContentUrl(
   platformContentId: string,
   value: string,
 ) {
+  if (typeof platformContentId !== 'string' || typeof value !== 'string') {
+    return false
+  }
   let url: URL
   try {
     url = new URL(value)
@@ -302,11 +319,61 @@ export function isValidSearchContentUrl(
   ) {
     return false
   }
+  const toutiaoMatch = url.pathname.match(
+    /^\/(article|w|video)\/([0-9]{8,24})\/$/u,
+  )
+  const weiboMatch = url.pathname.match(/^\/detail\/([0-9]{1,24})$/u)
+  const kuaishouMatch = url.pathname.match(
+    /^\/short-video\/([A-Za-z0-9_-]{1,128})$/u,
+  )
+  const douyinMatch = url.pathname.match(/^\/video\/([0-9]{1,128})$/u)
+  const xiaohongshuMatch = url.pathname.match(/^\/explore\/([0-9a-f]{24})$/u)
+  if (platform === 'toutiao') {
+    return (
+      toutiaoMatch?.[2] === platformContentId &&
+      value ===
+        `https://www.toutiao.com/${toutiaoMatch?.[1]}/${platformContentId}/` &&
+      url.protocol === 'https:' &&
+      hostname === 'www.toutiao.com' &&
+      url.search === ''
+    )
+  }
   if (platform === 'wb') {
     return (
+      platformContentId.length >= 1 &&
+      platformContentId.length <= 24 &&
+      /^[0-9]+$/u.test(platformContentId) &&
+      weiboMatch?.[1] === platformContentId &&
       value === `https://m.weibo.cn/detail/${platformContentId}` &&
       url.protocol === 'https:' &&
       hostname === 'm.weibo.cn' &&
+      url.search === ''
+    )
+  }
+  if (platform === 'ks') {
+    return (
+      kuaishouMatch?.[1] === platformContentId &&
+      value === `https://www.kuaishou.com/short-video/${platformContentId}` &&
+      url.protocol === 'https:' &&
+      hostname === 'www.kuaishou.com' &&
+      url.search === ''
+    )
+  }
+  if (platform === 'dy') {
+    return (
+      douyinMatch?.[1] === platformContentId &&
+      value === `https://www.douyin.com/video/${platformContentId}` &&
+      url.protocol === 'https:' &&
+      hostname === 'www.douyin.com' &&
+      url.search === ''
+    )
+  }
+  if (platform === 'xhs') {
+    return (
+      xiaohongshuMatch?.[1] === platformContentId &&
+      value === `https://www.xiaohongshu.com/explore/${platformContentId}` &&
+      url.protocol === 'https:' &&
+      hostname === 'www.xiaohongshu.com' &&
       url.search === ''
     )
   }
@@ -391,9 +458,6 @@ export async function startSearchRun(
   },
   signal?: AbortSignal,
 ) {
-  if (input.platform !== undefined && input.platform !== 'wb') {
-    throw new SearchRunApiError('当前版本仅支持微博采集。', 'invalid_request')
-  }
   const response = await request('/search-runs', {
     method: 'POST',
     headers: { Accept: 'application/json', 'Content-Type': 'application/json' },

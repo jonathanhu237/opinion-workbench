@@ -26,7 +26,12 @@ import {
   analysisUsageSchema,
   attemptStatusSchema,
 } from '@/lib/api/content-analyses'
-import { isoDateSchema } from '@/lib/api/search-runs'
+import {
+  isoDateSchema,
+  searchFailureReasonSchema,
+  searchPlatformSchema,
+  searchRunStatusSchema,
+} from '@/lib/api/search-runs'
 
 export const TOPIC_REPORTS_QUERY_KEY = ['topic-reports'] as const
 export const REPORT_PAGE_SIZE = 20
@@ -197,6 +202,13 @@ const reportStatusSchema = z.enum([
   'interrupted',
   'configuration_blocked',
 ])
+const collectionGapSchema = z.strictObject({
+  position: safeCount,
+  platform: searchPlatformSchema,
+  status: z.enum(['failed', 'skipped', 'cancelled']),
+  run_status: searchRunStatusSchema.nullable(),
+  failure_reason: searchFailureReasonSchema.nullable(),
+})
 export function isActiveReport(status: z.infer<typeof reportStatusSchema>) {
   return status === 'queued' || status === 'judging' || status === 'composing'
 }
@@ -221,9 +233,10 @@ export const reportRunSchema = z
       composition: nodeCountsSchema,
     }),
     usage: reportUsageSchema,
+    collection_gaps: z.array(collectionGapSchema).default([]),
     root_section_id: safeId.nullable(),
     empty_reason: z
-      .enum(['no_ready_sources', 'no_relevant_sources'])
+      .enum(['no_ready_sources', 'no_relevant_sources', 'text_insufficient'])
       .nullable(),
     queue_reason: z.literal('ai_operation_active').nullable(),
     recovery_reason: z.literal('backend_restart').nullable(),
@@ -240,6 +253,9 @@ export const reportRunSchema = z
       (value.status === 'completed') !== (value.root_section_id !== null) ||
       (value.status === 'empty') !== (value.empty_reason !== null) ||
       (value.empty_reason === 'no_ready_sources' &&
+        (value.coverage.ready !== 0 ||
+          value.usage.total.attempted_requests !== 0)) ||
+      (value.empty_reason === 'text_insufficient' &&
         (value.coverage.ready !== 0 ||
           value.usage.total.attempted_requests !== 0)) ||
       (value.empty_reason === 'no_relevant_sources' &&

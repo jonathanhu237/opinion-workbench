@@ -27,7 +27,7 @@ class QuiescentProcess(Protocol):
     def returncode(self) -> int | None: ...
 
 
-AuthPlatformId = Literal["wb"]
+AuthPlatformId = Literal["wb", "dy", "ks", "xhs", "toutiao"]
 AuthProgressPhase = Literal[
     "waiting_for_browser",
     "waiting_for_approval",
@@ -95,9 +95,8 @@ SearchTermCompletedCallback = Callable[
 
 
 def supports_platform(collector, platform):
-    """Return whether the native Weibo collector owns this platform."""
-    supported = getattr(collector, "supported_platforms", None)
-    return platform == "wb" and (supported is None or platform in supported)
+    """No-I/O capability check; unknown collectors are treated as Weibo-only."""
+    return platform in getattr(collector, "supported_platforms", ("wb",))
 
 
 class AuthWorkerError(Exception):
@@ -136,6 +135,8 @@ class SearchWorkerItem:
     published_at_text: str
     content_url: str
     discovered_at: int
+    hashtags: tuple[str, ...] = ()
+    interaction_stats: dict[str, int | None] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -222,6 +223,7 @@ class ContentCollector(Protocol):
         content_url: str,
         term: str,
         budget: EnrichmentBudget,
+        text_only: bool = True,
     ) -> EnrichmentWorkerResult: ...
 
     async def discard_session(self) -> None: ...

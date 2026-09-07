@@ -13,7 +13,10 @@ from test_search_runs import _wait_for_terminal
 from longtian_api.main import create_app
 from longtian_api.services.ai_settings import AISettingsService
 from longtian_api.services.monitoring_rules import MonitoringRuleService
-from longtian_api.services.native_weibo import NativeWeiboCollector
+from longtian_api.services.native_weibo import (
+    NativeWeiboCollector,
+    _generic_detail_text,
+)
 from longtian_api.services.platform_connections import PlatformConnectionService
 from longtian_api.services.weibo_dom import barrier, document, read_search_page
 
@@ -96,6 +99,24 @@ def test_plain_browser_403_is_not_security_verification_without_evidence():
     )
     challenge = "<title>安全验证</title>"
     assert barrier(document(challenge), url, 403) == "manual_challenge_required"
+
+
+def test_generic_detail_text_rejects_page_chrome_and_untrusted_metadata():
+    root = document(
+        '<meta property="og:description" content="搜索摘要">'
+        "<main>导航 推荐内容</main>"
+    )
+    assert _generic_detail_text(root) == ("", False)
+
+
+def test_generic_detail_text_marks_limits_and_preserves_quoted_attribution():
+    root = document(
+        '<div class="post-content">自己的正文 '
+        '<blockquote>被引用的原文</blockquote></div>'
+    )
+    body, truncated = _generic_detail_text(root, max_chars=20)
+    assert body == "自己的正文\n\n【转发附带原帖】\n被引用的"
+    assert truncated
 
 
 def test_manual_report_recovery_opens_the_affected_post_context():

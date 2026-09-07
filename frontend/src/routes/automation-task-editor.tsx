@@ -6,6 +6,7 @@ import { Controller, useForm, useWatch } from 'react-hook-form'
 import { z } from 'zod'
 
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Dialog,
   DialogContent,
@@ -21,6 +22,7 @@ import {
   FieldLabel,
   FieldLegend,
   FieldSet,
+  FieldContent,
 } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import {
@@ -32,8 +34,10 @@ import {
 } from '@/components/ui/select'
 import { PromptChoiceField } from '@/components/prompt-choice-field'
 import { useMonitoringRules } from '@/hooks/use-monitoring-rules'
+import { usePlatformConnections } from '@/hooks/use-platform-connections'
 import {
   MAX_AUTOMATION_INTERVAL_MINUTES,
+  AUTOMATION_PLATFORM_ORDER,
   AUTOMATION_TASKS_QUERY_KEY,
   AutomationApiError,
   automationErrorMessage,
@@ -61,6 +65,21 @@ const formSchema = z
   .object({
     name: z.string().max(80, '任务名称不能超过 80 个字符。'),
     ruleId: z.string(),
+    platforms: z
+      .array(z.enum(AUTOMATION_PLATFORM_ORDER))
+      .min(1, '至少选择一个采集平台。')
+      .max(5, '最多选择五个平台。')
+      .refine(
+        (platforms) =>
+          new Set(platforms).size === platforms.length &&
+          JSON.stringify(platforms) ===
+            JSON.stringify(
+              AUTOMATION_PLATFORM_ORDER.filter((platform) =>
+                platforms.includes(platform),
+              ),
+            ),
+        '请按平台目录顺序选择采集平台。',
+      ),
     maxResultsPerTerm: z.coerce
       .number<number>()
       .int('请输入整数。')
@@ -141,6 +160,7 @@ function initialValues(task: AutomationTask | null): FormValues {
       task?.monitoring_rule_id === null || task === null
         ? ''
         : String(task.monitoring_rule_id),
+    platforms: task?.platforms ?? [...AUTOMATION_PLATFORM_ORDER],
     maxResultsPerTerm: task?.max_results_per_term ?? 10,
     initialPrompt: choiceFromSnapshot(task?.initial_prompt),
     reportPrompt: choiceFromSnapshot(task?.report_prompt),
@@ -299,6 +319,7 @@ function makePayload(values: FormValues): AutomationTaskCreate {
   return {
     name: values.name.trim(),
     monitoring_rule_id: Number(values.ruleId),
+    platforms: values.platforms,
     max_results_per_term: values.maxResultsPerTerm,
     max_total_results: null,
     initial_prompt: values.initialPrompt,
@@ -325,6 +346,7 @@ export function AutomationTaskEditor({
 }) {
   const client = useQueryClient()
   const rules = useMonitoringRules()
+  const platformsQuery = usePlatformConnections()
   const analysisSettings = useQuery({
     queryKey: ANALYSIS_SETTINGS_QUERY_KEY,
     queryFn: ({ signal }) => fetchAnalysisSettings(signal),
@@ -536,15 +558,88 @@ export function AutomationTaskEditor({
           </div>
 
           <p className="text-sm text-muted-foreground">
-            每个搜索词按最新优先采集，分别计算上限；不足上限时按实际数量保存，跨词重复内容会合并。
+            平台支持最新排序时按最新优先，否则保留平台实际顺序；每个搜索词分别计算上限，不足上限时按实际数量保存，跨词重复内容会合并。
             {task !== null && task.max_total_results != null
               ? ' 此任务原为合计上限，保存后将改为每词上限；历史运行不变。'
               : ''}
           </p>
-          <div className="flex min-h-11 items-center gap-3 rounded-lg border border-border bg-card px-3 text-sm">
-            <span className="font-medium">采集平台：微博</span>
-            <span className="text-muted-foreground">当前版本仅支持微博</span>
-          </div>
+
+          <Controller
+            name="platforms"
+            control={form.control}
+            render={({ field, fieldState }) => (
+              <FieldSet
+                data-invalid={fieldState.invalid}
+                className="rounded-xl border bg-muted/25 p-4"
+              >
+                <FieldLegend variant="label">采集平台</FieldLegend>
+                <FieldDescription id="automation-platforms-description">
+                  新任务默认选择全部五个平台；编辑既有任务时保留已保存的平台范围，可以按需要调整。
+                </FieldDescription>
+                <div
+                  role="group"
+                  aria-describedby="automation-platforms-description"
+                  className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3"
+                >
+                  {AUTOMATION_PLATFORM_ORDER.map((platform) => {
+                    const connection = platformsQuery.data?.platforms.find(
+                      (item) => item.platform === platform,
+                    )
+                    const enabled = connection?.availability === 'enabled'
+                    const label = {
+                      wb: '微博',
+                      dy: '抖音',
+                      ks: '快手',
+                      xhs: '小红书',
+                      toutiao: '今日头条',
+                    }[platform]
+                    const checked = field.value.includes(platform)
+                    return (
+                      <Field
+                        key={platform}
+                        orientation="horizontal"
+                        data-disabled={
+                          saveMutation.isPending || (!enabled && !checked)
+                        }
+                        className="rounded-lg border bg-background/70 p-3"
+                      >
+                        <Checkbox
+                          id={`automation-platform-${platform}`}
+                          checked={checked}
+                          disabled={
+                            saveMutation.isPending || (!enabled && !checked)
+                          }
+                          aria-invalid={fieldState.invalid}
+                          aria-label={`选择采集平台：${label}`}
+                          onCheckedChange={(nextChecked) => {
+                            const next = nextChecked
+                              ? [...field.value, platform]
+                              : field.value.filter((item) => item !== platform)
+                            field.onChange(
+                              AUTOMATION_PLATFORM_ORDER.filter((item) =>
+                                next.includes(item),
+                              ),
+                            )
+                          }}
+                        />
+                        <FieldContent>
+                          <FieldLabel
+                            htmlFor={`automation-platform-${platform}`}
+                          >
+                            {label}
+                          </FieldLabel>
+                          {!enabled && (
+                            <FieldDescription>暂未接入</FieldDescription>
+                          )}
+                        </FieldContent>
+                      </Field>
+                    )
+                  })}
+                </div>
+                <FieldError errors={[fieldState.error]} />
+              </FieldSet>
+            )}
+          />
 
           <div className="grid gap-5">
             <Controller
@@ -554,7 +649,7 @@ export function AutomationTaskEditor({
                 <PromptChoiceField
                   id="automation-initial-prompt"
                   label="内容理解提示词"
-                  description="先理解每条来源，保留地点、时间、媒体观察和不确定性。"
+                  description="先理解每条来源，保留地点、时间、文字证据和不确定性。"
                   value={field.value}
                   onChange={field.onChange}
                   onBlur={field.onBlur}

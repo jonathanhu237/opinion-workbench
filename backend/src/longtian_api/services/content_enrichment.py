@@ -1,6 +1,7 @@
 """Explicit, serial stored-content acquisition without persistence or AI calls."""
 
 import asyncio
+import inspect
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -75,6 +76,7 @@ class EnrichmentWorker(Protocol):
         content_url: str,
         term: str,
         budget: EnrichmentBudget,
+        text_only: bool = True,
     ) -> EnrichmentWorkerResult: ...
 
     async def discard_session(self) -> None: ...
@@ -102,10 +104,9 @@ class EnrichmentItem:
     def detail_analysis_eligible(self) -> bool:
         """Whether the acquired detail document contains usable evidence."""
 
-        return self.content is not None and bool(
-            self.content.text.title.strip()
-            or self.content.text.body.strip()
-            or any(asset.status == "ready" for asset in self.content.assets)
+        return self.content is not None and (
+            self.content.text.coverage != "unavailable"
+            and bool(self.content.text.title.strip() or self.content.text.body.strip())
         )
 
     @property
@@ -116,12 +117,7 @@ class EnrichmentItem:
 
     @property
     def analysis_eligible(self) -> bool:
-        """At least one trustworthy text or validated media item is present.
-
-        This is intentionally broader than :attr:`ready`: a partial detail
-        response can still contain useful text or media, and the frozen search
-        title/snippet is a safe final fallback when detail acquisition fails.
-        """
+        """Whether trustworthy source text is available for analysis."""
 
         return self.detail_analysis_eligible or self.preview_analysis_eligible
 
@@ -352,9 +348,15 @@ class EnrichmentSession:
             # This acquisition task is never cancelled by its caller. It owns
             # allocation/validation to completion; only the worker task receives
             # cancellation, so a filesystem thread cannot publish an orphan later.
-            self._operation = await asyncio.to_thread(
-                self._service._spool.create_operation, request_id
-            )
+            # Native acquisition is explicitly text-only.  Do not allocate a
+            # media staging operation for the new path: no media bytes should
+            # be downloaded or briefly written merely to produce text input.
+            # Keep the operation for injected/legacy workers that still use
+            # manifest-backed media acquisition.
+            if not self._service.native_acquisition:
+                self._operation = await asyncio.to_thread(
+                    self._service._spool.create_operation, request_id
+                )
             if self._cancel_requested or self._closed:
                 return EnrichmentItem(source, "cancelled")
 
@@ -367,27 +369,45 @@ class EnrichmentSession:
                         content_url=source.content_url,
                         budget=budget,
                     )
-                    # Only validated, owned files may accompany a text checkpoint.
-                    media = await asyncio.to_thread(
-                        self._operation.read_assets, checked, budget.max_total_bytes
-                    )
-                    await on_content(checked, media)
+                    # Text-only analysis deliberately does not stage or read
+                    # media files.  The callback receives an empty tuple so
+                    # existing checkpoint consumers retain their shape.
+                    await on_content(checked, ())
 
             native_options = (
-                {"media_sink": self._operation, "on_content": observe_content}
+                {"on_content": observe_content, "text_only": True}
                 if self._service.native_acquisition
                 else {}
             )
+            worker_kwargs = {
+                "request_id": request_id,
+                "platform": source.platform,
+                "content_id": source.platform_content_id,
+                "content_url": source.content_url,
+                "term": source.matched_terms[0],
+                "budget": budget,
+                **native_options,
+            }
+            # Keep small test/injected workers compatible while making the
+            # production contract explicit about the text-only scope.
+            try:
+                parameters = inspect.signature(self._service._worker.enrich).parameters
+            except (TypeError, ValueError):
+                parameters = {}
+            accepts_kwargs = any(
+                parameter.kind is inspect.Parameter.VAR_KEYWORD
+                for parameter in parameters.values()
+            )
+            if not accepts_kwargs:
+                worker_kwargs = {
+                    key: value
+                    for key, value in worker_kwargs.items()
+                    if key not in {"on_content", "text_only"} or key in parameters
+                }
+            if "text_only" in parameters or accepts_kwargs:
+                worker_kwargs["text_only"] = True
             self._worker_task = asyncio.create_task(
-                self._service._worker.enrich(
-                    request_id=request_id,
-                    platform=source.platform,
-                    content_id=source.platform_content_id,
-                    content_url=source.content_url,
-                    term=source.matched_terms[0],
-                    budget=budget,
-                    **native_options,
-                )
+                self._service._worker.enrich(**worker_kwargs)
             )
             try:
                 async with asyncio.timeout(self._service._timeout_seconds):
@@ -437,9 +457,6 @@ class EnrichmentSession:
                 content_url=source.content_url,
                 budget=budget,
             )
-            media = await asyncio.to_thread(
-                self._operation.read_assets, content, budget.max_total_bytes
-            )
             if self._cancel_requested or self._closed:
                 return EnrichmentItem(source, "cancelled")
             return EnrichmentItem(
@@ -447,7 +464,7 @@ class EnrichmentSession:
                 result.outcome,
                 content,
                 evidence_fingerprint(content),
-                media,
+                (),
                 diagnostic=result.diagnostic,
             )
         except MediaStagingError:

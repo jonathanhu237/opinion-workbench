@@ -55,7 +55,7 @@ const searchBatchAttemptSchema = z.strictObject({
 })
 const searchBatchItemSchema = z
   .strictObject({
-    position: z.number().int().min(0).max(0),
+    position: z.number().int().min(0).max(4),
     platform: searchPlatformSchema,
     status: searchBatchItemStatusSchema,
     attempt_count: nonnegativeSafeIntegerSchema,
@@ -131,13 +131,13 @@ const summaryShape = {
   monitoring_rule_id: positiveSafeIntegerSchema.nullable(),
   rule_name: z.string(),
   term_count: z.number().int().min(1).max(20),
-  platform_count: z.number().int().min(1).max(1),
-  terminal_item_count: z.number().int().min(0).max(1),
+  platform_count: z.number().int().min(1).max(5),
+  terminal_item_count: z.number().int().min(0).max(5),
   max_results_per_term: z.number().int().min(1).max(50),
   max_total_results: z.number().int().min(1).max(50).nullish(),
   status: searchBatchStatusSchema,
   control_revision: nonnegativeSafeIntegerSchema,
-  current_item_position: z.number().int().min(0).max(0).nullable(),
+  current_item_position: z.number().int().min(0).max(4).nullable(),
   created_at: isoDateSchema,
   started_at: isoDateSchema.nullable(),
   finished_at: isoDateSchema.nullable(),
@@ -153,7 +153,7 @@ const searchBatchDetailSchema = z
   .strictObject({
     ...summaryShape,
     terms: z.array(z.string()).min(1).max(20),
-    items: z.array(searchBatchItemSchema).min(1).max(1),
+    items: z.array(searchBatchItemSchema).min(1).max(5),
   })
   .superRefine((value, context) => {
     const terminalCount = value.items.filter((item) =>
@@ -356,7 +356,7 @@ const productErrorContracts: Record<
   invalid_request: { status: 422, message: '请求内容不正确。' },
   search_platform_not_available: {
     status: 409,
-    message: '当前版本仅支持微博采集，历史内容仍可查看。',
+    message: '该平台尚未接入当前采集器，历史内容仍可查看。',
   },
   monitoring_rule_not_found: { status: 404, message: '未找到该监控规则。' },
   monitoring_rule_disabled: {
@@ -481,9 +481,11 @@ export async function startSearchBatch(
 ) {
   if (
     input.platforms !== undefined &&
-    (input.platforms.length !== 1 || input.platforms[0] !== 'wb')
+    (input.platforms.length < 1 ||
+      input.platforms.length > 5 ||
+      new Set(input.platforms).size !== input.platforms.length)
   ) {
-    throw new SearchBatchApiError('当前版本仅支持微博采集。', 'invalid_request')
+    throw new SearchBatchApiError('采集平台选择不正确。', 'invalid_request')
   }
   const response = await request('/search-batches', {
     method: 'POST',

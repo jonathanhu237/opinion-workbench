@@ -2,8 +2,12 @@ import { getApiBaseUrl } from '@/lib/api/client'
 
 export const PLATFORM_CONNECTIONS_QUERY_KEY = ['platform-connections'] as const
 
-const platformIds = ['wb'] as const
-const availabilityValues = ['enabled'] as const
+// Keep this decoder in the same stable order as the backend catalog and the
+// search/automation platform descriptors.  The order is part of the response
+// contract because it preserves the existing Weibo-first UI position while
+// appending the newly supported platforms.
+const platformIds = ['wb', 'dy', 'ks', 'xhs', 'toutiao'] as const
+const availabilityValues = ['enabled', 'coming_soon'] as const
 const statusValues = [
   'not_checked',
   'checking',
@@ -11,6 +15,7 @@ const statusValues = [
   'connected',
   'disconnected',
   'failed',
+  'coming_soon',
 ] as const
 const guidanceValues = [
   'none',

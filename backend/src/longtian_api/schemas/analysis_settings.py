@@ -16,8 +16,9 @@ REPORT_SCHEMA_VERSION = "topic-report-v1"
 PromptChoiceMode = Literal["default", "custom"]
 PromptSnapshotMode = Literal["default", "custom", "legacy"]
 DEFAULT_INITIAL_INSTRUCTIONS = (
-    "理解每条来源的完整文字和实际媒体，概括来源陈述，保留地点线索、时间、"
-    "画面及音频观察和不确定性。不要按地域或主题预先排除内容，不把来源指控当作已核实事实。"
+    "理解每条来源的标题、正文、话题标签和平台文字说明，概括来源陈述，保留地点线索、"
+    "时间和不确定性。只根据实际提供的文字判断，不推测图片、视频或音频中没有转写的内容；"
+    "不要按地域或主题预先排除内容，不把来源指控当作已核实事实。"
 )
 DEFAULT_REPORT_INSTRUCTIONS = (
     "根据保存的来源材料判断其是否涉及深圳市坪山区龙田街道。区分同名地点，"

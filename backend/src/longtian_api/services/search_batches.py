@@ -1,4 +1,4 @@
-"""Orchestrate durable serial Weibo search batches."""
+"""Orchestrate durable serial multi-platform search batches."""
 
 import asyncio
 from collections.abc import Callable, Sequence
@@ -82,7 +82,12 @@ class SearchBatchRepositoryProtocol(Protocol):
 
     def next_queued_item(self, batch_id: int) -> SearchBatchItemRecord | None: ...
 
-    def create_attempt(self, batch_id: int, position: int) -> SearchRunRecord: ...
+    def create_attempt(
+        self,
+        batch_id: int,
+        position: int,
+        ordering: str | None = None,
+    ) -> SearchRunRecord: ...
 
     def finish_item(
         self,
@@ -353,13 +358,13 @@ class SearchBatchService:
         return _to_detail(record)
 
     def _require_platforms(self, platforms):
-        if (platforms and tuple(platforms) != ("wb",)) or any(
+        if any(
             not self._search_runs.supports_platform(platform) for platform in platforms
         ):
             raise SearchBatchError(
                 status_code=409,
                 code="search_platform_not_available",
-                message="当前版本仅支持微博采集。",
+                message="该平台尚未接入当前采集器，历史内容仍可查看。",
             )
 
     async def _load_rule(self, rule_id: int) -> MonitoringRule:
@@ -741,9 +746,27 @@ class SearchBatchService:
                 if item is None:
                     await database_call(self._repository.finalize, batch_id)
                     return
-                run = await database_call(
-                    self._repository.create_attempt, batch_id, item.position
-                )
+                try:
+                    run = await database_call(
+                        self._repository.create_attempt,
+                        batch_id,
+                        item.position,
+                        ordering=(
+                            self._search_runs.ordering_for_platform(item.platform)
+                            if callable(
+                                getattr(
+                                    self._search_runs, "ordering_for_platform", None
+                                )
+                            )
+                            else ("latest" if item.platform == "wb" else "platform")
+                        ),
+                    )
+                except TypeError:
+                    # Keep old injected repository doubles usable while the
+                    # production repository persists the ordering marker.
+                    run = await database_call(
+                        self._repository.create_attempt, batch_id, item.position
+                    )
                 request_id = uuid4()
                 run = await self._search_runs.execute_attempt(
                     run,
@@ -843,6 +866,7 @@ def _to_run_summary(record: SearchRunRecord) -> SearchRunSummary:
             )
             for diagnostic in record.incomplete_terms
         ),
+        ordering=record.ordering,
     )
 
 

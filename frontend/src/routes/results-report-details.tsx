@@ -23,6 +23,7 @@ import {
   ResultsPagination,
   ResultSourceLink,
 } from '@/routes/results-presenters'
+import { CollectionGapNote } from '@/routes/report-material-note'
 
 export const reportStatusLabels: Record<ReportRun['status'], string> = {
   queued: '等待生成',
@@ -61,10 +62,10 @@ const unavailableLabels: Record<
   stale_evidence: '没有可用的匹配分析结果',
 }
 const evidenceLevelLabels = {
-  search_preview: '搜索摘要',
+  search_preview: '搜索摘要文字',
   detail_text: '详情文字',
-  validated_media: '已确认媒体',
-  full_source: '完整内容',
+  validated_media: '文字与历史媒体材料',
+  full_source: '完整文字',
 } as const
 const sectionLabels: Record<ReportSection['status'], string> = {
   queued: '等待生成',
@@ -130,7 +131,9 @@ export function ReportCoverage({ report }: { report: ReportRun }) {
         <p className="rounded-lg bg-muted p-3 text-sm leading-6">
           {report.empty_reason === 'no_ready_sources'
             ? '本次没有可用的初步分析，因此没有调用模型。原始内容和失败原因仍保留。'
-            : '相关性判断没有找到足够相关的内容，因此没有生成报告。不相关和不确定的内容仍保留。'}
+            : report.empty_reason === 'text_insufficient'
+              ? '文字信息不足，无法通过文字判断是否和舆情有关。请打开下方原文链接人工核查。'
+              : '相关性判断没有找到足够相关的内容，因此没有生成报告。不相关和不确定的内容仍保留。'}
         </p>
       )}
       {report.queue_reason && (
@@ -371,6 +374,7 @@ export function ReportDetails({
   const draft = report.status !== 'completed'
   return (
     <div className="space-y-5">
+      <CollectionGapNote report={report} />
       {draft && report.nodes.composition.completed > 0 && (
         <p className="text-sm text-warning-foreground">
           以下是已保存的部分草稿，不是完整成功报告；初步文本与引用继续可查。
@@ -472,24 +476,21 @@ export function ReportDetails({
                         首次发现 {formatEvidenceDate(item.first_seen_at)} ·
                         原文发布时间 {item.source.published_at_text || '未知'}
                       </p>
+                      {item.source.snippet && (
+                        <p className="text-sm leading-6 text-muted-foreground wrap-anywhere whitespace-pre-wrap">
+                          已有文案：{item.source.snippet}
+                        </p>
+                      )}
                       {item.evidence_coverage && (
                         <p className="text-xs text-muted-foreground">
-                          内容：
+                          输入：
                           {evidenceLevelLabels[item.evidence_coverage.level]} ·
                           文字
                           {item.evidence_coverage.text_complete
                             ? '完整'
-                            : '部分'}{' '}
-                          · 图片 {item.evidence_coverage.image.ready}/
-                          {item.evidence_coverage.image.expected} · 视频{' '}
-                          {item.evidence_coverage.video.ready}/
-                          {item.evidence_coverage.video.expected}
-                          {item.evidence_coverage.image.unknown +
-                            item.evidence_coverage.video.unknown +
-                            item.evidence_coverage.audio.unknown >
-                          0
-                            ? ' · 部分媒体尚未确认'
-                            : ''}
+                            : item.evidence_coverage.text_available
+                              ? '部分'
+                              : '不可用'}
                         </p>
                       )}
                       {item.judgment && (
@@ -498,10 +499,18 @@ export function ReportDetails({
                         </p>
                       )}
                       {item.unavailable_reason && (
-                        <p className="text-sm text-muted-foreground">
-                          {unavailableLabels[item.unavailable_reason]}
-                          ；因此没有判断为相关或不相关。
-                        </p>
+                        <>
+                          <p className="text-sm text-muted-foreground">
+                            {unavailableLabels[item.unavailable_reason]}
+                            ；因此没有判断为相关或不相关。
+                          </p>
+                          {(item.unavailable_reason === 'input_incomplete' ||
+                            item.unavailable_reason === 'unsupported') && (
+                            <p className="rounded-lg bg-muted p-3 text-sm leading-6">
+                              文字信息不足，无法通过文字判断是否和舆情有关。请打开下方原文链接人工核查。
+                            </p>
+                          )}
+                        </>
                       )}
                       {item.error && (
                         <p className="text-sm text-destructive">

@@ -529,6 +529,7 @@ class CaptureJob:
         *,
         max_images=24,
         max_videos=1,
+        text_only=False,
     ):
         from gallery_dl.job import DownloadJob
 
@@ -547,6 +548,7 @@ class CaptureJob:
         self.pause_diagnostic = None
         self.max_images = max_images
         self.max_videos = max_videos
+        self.text_only = text_only
         self._media_counts = {"image": 0, "video": 0}
 
     @property
@@ -627,6 +629,10 @@ class CaptureJob:
                 },
             }
         )
+        if self.text_only:
+            # Text-only analysis still needs the extractor's post metadata, but
+            # must never invoke DownloadJob.download or request a media URL.
+            return
         kind = media_kind(metadata)
         if kind is not None:
             self._media_counts[kind] += 1
@@ -892,7 +898,7 @@ def _run_upstream(identity, startup):
     resume_post = resume_files = None
     if mode == "upstream_media":
         resume_post, resume_files = _media_resume_input(identity, startup)
-    elif mode != "upstream":
+    elif mode not in ("upstream", "text_only"):
         raise ValueError("invalid mode")
     (
         extractor,
@@ -934,6 +940,7 @@ def _run_upstream(identity, startup):
             bridge,
             max_images=max_images,
             max_videos=max_videos,
+            text_only=mode == "text_only",
         )
         try:
             if mode == "upstream_media":
@@ -1035,7 +1042,11 @@ def main():
             or not identity.isdigit()
         ):
             raise ValueError("invalid identity")
-        if startup.get("mode", "upstream") not in ("upstream", "upstream_media"):
+        if startup.get("mode", "upstream") not in (
+            "upstream",
+            "upstream_media",
+            "text_only",
+        ):
             raise ValueError("invalid mode")
         _run_upstream(identity, startup)
     except Exception:

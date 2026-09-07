@@ -1,5 +1,6 @@
 """Single transaction and frozen-source boundary for the new analysis families."""
 
+import json
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -18,6 +19,32 @@ def timestamp() -> str:
 
 def date(value: str | None) -> datetime | None:
     return datetime.fromisoformat(value) if value is not None else None
+
+
+def _metadata(row):
+    try:
+        hashtags = tuple(
+            value
+            for value in json.loads(row["hashtags_json"] or "[]")
+            if isinstance(value, str)
+        )
+    except (IndexError, KeyError, TypeError, ValueError):
+        hashtags = ()
+    try:
+        raw_stats = json.loads(row["interaction_stats_json"] or "{}")
+        stats = (
+            {
+                key: value
+                for key, value in raw_stats.items()
+                if key in {"likes", "comments", "shares", "favorites"}
+                and (value is None or (type(value) is int and 0 <= value <= 2**53 - 1))
+            }
+            if isinstance(raw_stats, dict)
+            else {}
+        )
+    except (IndexError, KeyError, TypeError, ValueError):
+        stats = {}
+    return list(hashtags), stats
 
 
 class AnalysisRepository:
@@ -72,6 +99,7 @@ def source_snapshot(
             (row["source_run_id"], content_id),
         )
     ]
+    hashtags, interaction_stats = _metadata(row)
     source = AnalysisSource(
         source_run_id=row["source_run_id"],
         result_id=content_id,
@@ -83,5 +111,9 @@ def source_snapshot(
         content_url=row["content_url"],
         published_at_text=row["published_at_text"],
         matched_terms=terms,
+        hashtags=hashtags,
+        interaction_stats=interaction_stats,
+        creator_hash=row["creator_hash"],
+        publisher_name=row["publisher_name"],
     )
     return source, row

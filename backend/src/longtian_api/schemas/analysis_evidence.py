@@ -270,6 +270,38 @@ class EvidenceCoverage(StrictModel):
         )
 
     @classmethod
+    def from_text(cls, content: EnrichedContent) -> EvidenceCoverage:
+        """Project detail evidence into the text-only model input contract."""
+        text_available = bool(content.text.title.strip() or content.text.body.strip())
+        issues = list(
+            dict.fromkeys(
+                issue.code
+                for issue in content.issues
+                if issue.code in {"text_incomplete", "text_unavailable", "text_limit"}
+            )
+        )
+        if content.text.coverage != "complete" and not issues:
+            issues = ["text_unavailable" if not text_available else "text_incomplete"]
+        return cls(
+            schema_version="evidence-coverage-v1",
+            input_contract_version="analysis-evidence-v2",
+            level="detail_text" if text_available else "search_preview",
+            text_origin="detail",
+            text_available=text_available,
+            text_complete=text_available and content.text.coverage == "complete",
+            text=EvidenceModalityCoverage(
+                expected=1,
+                ready=1 if text_available else 0,
+                failed=0 if text_available else 1,
+                unknown=0,
+            ),
+            image=EvidenceModalityCoverage(expected=0, ready=0, failed=0, unknown=0),
+            video=EvidenceModalityCoverage(expected=0, ready=0, failed=0, unknown=0),
+            audio=EvidenceModalityCoverage(expected=0, ready=0, failed=0, unknown=0),
+            issues=issues,
+        )
+
+    @classmethod
     def from_preview(
         cls, *, title: str, snippet: str, issues: Iterable[IssueCode] = ()
     ) -> EvidenceCoverage:

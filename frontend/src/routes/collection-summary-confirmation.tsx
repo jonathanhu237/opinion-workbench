@@ -72,8 +72,8 @@ export function CollectionSummaryConfirmation({
         </dl>
 
         <p className="text-sm leading-6 text-muted-foreground">
-          正文、图片和视频将发送到上述模型服务，可能消耗 API
-          额度。每条内容会单独分析，最后再用文字生成汇总，不会重复上传媒体。
+          标题和正文将发送到上述模型服务，可能消耗 API
+          额度。每条内容会单独分析，最后再用文字生成汇总。
         </p>
 
         <Field orientation="horizontal" data-disabled={pending || locked}>
@@ -89,7 +89,7 @@ export function CollectionSummaryConfirmation({
               重新获取并分析全部内容
             </FieldLabel>
             <FieldDescription id="summary-force-refresh-description">
-              默认使用已有分析，不重新打开原文。勾选后会重新获取媒体并调用模型。
+              默认使用已有分析，不重新打开原文。勾选后会重新获取文字并调用模型。
             </FieldDescription>
           </FieldContent>
         </Field>

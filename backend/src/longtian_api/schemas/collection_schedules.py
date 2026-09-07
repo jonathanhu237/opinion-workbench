@@ -14,7 +14,7 @@ from pydantic import (
 )
 
 from longtian_api.schemas.search_batches import SearchBatchCreate, SearchBatchStatus
-from longtian_api.search_platforms import SearchPlatform
+from longtian_api.search_platforms import SEARCH_PLATFORMS, SearchPlatform
 
 MAX_SAFE_INTEGER = 9_007_199_254_740_991
 MAX_INTERVAL_MINUTES = 43_200
@@ -50,7 +50,9 @@ UtcTimestamp = Annotated[
 
 def validate_schedule_platforms(platforms: Sequence[SearchPlatform]) -> None:
     """One catalog-order contract for projections and durable timer admission."""
-    if tuple(platforms) != ("wb",):
+    if not 1 <= len(platforms) <= len(SEARCH_PLATFORMS) or tuple(platforms) != tuple(
+        platform for platform in SEARCH_PLATFORMS if platform in platforms
+    ):
         raise ValueError("Invalid schedule platforms")
 
 
@@ -134,7 +136,7 @@ class CollectionSchedule(BaseModel):
     monitoring_rule_id: int | None = Field(ge=1, le=MAX_SAFE_INTEGER)
     rule_name: str = Field(min_length=1, max_length=80)
     rule_state: Literal["enabled", "disabled", "deleted", "invalid"]
-    platforms: list[SearchPlatform] = Field(min_length=1, max_length=1)
+    platforms: list[SearchPlatform] = Field(min_length=1, max_length=5)
     max_results_per_term: int = Field(ge=1, le=50)
     max_total_results: int | None = Field(default=None, ge=1, le=50)
     interval_minutes: int = Field(ge=1, le=MAX_INTERVAL_MINUTES)
