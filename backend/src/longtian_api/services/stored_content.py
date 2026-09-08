@@ -1,4 +1,4 @@
-"""Offline evidence session. It cannot acquire a browser or download anything."""
+"""Offline evidence session. It cannot acquire a browser or read media files."""
 
 from contextlib import asynccontextmanager
 from uuid import uuid4
@@ -11,23 +11,18 @@ from longtian_api.services.enrichment_models import (
     EnrichedContent,
     evidence_fingerprint,
 )
-from longtian_api.services.enrichment_staging import ValidatedMedia
 from longtian_api.services.settled_tasks import database_call
 
 
 class StoredContentSession:
-    def __init__(self, attempt, *, cache=None):
+    def __init__(self, attempt, *, materials):
         self.attempt = attempt
-        self.cache = cache
+        self.materials = materials
 
     @asynccontextmanager
     async def item(self, *, run_id, result_id, expected_source):
         saved = self.attempt.input
-        content = (
-            await database_call(self.cache.material, self.attempt)
-            if self.cache
-            else None
-        )
+        content = await database_call(self.materials.material, self.attempt)
         if (
             saved is not None
             and saved.extractor_version == f"{expected_source.platform}-enrichment-v1"
@@ -73,61 +68,12 @@ class StoredContentSession:
             raise ContentEnrichmentError("stored_content_unavailable")
         if evidence_fingerprint(content) != self.attempt.input_fingerprint:
             raise ContentEnrichmentError("stored_content_unavailable")
-        lease = (
-            await database_call(
-                self.cache.acquire, self.attempt.source.result_id, content.assets
-            )
-            if self.cache
-            else None
+        # Keep historical media metadata readable, but never open or repair a
+        # local original after the media capability has been retired.
+        yield EnrichmentItem(
+            source=expected_source,
+            outcome="completed",
+            content=content,
+            input_fingerprint=evidence_fingerprint(content),
+            media=(),
         )
-        try:
-            data = lease.data if lease else {}
-            content = with_available_media(content, data)
-            yield EnrichmentItem(
-                source=expected_source,
-                outcome="completed",
-                content=content,
-                input_fingerprint=evidence_fingerprint(content),
-                media=tuple(
-                    ValidatedMedia(
-                        asset.asset_id, asset.mime_type, data[asset.position]
-                    )
-                    for asset in content.assets
-                    if asset.position in data
-                ),
-            )
-        finally:
-            if lease:
-                await database_call(lease.close)
-
-
-def with_available_media(content, data):
-    """Do not change historical input or implicitly fetch a lost original."""
-    missing = [
-        asset
-        for asset in content.assets
-        if asset.status == "ready" and asset.position not in data
-    ]
-    if not missing:
-        return content
-    payload = content.model_dump()
-    payload["status"] = "partial"
-    for asset in missing:
-        value = payload["assets"][asset.position]
-        value.update(
-            status="unavailable",
-            blob_ref=None,
-            sha256=None,
-            mime_type=None,
-            byte_size=None,
-            width=None,
-            height=None,
-            duration_ms=None,
-            audio_track="not_applicable" if asset.kind == "image" else "unknown",
-            coverage="unknown",
-            issue_code="asset_unavailable",
-        )
-        payload["issues"].append(
-            {"code": "asset_unavailable", "asset_position": asset.position}
-        )
-    return EnrichedContent.model_validate(payload)

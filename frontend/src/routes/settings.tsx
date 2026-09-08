@@ -1,6 +1,5 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { AISettings } from '@/routes/ai-settings'
-import { MediaSettings } from '@/routes/media-settings'
 
 export function Settings() {
   return (
@@ -13,17 +12,6 @@ export function Settings() {
         </CardHeader>
         <CardContent>
           <AISettings embedded />
-        </CardContent>
-      </Card>
-
-      <Card id="media" className="scroll-mt-24">
-        <CardHeader>
-          <CardTitle>
-            <h2>媒体缓存</h2>
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <MediaSettings embedded />
         </CardContent>
       </Card>
     </div>

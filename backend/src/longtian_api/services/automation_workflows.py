@@ -376,8 +376,11 @@ class AutomationWorkflowService:
                         now,
                         missed_reason="clock_jump",
                     )
-            for claim in claims:
-                await self._admit_claim(claim, now)
+        # Admission creates and launches a run, and launch takes this same
+        # lock to serialize the in-process task registry. Keep it outside the
+        # claim lock so a scheduled tick cannot deadlock itself.
+        for claim in claims:
+            await self._admit_claim(claim, now)
 
     async def _admit_claim(
         self, claim: AutomationOccurrenceClaim, now: datetime

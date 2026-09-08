@@ -5,7 +5,6 @@ import inspect
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Literal, Protocol
 from uuid import UUID, uuid4
 
@@ -36,12 +35,7 @@ from longtian_api.services.enrichment_models import (
     valid_source_url,
     validate_content,
 )
-from longtian_api.services.enrichment_staging import (
-    MediaOperation,
-    MediaSpool,
-    MediaStagingError,
-    ValidatedMedia,
-)
+from longtian_api.services.enrichment_staging import ValidatedMedia
 from longtian_api.services.settled_tasks import settle
 
 EnrichmentErrorCode = Literal[
@@ -65,8 +59,6 @@ class ContentEnrichmentError(Exception):
 
 
 class EnrichmentWorker(Protocol):
-    def configure_media_spool(self, root: Path) -> None: ...
-
     async def enrich(
         self,
         *,
@@ -150,19 +142,24 @@ class ContentEnrichmentService:
         repository: SearchRunRepository,
         worker: EnrichmentWorker,
         browser_operations: BrowserOperationCoordinator,
-        spool: MediaSpool,
+        spool=None,
         timeout_seconds: float = 150.0,
     ) -> None:
         self._repository = repository
         self._worker = worker
         self._browser_operations = browser_operations
+        # ``spool`` remains an injection compatibility seam for older tests
+        # and callers.  The production composition no longer supplies one,
+        # so this does not re-enable media staging in the live path.
         self._spool = spool
+        if spool is not None:
+            configure = getattr(worker, "configure_media_spool", None)
+            if configure is not None:
+                configure(spool.root if hasattr(spool, "root") else spool)
         self._timeout_seconds = timeout_seconds
         self._lock = asyncio.Lock()
         self._active: EnrichmentSession | None = None
         self._closed = False
-        # Configuration only; startup/GET must not create directories or processes.
-        worker.configure_media_spool(spool.root)
 
     @property
     def native_acquisition(self):
@@ -213,7 +210,7 @@ class EnrichmentSession:
         self._cancel_requested = False
         self._acquire_task: asyncio.Task[EnrichmentItem] | None = None
         self._worker_task: asyncio.Task[EnrichmentWorkerResult] | None = None
-        self._operation: MediaOperation | None = None
+        self._operation = None
         self._cleanup_lock = asyncio.Lock()
         self._close_lock = asyncio.Lock()
         self._unsettled: EnrichmentWorkerUnsettledError | None = None
@@ -351,12 +348,6 @@ class EnrichmentSession:
             # Native acquisition is explicitly text-only.  Do not allocate a
             # media staging operation for the new path: no media bytes should
             # be downloaded or briefly written merely to produce text input.
-            # Keep the operation for injected/legacy workers that still use
-            # manifest-backed media acquisition.
-            if not self._service.native_acquisition:
-                self._operation = await asyncio.to_thread(
-                    self._service._spool.create_operation, request_id
-                )
             if self._cancel_requested or self._closed:
                 return EnrichmentItem(source, "cancelled")
 
@@ -440,16 +431,9 @@ class EnrichmentSession:
                 return EnrichmentItem(
                     source, result.outcome, diagnostic=result.diagnostic
                 )
-            if (result.content is None) == (result.manifest is None):
+            if result.manifest is not None or result.content is None:
                 raise EnrichmentValidationError
-            if result.manifest is not None:
-                raw = await asyncio.to_thread(
-                    self._operation.read_manifest, result.manifest
-                )
-            else:
-                if result.content is None:
-                    raise EnrichmentValidationError
-                raw = result.content.model_dump()
+            raw = result.content.model_dump()
             content = validate_content(
                 raw,
                 platform=source.platform,
@@ -467,9 +451,6 @@ class EnrichmentSession:
                 (),
                 diagnostic=result.diagnostic,
             )
-        except MediaStagingError:
-            await self._service._worker.discard_session()
-            raise ContentEnrichmentError("staging_unavailable") from None
         except EnrichmentValidationError:
             await self._service._worker.discard_session()
             raise ContentEnrichmentError("invalid_enrichment") from None
@@ -493,14 +474,7 @@ class EnrichmentSession:
                 if not self._unsettled.quiescent():
                     raise ContentEnrichmentError("worker_unsettled")
                 self._unsettled = None
-            operation = self._operation
-            if operation is not None:
-                try:
-                    await asyncio.to_thread(operation.cleanup)
-                except MediaStagingError:
-                    raise ContentEnrichmentError("staging_unavailable") from None
-                finally:
-                    self._operation = None
+            self._operation = None
 
     async def close(self) -> None:
         async with self._close_lock:

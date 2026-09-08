@@ -4,7 +4,7 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
-CURRENT_DATABASE_VERSION = 37
+CURRENT_DATABASE_VERSION = 38
 DEFAULT_RULE_NAME = "龙田街道及四个社区"
 DEFAULT_RULE_TERMS = (
     "龙田街道",
@@ -159,6 +159,19 @@ class Database:
                 version = 36
             if version < 37:
                 _migrate_to_version_37(connection)
+                version = 37
+            if version < 38:
+                from longtian_api.services.media_cleanup import purge_managed_media
+
+                cleanup = purge_managed_media(self.path.parent, connection=connection)
+                retryable_errors = cleanup["retryable_errors"]
+                if retryable_errors:
+                    details = "; ".join(str(error) for error in retryable_errors)
+                    raise DatabaseVersionError(
+                        "Retired media cleanup could not remove managed files; "
+                        f"retry after resolving the filesystem error: {details}"
+                    )
+                _migrate_to_version_38(connection)
         finally:
             connection.close()
 
@@ -370,6 +383,26 @@ def _migrate_to_version_37(connection: sqlite3.Connection) -> None:
     except BaseException:
         if connection.in_transaction:
             connection.execute("ROLLBACK")
+        raise
+
+
+def _migrate_to_version_38(connection: sqlite3.Connection) -> None:
+    from longtian_api.migrations.media_exit_v38 import migrate
+
+    connection.execute("BEGIN IMMEDIATE")
+    try:
+        version = _read_user_version(connection)
+        if version >= 38:
+            connection.rollback()
+            return
+        if version != 37:
+            raise DatabaseVersionError("Unsupported database migration source version.")
+        migrate(connection)
+        connection.execute("PRAGMA user_version = 38")
+        connection.commit()
+    except BaseException:
+        if connection.in_transaction:
+            connection.rollback()
         raise
 
 

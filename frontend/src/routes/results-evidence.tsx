@@ -14,7 +14,6 @@ import {
 } from '@/components/ui/sheet'
 import { analysisErrorMessage } from '@/lib/api/analysis-shared'
 import { mediaIssueLabels } from '@/lib/media-presenters'
-import { OriginalMediaCache } from '@/routes/original-media-cache'
 import {
   ANALYSIS_PAGE_SIZE,
   CONTENT_ANALYSES_QUERY_KEY,
@@ -307,9 +306,6 @@ export function SavedAnalysisEvidence({
               段视频。
               已提交的媒体未在本机抽样或缩小；这不表示模型已完整识别所有细节。
             </p>
-          )}
-          {attempt.input.assets.length > 0 && (
-            <OriginalMediaCache key={attempt.id} attemptId={attempt.id} />
           )}
         </details>
       )}

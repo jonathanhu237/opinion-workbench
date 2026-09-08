@@ -820,6 +820,52 @@ def test_no_new_workflow_runs_fixed_stages_without_model_calls(tmp_path: Path):
     asyncio.run(_test_no_new_workflow_runs_fixed_stages_without_model_calls(tmp_path))
 
 
+def test_tick_admits_and_launches_due_run_without_lock_deadlock(tmp_path: Path):
+    asyncio.run(_test_tick_admits_and_launches_due_run_without_lock_deadlock(tmp_path))
+
+
+async def _test_tick_admits_and_launches_due_run_without_lock_deadlock(
+    tmp_path: Path,
+):
+    database, rules, repository = _repository(tmp_path)
+    now = datetime(2026, 8, 30, 0, 0, tzinfo=UTC)
+    task = repository.create_task(_task_payload(), now=now)
+    enabled = AutomationTaskReplace(
+        **_task_payload().model_dump(),
+        expected_revision=task.revision,
+        enabled=True,
+    )
+    repository.replace_task(
+        task.id,
+        enabled,
+        now=now,
+        anchor_at=now.isoformat(),
+        next_due_at=now.isoformat(),
+    )
+    batches = _FakeBatch(["completed"])
+    service = AutomationWorkflowService(
+        database,
+        monitoring_rules=rules,
+        batches=batches,
+        analyses=_NoModel(),
+        reports=_NoReport(),
+        repository=repository,
+        clock=lambda: now,
+    )
+    service.initialize()
+
+    await asyncio.wait_for(service.tick(), 1)
+    run_id = next(iter(service._run_tasks))
+    await asyncio.wait_for(asyncio.shield(service._run_tasks[run_id]), 1)
+
+    run = service.get_run(run_id)
+    occurrence = service.list_occurrences(task.id).occurrences[0]
+    assert run.status == "completed"
+    assert occurrence.run_id == run_id
+    assert len(batches.calls) == 1
+    await service.shutdown()
+
+
 async def _test_no_new_workflow_runs_fixed_stages_without_model_calls(tmp_path: Path):
     database, rules, repository = _repository(tmp_path)
     batches, analyses, reports = _FakeBatch(["completed"]), _NoModel(), _NoReport()

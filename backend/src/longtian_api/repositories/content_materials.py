@@ -16,6 +16,23 @@ from longtian_api.services.enrichment_models import (
 
 
 class ContentMaterialRepository(AnalysisRepository):
+    def material(self, attempt):
+        """Read saved source content without touching media storage."""
+
+        if attempt.input_fingerprint is None:
+            return None
+        with self.connection() as connection:
+            row = connection.execute(
+                """SELECT content_json FROM content_materials
+                WHERE content_id=? AND input_fingerprint=?""",
+                (attempt.source.result_id, attempt.input_fingerprint),
+            ).fetchone()
+        return (
+            EnrichedContent.model_validate_json(row[0])
+            if row is not None and row[0]
+            else None
+        )
+
     def save(self, content_id: int, content: EnrichedContent):
         content = EnrichedContent.model_validate(content.model_dump())
         with self.connection(write=True) as connection:

@@ -52,7 +52,6 @@ const pageTitles: Record<string, string> = {
   '/settings': '设置',
   '/results': '生成报告',
   '/ai-settings': 'AI 配置',
-  '/media-settings': '媒体缓存',
 }
 
 function healthReducer(_state: HealthState, action: HealthAction): HealthState {
@@ -96,8 +95,7 @@ function PrimaryNavigation() {
   const { setOpenMobile } = useSidebar()
   const settingsActive =
     location.pathname.startsWith('/settings') ||
-    location.pathname === '/ai-settings' ||
-    location.pathname === '/media-settings'
+    location.pathname === '/ai-settings'
 
   const navigationItems = [
     {

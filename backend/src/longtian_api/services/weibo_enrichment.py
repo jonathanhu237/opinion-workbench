@@ -116,8 +116,12 @@ class WeiboEnricher:
         budget,
         media_sink=None,
         on_content=None,
-        text_only=False,
+        text_only=True,
     ):
+        # Media acquisition was retired. Keep the argument for compatibility
+        # with older injected callers, but never allow it to re-enable a
+        # download path.
+        text_only = True
         if platform != "wb":
             return EnrichmentWorkerResult("content_unavailable")
         key = (content_id, content_url, budget)

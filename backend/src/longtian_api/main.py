@@ -15,8 +15,6 @@ from longtian_api.services.analysis_settings import AnalysisSettingsService
 from longtian_api.services.automation_workflows import AutomationWorkflowService
 from longtian_api.services.content_analyses import ContentAnalysisService
 from longtian_api.services.content_enrichment import ContentEnrichmentService
-from longtian_api.services.enrichment_staging import MediaSpool
-from longtian_api.services.media_cache import MediaCache
 from longtian_api.services.monitoring_rules import MonitoringRuleService
 from longtian_api.services.platform_connections import PlatformConnectionService
 from longtian_api.services.report_generations import ReportGenerationService
@@ -116,13 +114,8 @@ def create_app(
                     repository=SearchRunRepository(batch_database),
                     worker=platform_service.worker,
                     browser_operations=platform_service.browser_operations,
-                    spool=MediaSpool(batch_database.path.parent / "media"),
                 )
             )
-            media_cache = MediaCache(batch_database)
-            enrichment_service.media_cache = media_cache
-            application.state.media_cache = media_cache
-            media_retention = media_cache.retention
             summary_service = SummaryService(
                 database=batch_database,
                 ai_settings=ai_settings_service,
@@ -203,7 +196,6 @@ def create_app(
             application.state.automation_workflow_service = automation_workflow_service
             await search_batch_service.resume_after_startup()
             await automation_workflow_service.start()
-            media_retention.start()
             yield
         finally:
             # Stop timer admission first; drain every owner even after a failure.
@@ -211,7 +203,6 @@ def create_app(
             await _shutdown_services(
                 [
                     scope.get("automation_workflow_service"),
-                    scope.get("media_retention"),
                     scope.get("report_generation_service"),
                     scope.get("content_analysis_service"),
                     scope.get("topic_report_service"),

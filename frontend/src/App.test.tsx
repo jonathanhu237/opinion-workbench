@@ -20,7 +20,6 @@ import {
   HEALTH_SERVICE,
   type HealthResponse,
 } from './lib/api/health'
-import { fetchMediaPolicy } from './lib/api/media-cache'
 import {
   fetchMonitoringRules,
   type MonitoringRulesResponse,
@@ -43,10 +42,6 @@ vi.mock('./lib/api/health', async (importOriginal) => ({
 vi.mock('./lib/api/ai-settings', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./lib/api/ai-settings')>()),
   fetchAISettings: vi.fn(),
-}))
-vi.mock('./lib/api/media-cache', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('./lib/api/media-cache')>()),
-  fetchMediaPolicy: vi.fn(),
 }))
 vi.mock('./lib/api/platform-connections', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./lib/api/platform-connections')>()),
@@ -104,7 +99,6 @@ function catalog(
 
 const mockedFetchHealth = vi.mocked(fetchHealth)
 const mockedFetchAISettings = vi.mocked(fetchAISettings)
-const mockedFetchMediaPolicy = vi.mocked(fetchMediaPolicy)
 const mockedFetchPlatformConnections = vi.mocked(fetchPlatformConnections)
 const mockedOpenManagedBrowser = vi.mocked(openManagedBrowser)
 const mockedStartAttempt = vi.mocked(startPlatformConnectionAttempt)
@@ -144,14 +138,6 @@ describe('Longtian public opinion application', () => {
       model: null,
       has_api_key: false,
       revision: 0,
-    })
-    mockedFetchMediaPolicy.mockReset().mockResolvedValue({
-      retention_days: 30,
-      capacity_mib: 1024,
-      revision: 0,
-      reserved_bytes: 0,
-      files: 0,
-      pending_files: 0,
     })
     mockedFetchPlatformConnections.mockReset().mockResolvedValue(catalog())
     mockedOpenManagedBrowser.mockReset().mockResolvedValue({
@@ -216,9 +202,6 @@ describe('Longtian public opinion application', () => {
     expect(
       screen.getByRole('heading', { name: 'AI 配置', level: 2 }),
     ).toBeVisible()
-    expect(
-      screen.getByRole('heading', { name: '媒体缓存', level: 2 }),
-    ).toBeVisible()
     expect(router.state.location.pathname).toBe('/settings')
   })
 
@@ -228,7 +211,7 @@ describe('Longtian public opinion application', () => {
       expect(router.state.location).toMatchObject({
         pathname: '/settings',
         search: '?source=legacy',
-        hash: '#media',
+        hash: '',
       }),
     )
   })

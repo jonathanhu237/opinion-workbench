@@ -17,7 +17,6 @@ class ManualContentSession:
         self.attempt = attempt
         self.enrichment = enrichment
         self.materials = ContentMaterialRepository(database)
-        self.cache = getattr(enrichment, "media_cache", None)
         self.on_pause = on_pause
 
     @asynccontextmanager
@@ -28,7 +27,7 @@ class ManualContentSession:
         async with AsyncExitStack() as stack:
             try:
                 acquired = await stack.enter_async_context(
-                    StoredContentSession(self.attempt, cache=self.cache).item(
+                    StoredContentSession(self.attempt, materials=self.materials).item(
                         **arguments
                     )
                 )
@@ -43,16 +42,14 @@ class ManualContentSession:
                     raise ContentEnrichmentError("platform_not_supported") from None
                 session = await stack.enter_async_context(self.enrichment.operation())
 
-                async def save_progress(content, media):
+                async def save_progress(content, _media=()):
                     await database_call(self.materials.save, result_id, content)
-                    if self.cache is not None:
-                        await database_call(self.cache.save, result_id, content, media)
 
                 acquired = await stack.enter_async_context(
                     session.item(**arguments, on_content=save_progress)
                 )
                 if acquired.content is not None:
-                    await save_progress(acquired.content, acquired.media)
+                    await save_progress(acquired.content)
                 if acquired.outcome in (
                     "login_required",
                     "manual_challenge_required",

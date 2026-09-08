@@ -80,7 +80,7 @@ export const appRoutes: RouteObject[] = [
       },
       {
         path: 'settings/media',
-        element: <LegacyPathRedirect to="/settings" hash="#media" />,
+        element: <LegacyPathRedirect to="/settings" />,
       },
       {
         path: 'monitoring-rules',
@@ -134,7 +134,7 @@ export const appRoutes: RouteObject[] = [
       },
       {
         path: 'media-settings',
-        element: <LegacyPathRedirect to="/settings" hash="#media" />,
+        element: <LegacyPathRedirect to="/settings" />,
       },
       {
         path: 'collection-runs',

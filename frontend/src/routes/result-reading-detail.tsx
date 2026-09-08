@@ -1,5 +1,4 @@
 import { useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
 
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
@@ -8,7 +7,6 @@ import {
   fetchResultAnalyses,
   type AnalysisAttempt,
 } from '@/lib/api/content-analyses'
-import { fetchMediaCache, originalMediaUrl } from '@/lib/api/media-cache'
 import { fetchResult, RESULTS_QUERY_KEY } from '@/lib/api/results'
 import { ResultSourceLink } from '@/routes/results-presenters'
 
@@ -29,58 +27,6 @@ async function fetchReading(resultId: number, signal: AbortSignal) {
     if (page.items.length === 0 || offset >= page.total)
       return { original, summary: null }
   }
-}
-
-function SavedMedia({ attemptId }: { attemptId: number }) {
-  const [failed, setFailed] = useState<number[]>([])
-  const media = useQuery({
-    queryKey: ['reading-media', attemptId],
-    queryFn: ({ signal }) => fetchMediaCache(attemptId, signal),
-  })
-  if (media.isPending) return <p role="status">正在读取图片与视频…</p>
-  if (media.isError)
-    return (
-      <p role="alert">
-        图片与视频读取失败。
-        <Button variant="link" onClick={() => void media.refetch()}>
-          重试
-        </Button>
-      </p>
-    )
-  const available = media.data.items.filter(
-    (item) => item.state === 'cached' && !failed.includes(item.position),
-  )
-  return (
-    <div className="flex flex-col gap-4">
-      {available.map((item) =>
-        item.kind === 'image' ? (
-          <img
-            key={item.position}
-            src={originalMediaUrl(attemptId, item.position)}
-            alt={`原文图片 ${item.position + 1}`}
-            loading="lazy"
-            className="max-h-96 w-full rounded-md object-contain"
-            onError={() => setFailed((values) => [...values, item.position])}
-          />
-        ) : (
-          <video
-            key={item.position}
-            src={originalMediaUrl(attemptId, item.position)}
-            aria-label={`原文视频 ${item.position + 1}`}
-            controls
-            preload="none"
-            className="max-h-96 w-full rounded-md"
-            onError={() => setFailed((values) => [...values, item.position])}
-          />
-        ),
-      )}
-      {available.length < media.data.items.length && (
-        <p className="text-sm text-muted-foreground">
-          部分图片或视频暂不可用，请打开原文查看。
-        </p>
-      )}
-    </div>
-  )
 }
 
 export function ResultReadingDetail({
@@ -142,12 +88,6 @@ export function ResultReadingDetail({
                 </p>
               )}
           </>
-        )}
-        {input && input.assets.length > 0 && reading.data?.original && (
-          <SavedMedia
-            key={reading.data.original.id}
-            attemptId={reading.data.original.id}
-          />
         )}
       </section>
       <Separator />

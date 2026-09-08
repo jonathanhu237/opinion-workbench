@@ -6,7 +6,6 @@ from longtian_api.schemas.ai_settings import AIErrorCode
 from longtian_api.schemas.ai_summaries import StrictModel
 
 AnalysisErrorCode = Literal[
-    "media_cache_policy_conflict",
     "report_generation_not_found",
     "report_generation_active",
     "no_eligible_contents",
@@ -22,7 +21,6 @@ AnalysisErrorCode = Literal[
     "content_analysis_unavailable",
 ]
 ERRORS = {
-    "media_cache_policy_conflict": (409, "媒体策略已改变，请刷新后重新确认。"),
     "report_generation_not_found": (404, "未找到报告生成任务。"),
     "report_generation_active": (409, "已有报告正在生成，请等待当前任务结束后再提交。"),
     "no_eligible_contents": (

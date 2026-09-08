@@ -79,7 +79,7 @@ def seed_run(
 
 
 class MediaWorker:
-    def __init__(self, *, media=True):
+    def __init__(self, *, media=False):
         self.root = None
         self.calls = []
         self.media = media
