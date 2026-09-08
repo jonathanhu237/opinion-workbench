@@ -371,6 +371,12 @@ class ManagedChrome:
         except Exception:
             raise BrowserUnavailable() from None
 
+    async def wait_check_update(self):
+        """Allow client-side session hydration between bounded auth reads."""
+        self._check_page_ready()
+        await asyncio.sleep(0.25)
+        self._check_page_ready()
+
     async def bring_to_front(self):
         self._check()
         try:

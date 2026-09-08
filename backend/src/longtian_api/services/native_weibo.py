@@ -983,8 +983,30 @@ class NativeWeiboCollector:
                     await self.browser.start()
                     await self.browser.navigate(home)
                     snapshot = self.browser.snapshot
-                url, raw, status = await snapshot()
-            return _classify_connection_page(platform, url, raw, status)
+                hydration_started = monotonic()
+                wait_update = (
+                    getattr(self.browser, "wait_check_update", None)
+                    if use_check_page
+                    else None
+                )
+                while True:
+                    url, raw, status = await snapshot()
+                    result = _classify_connection_page(platform, url, raw, status)
+                    if (
+                        not callable(wait_update)
+                        or result.outcome == "connected"
+                        or result.reason == "manual_challenge"
+                        or status >= 400
+                    ):
+                        return result
+                    # An SSR login button can disappear once the existing
+                    # session hydrates. Do not publish that provisional state.
+                    if (
+                        result.outcome == "disconnected"
+                        and monotonic() - hydration_started >= 3
+                    ):
+                        return result
+                    await wait_update()
         except (BrowserUnavailable, BrowserBudgetExceeded):
             return AuthWorkerResult("failed", "browser_unavailable")
         except TimeoutError:
@@ -1163,6 +1185,15 @@ def _classify_connection_page(platform, url, raw, status):
         return AuthWorkerResult("failed", "check_failed")
     signed_in = bool(
         root.xpath(_SIGNED_IN_XPATH)
+        or (
+            platform == "ks"
+            and root.xpath(
+                "//*[contains(concat(' ', normalize-space(@class), ' '), ' down-box ')]"
+                "//*[contains(concat(' ', normalize-space(@class), ' '), ' user ')]"
+                "//*[contains(concat(' ', normalize-space(@class), ' '), ' text-name ')"
+                " and normalize-space()]"
+            )
+        )
         or any(word in body for word in ("退出", "我的主页", "个人中心"))
         or any(
             marker in f"{title} {body}"

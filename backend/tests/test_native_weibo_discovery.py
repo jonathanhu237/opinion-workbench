@@ -922,3 +922,58 @@ def test_batch_keeps_the_page_budget_cause_in_failed_platform(tmp_path):
         )
         run = paused["items"][0]["latest_attempt"]["run"]
         assert (run["status"], run["execution_limit"]) == ("timed_out", "pages")
+
+
+@pytest.mark.parametrize(
+    ("platform", "initial", "hydrated"),
+    [
+        ("wb", "<main>正在加载</main>", "<header>我的主页</header>"),
+        ("dy", "<main>正在加载</main>", "<nav>退出登录</nav>"),
+        (
+            "ks",
+            "<main>登录</main>",
+            '<div class="down-box login"><div class="user item">'
+            '<div class="text-name">测试账号</div></div></div>',
+        ),
+    ],
+)
+def test_check_waits_for_existing_session_hydration(platform, initial, hydrated):
+    class HydratingBrowser(BrowserFixture):
+        async def wait_check_update(self):
+            self.check_html = hydrated
+
+    async def run():
+        browser = HydratingBrowser([initial])
+        result = await NativeWeiboCollector(browser=browser).check(
+            request_id="hydrate", platform=platform
+        )
+        assert browser.check_closed
+        assert not browser.visits
+        return result
+
+    assert asyncio.run(run()) == AuthWorkerResult("connected", "none")
+
+
+def test_check_unresolved_hydration_remains_bounded():
+    class LoadingBrowser(BrowserFixture):
+        async def wait_check_update(self):
+            await asyncio.sleep(0.001)
+
+    async def run():
+        browser = LoadingBrowser(["<main>正在加载</main>"])
+        result = await NativeWeiboCollector(
+            browser=browser, check_timeout_seconds=0.01
+        ).check(request_id="loading", platform="wb")
+        assert browser.check_closed
+        return result
+
+    assert asyncio.run(run()) == AuthWorkerResult("failed", "check_failed")
+
+
+def test_kuaishou_feed_author_is_not_account_identity():
+    assert _classify_connection_page(
+        "ks",
+        "https://www.kuaishou.com/",
+        '<main><div class="user"><div class="text-name">视频作者</div></div></main>',
+        200,
+    ) == AuthWorkerResult("failed", "check_failed")
