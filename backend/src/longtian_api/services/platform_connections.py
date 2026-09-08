@@ -9,6 +9,7 @@ from typing import Literal, cast
 from uuid import UUID, uuid4
 
 from longtian_api.schemas.platform_connections import (
+    PlatformBrowserResponse,
     PlatformConnection,
     PlatformConnectionAttemptResponse,
     PlatformConnectionErrorCode,
@@ -62,7 +63,7 @@ class PlatformConnectionService:
         self,
         *,
         browser_profile_dir: Path | None = None,
-        attempt_timeout_seconds: float = 300.0,
+        attempt_timeout_seconds: float = 20.0,
         clock: Clock | None = None,
         browser_operation_coordinator: BrowserOperationCoordinator | None = None,
         collector_factory: CollectorFactory | None = None,
@@ -87,6 +88,7 @@ class PlatformConnectionService:
         self._current_task: asyncio.Task[None] | None = None
         self._connections = _initial_catalog()
         self._shutdown_started = False
+        self._browser_was_opened = False
         self._worker: CollectorRuntime = collector_factory(
             browser_profile_dir=self._browser_profile_dir,
             on_progress=self._set_progress,
@@ -138,7 +140,7 @@ class PlatformConnectionService:
                 raise PlatformConnectionError(
                     status_code=409,
                     code="connection_attempt_active",
-                    message="已有平台连接任务正在进行，请稍后重试。",
+                    message="专用浏览器正在执行任务，请稍后检查。",
                 )
             auth_platform = _AUTH_PLATFORM_BY_ID.get(connection.platform)
             if connection.availability == "coming_soon" or auth_platform is None:
@@ -153,7 +155,19 @@ class PlatformConnectionService:
                 raise PlatformConnectionError(
                     status_code=409,
                     code="connection_attempt_active",
-                    message="已有平台连接任务正在进行，请稍后重试。",
+                    message="专用浏览器正在执行任务，请稍后检查。",
+                )
+            if not getattr(self._worker, "browser_session_available", False):
+                await self._browser_operations.release(owner)
+                message = (
+                    "专用浏览器已关闭，请打开后重新检查。"
+                    if self._browser_was_opened
+                    else "请先打开专用浏览器，再检查登录状态。"
+                )
+                raise PlatformConnectionError(
+                    status_code=409,
+                    code="browser_not_open",
+                    message=message,
                 )
             accepted = connection.model_copy(
                 update={
@@ -171,6 +185,85 @@ class PlatformConnectionService:
                 attempt_id=attempt_id,
                 platform=accepted.model_copy(),
             )
+
+    async def open_browser(
+        self, platform: str | None = None
+    ) -> PlatformBrowserResponse:
+        """Open or foreground the project-owned browser without checking login."""
+        async with self._lock:
+            selected_platform: AuthPlatformId | None = None
+            if platform is not None:
+                connection = self._connections.get(cast(PlatformId, platform))
+                if connection is None:
+                    raise PlatformConnectionError(
+                        status_code=404,
+                        code="platform_not_found",
+                        message="未找到该平台。",
+                    )
+                if connection.availability != "enabled":
+                    raise PlatformConnectionError(
+                        status_code=409,
+                        code="platform_not_available",
+                        message="该平台暂未接入。",
+                    )
+                selected_platform = cast(AuthPlatformId, connection.platform)
+            if self._shutdown_started:
+                raise PlatformConnectionError(
+                    status_code=503,
+                    code="browser_open_failed",
+                    message="专用浏览器打开失败，请重试。",
+                )
+        request_id = uuid4()
+        owner = BrowserOperationOwner("platform_connection", request_id)
+        if not await self._browser_operations.try_claim(owner):
+            raise PlatformConnectionError(
+                status_code=409,
+                code="connection_attempt_active",
+                message="专用浏览器正在执行任务，请稍后检查。",
+            )
+        try:
+            try:
+                async with asyncio.timeout(25.0):
+                    opener = getattr(self._worker, "open_browser", None)
+                    if opener is None:
+                        result = await self._worker.manual_page(
+                            request_id=request_id,
+                            platform=selected_platform or "wb",
+                            action="show",
+                        )
+                    elif selected_platform is None:
+                        # Keep injected runtimes that implement the original
+                        # browser-open contract source-compatible.
+                        result = await opener(request_id=request_id)
+                    else:
+                        result = await opener(
+                            request_id=request_id, platform=selected_platform
+                        )
+            except (AuthWorkerError, TimeoutError):
+                raise PlatformConnectionError(
+                    status_code=503,
+                    code="browser_open_failed",
+                    message="专用浏览器打开失败，请重试。",
+                ) from None
+            except Exception:
+                raise PlatformConnectionError(
+                    status_code=503,
+                    code="browser_open_failed",
+                    message="专用浏览器打开失败，请重试。",
+                ) from None
+            if getattr(result, "outcome", None) not in {
+                "opened_existing",
+                "opened_homepage",
+            }:
+                raise PlatformConnectionError(
+                    status_code=503,
+                    code="browser_open_failed",
+                    message="专用浏览器打开失败，请重试。",
+                )
+            self._browser_was_opened = True
+            return PlatformBrowserResponse(outcome=result.outcome)
+        finally:
+            await self._browser_operations.release(owner)
 
     async def shutdown(self) -> None:
         """Cancel the active request and stop the lifespan-owned worker."""
@@ -219,16 +312,8 @@ class PlatformConnectionService:
                     platform, result
                 )
         except TimeoutError:
-            current = await self._get_connection(platform)
-            if current.guidance == "complete_login":
-                terminal_status = "disconnected"
-            elif current.guidance in {
-                "enable_remote_debugging",
-                "approve_connection",
-            }:
-                terminal_guidance = "enable_remote_debugging"
-            elif current.guidance in {"starting_browser", "retry_browser"}:
-                terminal_guidance = "retry_browser"
+            terminal_status = "failed"
+            terminal_guidance = "retry"
         except asyncio.CancelledError:
             was_cancelled = True
         except AuthWorkerError:
@@ -259,15 +344,13 @@ class PlatformConnectionService:
         if result == AuthWorkerResult("disconnected", "login_required"):
             return "disconnected", "retry"
         if result == AuthWorkerResult("failed", "browser_unavailable"):
-            current = await self._get_connection(platform)
-            if current.guidance in {
-                "enable_remote_debugging",
-                "approve_connection",
-            }:
-                return "failed", current.guidance
             return "failed", "retry_browser"
         if result == AuthWorkerResult("failed", "browser_disconnected"):
             return "failed", "retry_browser"
+        if result == AuthWorkerResult("failed", "manual_challenge"):
+            return "failed", "complete_verification"
+        if result == AuthWorkerResult("failed", "check_failed"):
+            return "failed", "retry"
         return "failed", "retry"
 
     async def _set_progress(
@@ -276,23 +359,14 @@ class PlatformConnectionService:
         platform: AuthPlatformId,
         phase: AuthProgressPhase,
     ) -> None:
-        status: Literal["checking", "action_required"]
-        guidance: PlatformConnectionGuidance
-        if phase == "waiting_for_browser":
-            status, guidance = "checking", "starting_browser"
-        elif phase == "waiting_for_approval":
-            status, guidance = "action_required", "approve_connection"
-        elif phase == "waiting_for_login":
-            status, guidance = "action_required", "complete_login"
-        else:
-            status, guidance = "checking", "none"
-
+        # Account checks are a short read of an already-open browser.  Keep
+        # legacy progress callbacks from reintroducing a waiting/manual state.
         async with self._lock:
             connection = self._connections[platform]
             if connection.active_attempt_id != attempt_id:
                 return
             self._connections[platform] = connection.model_copy(
-                update={"status": status, "guidance": guidance}
+                update={"status": "checking", "guidance": "none"}
             )
 
     async def _invalidate_connected(self, affected_request_id: UUID | None) -> None:
@@ -306,7 +380,9 @@ class PlatformConnectionService:
                 self._connections[platform] = connection.model_copy(
                     update={
                         "status": "failed",
-                        "guidance": "retry",
+                        "guidance": (
+                            "retry_browser" if affected_request_id is None else "retry"
+                        ),
                         "last_checked_at": (
                             self._clock()
                             if affected_active
@@ -338,10 +414,6 @@ class PlatformConnectionService:
                 )
             if self._current_task is asyncio.current_task():
                 self._current_task = None
-
-    async def _get_connection(self, platform: PlatformId) -> PlatformConnection:
-        async with self._lock:
-            return self._connections[platform].model_copy()
 
 
 def _initial_catalog() -> dict[PlatformId, PlatformConnection]:

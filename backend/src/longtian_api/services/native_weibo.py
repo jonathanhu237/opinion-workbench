@@ -31,6 +31,13 @@ _SIGNED_IN_XPATH = (
     "|//*[contains(concat(' ', normalize-space(@class), ' '), ' woo-avatar-hover ')]"
 )
 
+_PLATFORM_SIGNED_IN_MARKERS = {
+    "dy": ("创作中心", "发布作品", "发布视频", "我的作品"),
+    "ks": ("创作者服务", "发布作品", "我的作品", "个人主页"),
+    "xhs": ("创作中心", "发布笔记", "我的笔记", "个人主页"),
+    "toutiao": ("创作中心", "发布文章", "发文", "个人中心"),
+}
+
 
 def _search_url_identity(url: str) -> tuple[str, str, str, tuple[tuple[str, str], ...]]:
     """Compare rendered search destinations semantically, not by query ordering."""
@@ -51,6 +58,7 @@ def _search_url_identity(url: str) -> tuple[str, str, str, tuple[tuple[str, str]
 
 
 _PLATFORM_HOME = {
+    "wb": "https://weibo.com/",
     "toutiao": "https://www.toutiao.com/",
     "ks": "https://www.kuaishou.com/",
     "dy": "https://www.douyin.com/",
@@ -446,8 +454,8 @@ class NativeWeiboCollector:
         delay_seconds=2.0,
         ready_polls=20,
         max_pages=40,
-        max_requests=1200,
         timeout_seconds=180,
+        check_timeout_seconds=20,
         on_progress=None,
         enricher=None,
         latest_first=True,
@@ -456,8 +464,8 @@ class NativeWeiboCollector:
         self.delay_seconds = delay_seconds
         self.ready_polls = ready_polls
         self.max_pages = max_pages
-        self.max_requests = max_requests
         self.timeout_seconds = timeout_seconds
+        self.check_timeout_seconds = check_timeout_seconds
         self.on_progress = on_progress
         self.latest_first = latest_first
         if enricher is None:
@@ -525,7 +533,7 @@ class NativeWeiboCollector:
             )
 
         try:
-            await self.browser.start(max_requests=self.max_requests)
+            await self.browser.start()
             for position, term in enumerate(terms):
                 await on_progress(position, len(terms))
                 previous = (
@@ -633,8 +641,6 @@ class NativeWeiboCollector:
             return result("timed_out", execution_limit="time")
         except BrowserUnavailable:
             return result("browser_unavailable")
-        finally:
-            await self.browser.freeze()
 
     async def _search_latest(
         self,
@@ -662,7 +668,7 @@ class NativeWeiboCollector:
         deadline = monotonic() + self.timeout_seconds
         pages = 0
         try:
-            await self.browser.start(max_requests=self.max_requests)
+            await self.browser.start()
             while len(seen) < limit and any(
                 urls[i] or queues[i] for i in range(len(terms))
             ):
@@ -758,8 +764,6 @@ class NativeWeiboCollector:
             return SearchWorkerResult("timed_out", execution_limit="time")
         except BrowserUnavailable:
             return SearchWorkerResult("browser_unavailable")
-        finally:
-            await self.browser.freeze()
 
     async def discard_session(self):
         await self.browser.close_page()
@@ -787,7 +791,7 @@ class NativeWeiboCollector:
         found = False
         pages = 0
         try:
-            await self.browser.start(max_requests=self.max_requests)
+            await self.browser.start()
             global_admitted = set(previous_content_ids)
             for position, term in enumerate(terms):
                 if monotonic() >= deadline:
@@ -897,8 +901,6 @@ class NativeWeiboCollector:
             return SearchWorkerResult("timed_out", execution_limit="time")
         except BrowserUnavailable:
             return SearchWorkerResult("browser_unavailable")
-        finally:
-            await self.browser.freeze()
 
     async def manual_page(self, *, request_id, platform, action):
         if platform not in self.supported_platforms:
@@ -924,77 +926,72 @@ class NativeWeiboCollector:
         except BrowserUnavailable:
             return ManualPageWorkerResult("browser_unavailable")
 
+    async def open_browser(self, *, request_id, platform=None):
+        """Open the owned browser without starting an authentication check."""
+        if platform is not None and platform not in self.supported_platforms:
+            return ManualPageWorkerResult("browser_unavailable")
+        try:
+            existing = getattr(self.browser, "page_present", self.browser.available)
+            await self.browser.show()
+            # Opening the dedicated browser is also the row-level platform
+            # entry point.  Once a window exists, only foreground it so an
+            # in-progress login, QR code, or verification page is preserved.
+            if platform is not None and not existing:
+                await self.browser.navigate(_PLATFORM_HOME[platform])
+                await self.browser.bring_to_front()
+            return ManualPageWorkerResult(
+                "opened_existing" if existing else "opened_homepage"
+            )
+        except BrowserUnavailable:
+            return ManualPageWorkerResult("browser_unavailable")
+
     async def check(self, *, request_id, platform):
         if platform not in self.supported_platforms:
             return AuthWorkerResult("failed", "browser_unavailable")
-        try:
-            if self.on_progress:
-                await self.on_progress(request_id, platform, "waiting_for_browser")
-            await self.browser.start(max_requests=self.max_requests)
-            await self.browser.bring_to_front()
-            await self.browser.navigate(
-                _PLATFORM_HOME.get(platform, "https://weibo.com/")
+        use_check_page = self.browser.available and all(
+            hasattr(self.browser, method)
+            for method in (
+                "start_check_page",
+                "navigate_check",
+                "snapshot_check",
+                "close_check_page",
             )
-            if self.on_progress:
-                await self.on_progress(request_id, platform, "waiting_for_login")
-            # DOM-only polling; the user performs any login/challenge themselves.
-            async with asyncio.timeout(self.timeout_seconds):
-                while True:
-                    url, raw, status = await self.browser.snapshot()
-                    root = document(raw)
-                    blocked = barrier(root, url, status) if platform == "wb" else None
-                    signed_in = bool(
-                        root is not None
-                        and (
-                            root.xpath(_SIGNED_IN_XPATH)
-                            or any(
-                                word in text_of(root)
-                                for word in ("退出", "我的主页", "个人中心")
-                            )
-                        )
-                    )
-                    # Weibo can leave an invisible login form in the rendered DOM
-                    # after a successful session restore. A signed-in marker may
-                    # therefore coexist with a DOM-only ``login_required`` signal.
-                    # Transport/auth failures and explicit challenges still win.
-                    if platform != "wb" and root is not None and status < 400:
-                        body = text_of(root)
-                        # A successful HTTP response is not proof of a login.
-                        # Require an explicit account marker or a signed-in
-                        # affordance that is not just an anonymous login form.
-                        login_markers = (
-                            "退出登录",
-                            "退出",
-                            "我的主页",
-                            "个人中心",
-                            "创作中心",
-                            "发布笔记",
-                            "发布作品",
-                        )
-                        anonymous_markers = (
-                            "登录",
-                            "请登录",
-                            "手机号登录",
-                            "扫码登录",
-                        )
-                        if any(marker in body for marker in login_markers) and not (
-                            any(marker in body for marker in anonymous_markers)
-                            and not signed_in
-                        ):
-                            return AuthWorkerResult("connected", "none")
-                    if (
-                        signed_in
-                        and blocked in (None, "login_required")
-                        and status not in (401, 403, 429)
-                    ):
-                        return AuthWorkerResult("connected", "none")
-                    await asyncio.sleep(1)
-        except TimeoutError:
-            return AuthWorkerResult("disconnected", "login_required")
+        )
+        try:
+            # The budget covers browser setup, navigation, and the one DOM
+            # snapshot.  A platform can leave navigation pending indefinitely
+            # while a challenge or network failure is being rendered.
+            async with asyncio.timeout(self.check_timeout_seconds):
+                if not self.browser.available:
+                    # The public platform-connection service rejects checks
+                    # before this point when no browser is open.  Keeping this
+                    # fallback makes the worker safe for direct internal
+                    # callers.
+                    await self.browser.start()
+                if not use_check_page:
+                    # Compatibility doubles may not expose an isolated page;
+                    # only that fallback needs to foreground the main page.
+                    await self.browser.bring_to_front()
+                home = _PLATFORM_HOME.get(platform, "https://weibo.com/")
+                if use_check_page:
+                    await self.browser.start_check_page()
+                    await self.browser.navigate_check(home)
+                    snapshot = self.browser.snapshot_check
+                else:
+                    # Compatibility for older test doubles; the native browser
+                    # always uses the isolated check page above.
+                    await self.browser.start()
+                    await self.browser.navigate(home)
+                    snapshot = self.browser.snapshot
+                url, raw, status = await snapshot()
+            return _classify_connection_page(platform, url, raw, status)
         except (BrowserUnavailable, BrowserBudgetExceeded):
             return AuthWorkerResult("failed", "browser_unavailable")
+        except TimeoutError:
+            return AuthWorkerResult("failed", "check_failed")
         finally:
-            await self.browser.freeze()
+            if use_check_page:
+                await self.browser.close_check_page()
 
     async def open_result(
         self, *, request_id, term, content_id, platform=None, content_url=None
@@ -1008,7 +1005,7 @@ class NativeWeiboCollector:
         ):
             return OpenResultWorkerResult("content_not_found")
         try:
-            await self.browser.start(max_requests=self.max_requests)
+            await self.browser.start()
             # The content URL is reconstructed from the selected platform ID;
             # callers cannot inject an arbitrary navigation target here.
             if content_url is None:
@@ -1030,7 +1027,6 @@ class NativeWeiboCollector:
             await self.browser.show()
             return OpenResultWorkerResult("opened")
         except (BrowserUnavailable, BrowserBudgetExceeded, TimeoutError):
-            await self.browser.freeze()
             return OpenResultWorkerResult("browser_unavailable")
 
     async def enrich(self, **kwargs):
@@ -1050,7 +1046,7 @@ class NativeWeiboCollector:
         try:
             if not is_valid_search_content_url(platform, content_id, content_url):
                 return EnrichmentWorkerResult("content_unavailable")
-            await self.browser.start(max_requests=self.max_requests)
+            await self.browser.start()
             await self.browser.navigate(content_url)
             url, raw, status = await self.browser.snapshot()
             root = document(raw)
@@ -1105,9 +1101,7 @@ class NativeWeiboCollector:
             coverage = "complete"
             if body_truncated:
                 coverage = "partial"
-                issues.append(
-                    EnrichmentIssue(code="text_limit", asset_position=None)
-                )
+                issues.append(EnrichmentIssue(code="text_limit", asset_position=None))
             value = EnrichedContent(
                 schema_version=1,
                 platform=platform,
@@ -1127,8 +1121,6 @@ class NativeWeiboCollector:
             return EnrichmentWorkerResult("timed_out")
         except (BrowserUnavailable, TimeoutError):
             return EnrichmentWorkerResult("browser_unavailable")
-        finally:
-            await self.browser.freeze()
 
     def discard_enrichment_checkpoint(self):
         self.enricher.reset()
@@ -1136,6 +1128,83 @@ class NativeWeiboCollector:
     async def shutdown(self):
         self.enricher.reset()
         await self.browser.shutdown()
+
+
+def _classify_connection_page(platform, url, raw, status):
+    """Classify one rendered platform home page without waiting for login."""
+    root = document(raw)
+    if root is None:
+        return AuthWorkerResult("failed", "check_failed")
+
+    body = text_of(root)
+    title = " ".join(root.xpath("//title/text()"))
+    if platform == "wb":
+        signed_in = bool(
+            root.xpath(_SIGNED_IN_XPATH)
+            or any(word in body for word in ("退出", "我的主页", "个人中心"))
+        )
+        blocked = barrier(root, url, status)
+        if blocked == "manual_challenge_required":
+            return AuthWorkerResult("failed", "manual_challenge")
+        if status >= 400:
+            return AuthWorkerResult("failed", "check_failed")
+        if signed_in and blocked not in {
+            "platform_blocked_or_rate_limited",
+        }:
+            return AuthWorkerResult("connected", "none")
+        if blocked == "login_required" or _weibo_anonymous_shell(root, url):
+            return AuthWorkerResult("disconnected", "login_required")
+        return AuthWorkerResult("failed", "check_failed")
+
+    challenge_markers = ("验证码", "安全验证", "人机验证", "滑动验证", "请完成验证")
+    if any(marker in f"{title} {body}" for marker in challenge_markers):
+        return AuthWorkerResult("failed", "manual_challenge")
+    if status >= 400:
+        return AuthWorkerResult("failed", "check_failed")
+    signed_in = bool(
+        root.xpath(_SIGNED_IN_XPATH)
+        or any(word in body for word in ("退出", "我的主页", "个人中心"))
+        or any(
+            marker in f"{title} {body}"
+            for marker in _PLATFORM_SIGNED_IN_MARKERS.get(platform, ())
+        )
+    )
+    if signed_in:
+        return AuthWorkerResult("connected", "none")
+    anonymous_markers = (
+        "登录",
+        "请登录",
+        "手机号登录",
+        "扫码登录",
+        "登录后查看",
+    )
+    try:
+        path = (urlsplit(url).path or "").lower()
+    except ValueError:
+        path = ""
+    if (
+        path == "/login"
+        or path.startswith("/login/")
+        or any(marker in body for marker in anonymous_markers)
+    ):
+        return AuthWorkerResult("disconnected", "login_required")
+    return AuthWorkerResult("failed", "check_failed")
+
+
+def _weibo_anonymous_shell(root, url):
+    """Recognize compact login shells without scanning arbitrary post text."""
+    try:
+        path = (urlsplit(url).path or "").lower()
+    except ValueError:
+        path = ""
+    if path == "/login" or path.startswith("/login/"):
+        return True
+    markers = ("登录", "请登录", "手机号登录", "扫码登录", "登录后查看")
+    for node in root.xpath("//header | //main"):
+        value = re.sub(r"\s+", "", text_of(node))
+        if len(value) <= 80 and any(marker in value for marker in markers):
+            return True
+    return False
 
 
 def _generic_detail_title(root):
@@ -1281,8 +1350,10 @@ def _generic_detail_text(root, *, max_chars=20_000):
             quoted.append(quote_text)
     for quote_text in quoted:
         body = body.replace(quote_text, "", 1).strip()
-        body = f"{body}\n\n【转发附带原帖】\n{quote_text}" if body else (
-            f"【转发附带原帖】\n{quote_text}"
+        body = (
+            f"{body}\n\n【转发附带原帖】\n{quote_text}"
+            if body
+            else (f"【转发附带原帖】\n{quote_text}")
         )
     truncated = len(body) > max_chars
     return body[:max_chars], truncated
@@ -1335,13 +1406,8 @@ def _generic_detail_container_query(*, include_main=False):
         "//*[@data-testid='video-desc'] | //*[@data-e2e='video-desc' or "
         "@data-e2e='feed-video-desc' or @data-e2e='note-content'] | "
         "//*[@id='detail-desc' or @id='noteContainer' or @id='article-content'] | "
-        "//*["
-        + class_terms
-        + "]"
+        "//*[" + class_terms + "]"
     )
     if include_main:
-        selectors = (
-            selectors
-            + " | //*[@role='main'] | //main | //article"
-        )
+        selectors = selectors + " | //*[@role='main'] | //main | //article"
     return selectors

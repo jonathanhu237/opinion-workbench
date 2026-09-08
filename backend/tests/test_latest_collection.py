@@ -93,7 +93,6 @@ def test_keywords_rotate_and_duplicates_share_one_slot():
         ["b"],
     ]
     assert all(urlsplit(url).path == "/realtime" for url in browser.visits)
-    assert browser.frozen
 
 
 def test_duplicate_only_page_yields_to_other_keyword_before_paging():
@@ -128,7 +127,6 @@ def test_latest_pagination_has_a_hard_page_budget_and_keeps_partial_items():
     assert result.outcome == "timed_out" and result.execution_limit == "pages"
     assert items == [(0, A)]
     assert completed == [(1, 0, None)]
-    assert browser.frozen
 
 
 def test_new_run_api_uses_total_limit_independent_of_legacy_per_term(tmp_path):
@@ -169,6 +167,7 @@ def test_batch_manual_recovery_shares_frozen_cap_and_prior_ids(tmp_path):
             "/api/v1/search-batches",
             json={
                 "monitoring_rule_id": 1,
+                "platforms": ["wb"],
                 "max_total_results": 3,
             },
         )

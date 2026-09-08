@@ -40,6 +40,8 @@ AuthReason = Literal[
     "login_required",
     "browser_unavailable",
     "browser_disconnected",
+    "manual_challenge",
+    "check_failed",
     "internal_error",
     "cancelled",
 ]
@@ -230,6 +232,10 @@ class ContentCollector(Protocol):
 
 
 class CollectorRuntime(SearchCollector, ContentCollector, Protocol):
+    async def open_browser(
+        self, *, request_id: UUID, platform: AuthPlatformId | None = None
+    ) -> ManualPageWorkerResult: ...
+
     async def check(
         self,
         *,

@@ -17,12 +17,11 @@ from time import monotonic
 from urllib.parse import urlsplit
 
 from longtian_api.services.native_browser_contracts import (
-    BrowserBudgetExceeded,
     BrowserUnavailable,
 )
 from longtian_api.services.settled_tasks import settle
 
-_PLATFORM_DOMAINS = (
+_NAVIGATION_DOMAINS = (
     "weibo.com",
     "weibo.cn",
     "sinaimg.cn",
@@ -54,14 +53,12 @@ class ManagedChrome:
         self._playwright_factory = playwright_factory
         self._on_disconnected = on_disconnected
         self._control_timeout = control_timeout_seconds
-        self._process = self._playwright = self._browser = self._page = self._cdp = None
+        self._process = self._playwright = self._browser = self._page = None
+        self._check_page = None
         self._lease = None
-        self._frozen = True
         self._closing = False
-        self._requests = self._max_requests = 0
-        self._exhausted = False
         self._status = 200
-        self._request_tasks = set()
+        self._check_status = 200
 
     @property
     def available(self):
@@ -75,9 +72,6 @@ class ManagedChrome:
     async def _bounded(self, operation):
         async with asyncio.timeout(self._control_timeout):
             return await operation
-
-    async def _send(self, method, params=None):
-        return await self._bounded(self._cdp.send(method, params))
 
     async def _launch_owned(self, *args, **kwargs):
         launch = asyncio.create_task(self._launcher(*args, **kwargs))
@@ -234,7 +228,6 @@ class ManagedChrome:
                 f"--user-data-dir={self.profile}",
                 "--no-first-run",
                 "--no-default-browser-check",
-                "--no-startup-window",
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
             )
@@ -274,104 +267,40 @@ class ManagedChrome:
                 lambda done: None if done.cancelled() else done.exception()
             )
 
-    async def start(self, *, max_requests):
+    async def start(self):
         await self._ensure()
         try:
             if self._page is None or self._page.is_closed():
                 context = self._browser.contexts[0]
                 self._page = await self._bounded(context.new_page())
-                self._page.set_default_timeout(5000)
-                self._cdp = await self._bounded(context.new_cdp_session(self._page))
-                await self._send("Network.enable")
-                await self._send("Network.setBypassServiceWorker", {"bypass": True})
-                # Fetch interception includes each redirected request, unlike
-                # Playwright's route callback which only sees the initial URL.
-                self._cdp.on("Fetch.requestPaused", self._request_paused)
-                await self._send(
-                    "Fetch.enable",
-                    {
-                        "patterns": [{"urlPattern": "*", "requestStage": "Request"}],
-                    },
-                )
-                await self._page.route_web_socket("**/*", lambda socket: socket.close())
-                self._page.on("response", self._response)
-                self._page.on("popup", lambda page: asyncio.create_task(page.close()))
-            self._requests = 0
-            self._max_requests = max_requests
-            self._exhausted = False
-            self._frozen = False
+                self._bind_page(self._page)
+                # Chrome loads the site normally, including login frames,
+                # callbacks, WebSockets, popups and service workers. Collection
+                # scope and cancellation are controlled by the caller's tasks.
         except Exception:
             await self.close_page()
             raise BrowserUnavailable() from None
 
-    def _response(self, response):
+    def _bind_page(self, page):
+        page.set_default_timeout(5000)
+        page.on("response", lambda response: self._response(response, page))
+
+    def _response(self, response, page):
         if (
             response.request.is_navigation_request()
-            and response.frame == self._page.main_frame
+            and response.frame == page.main_frame
         ):
-            self._status = response.status
-
-    def _request_paused(self, event):
-        task = asyncio.create_task(self._handle_request(event))
-        self._request_tasks.add(task)
-        task.add_done_callback(self._request_done)
-
-    def _request_done(self, task):
-        self._request_tasks.discard(task)
-        if not task.cancelled() and task.exception() is not None:
-            self._frozen = True
-
-    async def _handle_request(self, event):
-        request = event["requestId"]
-        try:
-            parts = urlsplit(event["request"]["url"])
-            host = parts.hostname or ""
-            in_scope = (
-                parts.scheme == "https"
-                and not parts.username
-                and not parts.password
-                and parts.port in (None, 443)
-                and any(
-                    host == domain or host.endswith("." + domain)
-                    for domain in _PLATFORM_DOMAINS
-                )
-            )
-        except (KeyError, ValueError):
-            in_scope = False
-        if self._requests >= self._max_requests:
-            self._exhausted = True
-        if self._frozen or self._exhausted or not in_scope:
-            await self._send(
-                "Fetch.failRequest",
-                {
-                    "requestId": request,
-                    "errorReason": "Aborted",
-                },
-            )
-            return
-        self._requests += 1
-        await self._send("Fetch.continueRequest", {"requestId": request})
+            if page is self._check_page:
+                self._check_status = response.status
+            elif page is self._page:
+                self._status = response.status
 
     def _check(self):
-        if self._exhausted:
-            raise BrowserBudgetExceeded("requests")
         if not self.available or self._page is None or self._page.is_closed():
             raise BrowserUnavailable()
 
     async def navigate(self, url):
-        parts = urlsplit(url)
-        host = (parts.hostname or "").lower()
-        if (
-            parts.scheme != "https"
-            or parts.username
-            or parts.password
-            or parts.port not in (None, 443)
-            or not any(
-                host == domain or host.endswith("." + domain)
-                for domain in _PLATFORM_DOMAINS
-            )
-        ):
-            raise BrowserUnavailable()
+        self._validate_navigation_url(url)
         self._check()
         self._status = 200
         try:
@@ -381,6 +310,66 @@ class ManagedChrome:
             # Preserve a potentially useful loaded challenge page for parsing.
             if self._page.url == "about:blank":
                 raise BrowserUnavailable() from None
+
+    @staticmethod
+    def _validate_navigation_url(url):
+        parts = urlsplit(url)
+        host = (parts.hostname or "").lower()
+        if (
+            parts.scheme != "https"
+            or parts.username
+            or parts.password
+            or parts.port not in (None, 443)
+            or not any(
+                host == domain or host.endswith("." + domain)
+                for domain in _NAVIGATION_DOMAINS
+            )
+        ):
+            raise BrowserUnavailable()
+
+    async def start_check_page(self):
+        await self._ensure()
+        try:
+            await self.close_check_page()
+            context = self._browser.contexts[0]
+            self._check_page = await self._bounded(context.new_page())
+            self._check_status = 200
+            self._bind_page(self._check_page)
+        except Exception:
+            await self.close_check_page()
+            raise BrowserUnavailable() from None
+
+    def _check_page_ready(self):
+        if (
+            not self.available
+            or self._check_page is None
+            or self._check_page.is_closed()
+        ):
+            raise BrowserUnavailable()
+
+    async def navigate_check(self, url):
+        self._validate_navigation_url(url)
+        self._check_page_ready()
+        self._check_status = 200
+        try:
+            await self._check_page.goto(
+                url, wait_until="domcontentloaded", timeout=20_000
+            )
+        except Exception:
+            self._check_page_ready()
+            if self._check_page.url == "about:blank":
+                raise BrowserUnavailable() from None
+
+    async def snapshot_check(self):
+        self._check_page_ready()
+        try:
+            value = await self._bounded(self._check_page.content())
+            self._check_page_ready()
+            return self._check_page.url, value, self._check_status
+        except BrowserUnavailable:
+            raise
+        except Exception:
+            raise BrowserUnavailable() from None
 
     async def bring_to_front(self):
         self._check()
@@ -396,7 +385,7 @@ class ManagedChrome:
             value = await self._bounded(self._page.content())
             self._check()
             return self._page.url, value, self._status
-        except (BrowserBudgetExceeded, BrowserUnavailable):
+        except BrowserUnavailable:
             raise
         except Exception:
             raise BrowserUnavailable() from None
@@ -417,42 +406,34 @@ class ManagedChrome:
         except Exception:
             raise BrowserUnavailable() from None
 
-    async def freeze(self):
-        self._frozen = True
-        if self._cdp is not None and self.available:
-            try:
-                await self._send("Page.stopLoading")
-            except Exception:
-                await self.close_page()
-
     async def show(self):
-        existing = (
-            self._page is not None and not self._page.is_closed() and self.available
-        )
-        await self.start(max_requests=1200)
-        if not existing:
-            await self.navigate("https://weibo.com/")
+        await self.start()
         await self.bring_to_front()
 
     async def close_page(self):
-        self._frozen = True
-        failed = False
-        try:
-            if self._page is not None and not self._page.is_closed():
-                await self._bounded(self._page.close())
-        except Exception:
-            failed = True
-        finally:
-            tasks = tuple(self._request_tasks)
-            for task in tasks:
-                task.cancel()
-            if tasks:
-                await self._bounded(asyncio.gather(*tasks, return_exceptions=True))
-            self._page = self._cdp = None
+        failed = await self._close_page_object("_check_page")
+        failed = await self._close_page_object("_page") or failed
         if failed and not self._closing:
             # A page we failed to close must not keep browsing after ownership
             # is released. Stop only our dedicated process, never another Chrome.
             await self.shutdown()
+
+    async def close_check_page(self):
+        failed = await self._close_page_object("_check_page")
+        if failed and not self._closing:
+            await self.shutdown()
+
+    async def _close_page_object(self, attribute):
+        page = getattr(self, attribute)
+        failed = False
+        try:
+            if page is not None and not page.is_closed():
+                await self._bounded(page.close())
+        except Exception:
+            failed = True
+        finally:
+            setattr(self, attribute, None)
+        return failed
 
     async def shutdown(self):
         self._closing = True

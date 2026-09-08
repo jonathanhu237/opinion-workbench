@@ -1,5 +1,12 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { createMemoryRouter } from 'react-router'
 import { RouterProvider } from 'react-router/dom'
@@ -21,9 +28,11 @@ import {
 import {
   fetchPlatformConnections,
   PlatformConnectionApiError,
+  openManagedBrowser,
   startPlatformConnectionAttempt,
   type PlatformConnection,
   type PlatformConnectionsResponse,
+  type PlatformId,
 } from './lib/api/platform-connections'
 import { fetchSearchRuns } from './lib/api/search-runs'
 
@@ -42,6 +51,7 @@ vi.mock('./lib/api/media-cache', async (importOriginal) => ({
 vi.mock('./lib/api/platform-connections', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./lib/api/platform-connections')>()),
   fetchPlatformConnections: vi.fn(),
+  openManagedBrowser: vi.fn(),
   startPlatformConnectionAttempt: vi.fn(),
 }))
 vi.mock('./lib/api/monitoring-rules', async (importOriginal) => ({
@@ -96,6 +106,7 @@ const mockedFetchHealth = vi.mocked(fetchHealth)
 const mockedFetchAISettings = vi.mocked(fetchAISettings)
 const mockedFetchMediaPolicy = vi.mocked(fetchMediaPolicy)
 const mockedFetchPlatformConnections = vi.mocked(fetchPlatformConnections)
+const mockedOpenManagedBrowser = vi.mocked(openManagedBrowser)
 const mockedStartAttempt = vi.mocked(startPlatformConnectionAttempt)
 const mockedFetchMonitoringRules = vi.mocked(fetchMonitoringRules)
 const mockedFetchSearchRuns = vi.mocked(fetchSearchRuns)
@@ -143,6 +154,9 @@ describe('Longtian public opinion application', () => {
       pending_files: 0,
     })
     mockedFetchPlatformConnections.mockReset().mockResolvedValue(catalog())
+    mockedOpenManagedBrowser.mockReset().mockResolvedValue({
+      outcome: 'opened_homepage',
+    })
     mockedStartAttempt.mockReset().mockResolvedValue({
       attempt_id: attemptId,
       platform: connection({
@@ -228,7 +242,21 @@ describe('Longtian public opinion application', () => {
     expect(screen.getAllByText('待检查')).toHaveLength(1)
   })
 
-  it('shows login guidance when the native browser needs user action', async () => {
+  it('shows a clear not-logged-in instruction after a status check', async () => {
+    mockedFetchPlatformConnections.mockResolvedValue(
+      catalog({
+        status: 'disconnected',
+        guidance: 'retry',
+      }),
+    )
+    renderRoute('/platform-accounts')
+    expect(await screen.findByText('未登录')).toBeVisible()
+    expect(
+      screen.getByText('尚未登录，请在专用浏览器中登录后重新检查。'),
+    ).toBeVisible()
+  })
+
+  it('does not let a legacy waiting status permanently block a new check', async () => {
     mockedFetchPlatformConnections.mockResolvedValue(
       catalog({
         status: 'action_required',
@@ -237,10 +265,37 @@ describe('Longtian public opinion application', () => {
       }),
     )
     renderRoute('/platform-accounts')
-    expect(await screen.findByText('需要操作')).toBeVisible()
-    expect(
-      screen.getByText('请在应用打开的专用谷歌浏览器中登录微博。'),
-    ).toBeVisible()
+    const retry = await screen.findByRole('button', { name: '重新检查' })
+    expect(retry).toBeEnabled()
+    expect(screen.getByRole('button', { name: '检查全部' })).toBeEnabled()
+  })
+
+  it('opens the dedicated browser without starting a status check', async () => {
+    const user = userEvent.setup()
+    renderRoute('/platform-accounts')
+    await user.click(
+      await screen.findByRole('button', { name: '打开专用浏览器' }),
+    )
+    await waitFor(() =>
+      expect(mockedOpenManagedBrowser).toHaveBeenCalledExactlyOnceWith(
+        undefined,
+        expect.any(AbortSignal),
+      ),
+    )
+    expect(mockedStartAttempt).not.toHaveBeenCalled()
+  })
+
+  it('opens a platform homepage without starting its status check', async () => {
+    const user = userEvent.setup()
+    renderRoute('/platform-accounts')
+    await user.click(await screen.findByRole('button', { name: '打开平台' }))
+    await waitFor(() =>
+      expect(mockedOpenManagedBrowser).toHaveBeenCalledExactlyOnceWith(
+        'wb',
+        expect.any(AbortSignal),
+      ),
+    )
+    expect(mockedStartAttempt).not.toHaveBeenCalled()
   })
 
   it('disables controls while the local service is unavailable', async () => {
@@ -250,7 +305,10 @@ describe('Longtian public opinion application', () => {
       await within(getConnectionPanel()).findByRole('alert'),
     ).toHaveTextContent('应用服务暂时不可用，请重新启动应用。')
     expect(screen.getByRole('button', { name: '检查状态' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: '一键检测' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '检查全部' })).toBeDisabled()
+    expect(
+      screen.getByRole('button', { name: '打开专用浏览器' }),
+    ).toBeDisabled()
   })
 
   it('runs batch detection for Weibo only and prevents overlapping starts', async () => {
@@ -264,7 +322,7 @@ describe('Longtian public opinion application', () => {
       }),
     )
     renderRoute('/platform-accounts')
-    const batchButton = await screen.findByRole('button', { name: '一键检测' })
+    const batchButton = await screen.findByRole('button', { name: '检查全部' })
     await waitFor(() => expect(batchButton).toBeEnabled())
     await user.click(batchButton)
     await waitFor(() =>
@@ -274,7 +332,7 @@ describe('Longtian public opinion application', () => {
       ),
     )
     expect(screen.getByRole('status')).toHaveTextContent('正在检测微博 · 1/1')
-    expect(screen.getByRole('button', { name: '检测中…' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '检查中…' })).toBeDisabled()
     resolveAttempt?.({
       attempt_id: attemptId,
       platform: connection({
@@ -284,11 +342,170 @@ describe('Longtian public opinion application', () => {
     })
   })
 
+  it('ends a stalled batch at the bounded five-platform deadline', async () => {
+    mockedStartAttempt.mockReturnValue(new Promise(() => undefined))
+    renderRoute('/platform-accounts')
+    const batchButton = await screen.findByRole('button', { name: '检查全部' })
+
+    vi.useFakeTimers()
+    try {
+      fireEvent.click(batchButton)
+      await act(async () => {
+        await Promise.resolve()
+      })
+      act(() => {
+        vi.advanceTimersByTime(100_001)
+      })
+      expect(screen.getByText('检查失败，请稍后重试。')).toBeVisible()
+      expect(screen.getByRole('button', { name: '检查状态' })).toBeEnabled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps a newer batch alive when an older request settles late', async () => {
+    let rejectFirst: ((error: Error) => void) | undefined
+    let rejectSecond: ((error: Error) => void) | undefined
+    mockedStartAttempt
+      .mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            rejectFirst = reject
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise((_resolve, reject) => {
+            rejectSecond = reject
+          }),
+      )
+    renderRoute('/platform-accounts')
+    const batchButton = await screen.findByRole('button', { name: '检查全部' })
+
+    vi.useFakeTimers()
+    try {
+      fireEvent.click(batchButton)
+      await act(async () => {
+        await Promise.resolve()
+      })
+      expect(mockedStartAttempt).toHaveBeenCalledTimes(1)
+
+      act(() => {
+        vi.advanceTimersByTime(100_001)
+      })
+      expect(screen.getByText('检查失败，请稍后重试。')).toBeVisible()
+
+      fireEvent.click(screen.getByRole('button', { name: '检查全部' }))
+      await act(async () => {
+        await Promise.resolve()
+      })
+      expect(mockedStartAttempt).toHaveBeenCalledTimes(2)
+      expect(screen.getByRole('status')).toHaveTextContent('正在检测微博 · 1/1')
+
+      await act(async () => {
+        rejectFirst?.(new Error('late failure'))
+        await Promise.resolve()
+      })
+      expect(screen.getByRole('status')).toHaveTextContent('正在检测微博 · 1/1')
+    } finally {
+      rejectSecond?.(new Error('cleanup'))
+      vi.useRealTimers()
+    }
+  })
+
+  it('continues the batch after a platform-scoped start error', async () => {
+    mockedStartAttempt.mockRejectedValueOnce(
+      new PlatformConnectionApiError(
+        '该平台暂未接入。',
+        'platform_not_available',
+        409,
+      ),
+    )
+    renderRoute('/platform-accounts')
+    const batchButton = await screen.findByRole('button', { name: '检查全部' })
+    await userEvent.setup().click(batchButton)
+    await waitFor(() => expect(mockedStartAttempt).toHaveBeenCalledTimes(1))
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: '检查全部' })).toBeEnabled(),
+    )
+    expect(screen.getByText('该平台暂未接入。')).toBeVisible()
+  })
+
+  it('checks all enabled platforms in the catalog order', async () => {
+    const order: PlatformId[] = ['wb', 'dy', 'ks', 'xhs', 'toutiao']
+    const names: Record<PlatformId, string> = {
+      wb: '微博',
+      dy: '抖音',
+      ks: '快手',
+      xhs: '小红书',
+      toutiao: '今日头条',
+    }
+    const statuses: Record<PlatformId, 'not_checked' | 'connected'> = {
+      wb: 'not_checked',
+      dy: 'not_checked',
+      ks: 'not_checked',
+      xhs: 'not_checked',
+      toutiao: 'not_checked',
+    }
+    const started: PlatformId[] = []
+    mockedFetchPlatformConnections.mockImplementation(async () => ({
+      platforms: order.map((platform) =>
+        connection({
+          platform,
+          display_name: names[platform],
+          status: statuses[platform],
+          guidance: 'none',
+        }),
+      ),
+    }))
+    mockedStartAttempt.mockImplementation(async (platform) => {
+      const id = `2efb05b0-b1f7-4bbb-8b9f-9effa11cd35${started.length}`
+      started.push(platform)
+      statuses[platform] = 'connected'
+      return {
+        attempt_id: id,
+        platform: connection({
+          platform,
+          display_name: names[platform],
+          status: 'checking',
+          active_attempt_id: id,
+        }),
+      }
+    })
+
+    const user = userEvent.setup()
+    renderRoute('/platform-accounts')
+    await user.click(await screen.findByRole('button', { name: '检查全部' }))
+    await waitFor(() => expect(started).toEqual(order))
+    expect(screen.getByRole('button', { name: '检查全部' })).toBeEnabled()
+  })
+
+  it('ends a batch when the status service becomes unavailable', async () => {
+    mockedFetchPlatformConnections
+      .mockReset()
+      .mockResolvedValueOnce(catalog())
+      .mockRejectedValueOnce(
+        new PlatformConnectionApiError(
+          '无法连接本地服务，请确认服务已启动。',
+          'service_unavailable',
+        ),
+      )
+    renderRoute('/platform-accounts')
+    const batchButton = await screen.findByRole('button', { name: '检查全部' })
+    fireEvent.click(batchButton)
+    await waitFor(() =>
+      expect(
+        screen.getByText('无法连接本地服务，请确认服务已启动。'),
+      ).toBeVisible(),
+    )
+    expect(screen.getByRole('button', { name: '检查全部' })).toBeEnabled()
+  })
+
   it('keeps a connection conflict visible without starting another operation', async () => {
     const user = userEvent.setup()
     mockedStartAttempt.mockRejectedValue(
       new PlatformConnectionApiError(
-        '已有平台连接任务正在运行，请完成后再试。',
+        '专用浏览器正在执行任务，请稍后检查。',
         'connection_attempt_active',
         409,
       ),
@@ -297,6 +514,6 @@ describe('Longtian public opinion application', () => {
     await user.click(await screen.findByRole('button', { name: '检查状态' }))
     expect(
       await within(getConnectionPanel()).findByRole('alert'),
-    ).toHaveTextContent('已有平台连接任务正在运行，请完成后再试。')
+    ).toHaveTextContent('专用浏览器正在执行任务，请稍后检查。')
   })
 })

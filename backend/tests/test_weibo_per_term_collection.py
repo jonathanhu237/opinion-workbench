@@ -106,7 +106,6 @@ def test_empty_middle_page_does_not_discard_later_results():
     assert items == [(0, A), (0, B)]
     assert completed == [(0, 2, None)]
     assert len(browser.visits) == 3
-    assert browser.frozen
 
 
 def test_empty_last_page_finishes_with_actual_count():
@@ -268,6 +267,7 @@ def test_recovery_retains_partial_term_budget_and_gives_next_term_its_own_limit(
             "/api/v1/search-batches",
             json={
                 "monitoring_rule_id": 1,
+                "platforms": ["wb"],
                 "max_results_per_term": 2,
             },
         )
@@ -275,7 +275,6 @@ def test_recovery_retains_partial_term_budget_and_gives_next_term_its_own_limit(
         identity = started.json()["id"]
         paused = _wait_for_batch(client, identity, {"paused_for_manual_action"})
         assert paused["items"][0]["total_count"] == 1
-        assert browser.frozen
         resumed = client.post(
             f"/api/v1/search-batches/{identity}/continue",
             json=_control(client, identity),

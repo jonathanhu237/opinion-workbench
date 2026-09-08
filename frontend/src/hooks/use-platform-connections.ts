@@ -7,9 +7,7 @@ import {
 } from '@/lib/api/platform-connections'
 
 export function isPlatformConnectionActive(connection: PlatformConnection) {
-  return (
-    connection.status === 'checking' || connection.status === 'action_required'
-  )
+  return connection.status === 'checking'
 }
 
 export function usePlatformConnections(

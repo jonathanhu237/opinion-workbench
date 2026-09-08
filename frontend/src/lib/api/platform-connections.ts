@@ -24,6 +24,7 @@ const guidanceValues = [
   'enable_remote_debugging',
   'approve_connection',
   'complete_login',
+  'complete_verification',
   'retry',
 ] as const
 
@@ -51,10 +52,16 @@ export type StartPlatformConnectionAttemptResponse = {
   platform: PlatformConnection
 }
 
+export type PlatformBrowserResponse = {
+  outcome: 'opened_homepage' | 'opened_existing'
+}
+
 export type PlatformConnectionErrorCode =
   | 'platform_not_found'
   | 'platform_not_available'
   | 'connection_attempt_active'
+  | 'browser_not_open'
+  | 'browser_open_failed'
   | 'request_failed'
   | 'invalid_response'
   | 'service_unavailable'
@@ -138,7 +145,8 @@ function parsePlatformConnection(value: unknown): PlatformConnection | null {
 
   if (
     (value.guidance === 'starting_browser' && value.status !== 'checking') ||
-    (value.guidance === 'retry_browser' && value.status !== 'failed')
+    (value.guidance === 'retry_browser' && value.status !== 'failed') ||
+    (value.guidance === 'complete_verification' && value.status !== 'failed')
   ) {
     return null
   }
@@ -228,11 +236,13 @@ function errorFromResponse(status: number, payload: unknown) {
     return new PlatformConnectionApiError('该平台暂未接入。', code, status)
   }
   if (hasExpectedShape && code === 'connection_attempt_active') {
-    return new PlatformConnectionApiError(
-      '已有平台连接任务正在运行，请完成后再试。',
-      code,
-      status,
-    )
+    return new PlatformConnectionApiError(message, code, status)
+  }
+  if (
+    hasExpectedShape &&
+    (code === 'browser_not_open' || code === 'browser_open_failed')
+  ) {
+    return new PlatformConnectionApiError(message, code, status)
   }
 
   return new PlatformConnectionApiError(
@@ -250,7 +260,7 @@ async function request(path: string, init: RequestInit) {
       throw error
     }
     throw new PlatformConnectionApiError(
-      '无法连接本机后端服务，请确认服务已经启动。',
+      '无法连接本地服务，请确认服务已启动。',
       'service_unavailable',
     )
   }
@@ -316,4 +326,43 @@ export async function startPlatformConnectionAttempt(
   }
 
   return parsed
+}
+
+export async function openManagedBrowser(
+  platform?: PlatformId,
+  signal?: AbortSignal,
+): Promise<PlatformBrowserResponse> {
+  const path = platform
+    ? `/platform-connections/${encodeURIComponent(platform)}/browser`
+    : '/platform-connections/browser'
+  const response = await request(path, {
+    method: 'POST',
+    headers: { Accept: 'application/json' },
+    signal,
+  })
+  const payload = await readJson(response)
+
+  if (!response.ok) {
+    throw errorFromResponse(response.status, payload)
+  }
+  if (response.status !== 200) {
+    throw new PlatformConnectionApiError(
+      `专用浏览器请求返回了意外状态（HTTP ${response.status}）`,
+      'invalid_response',
+      response.status,
+    )
+  }
+  if (
+    !isRecord(payload) ||
+    !hasExactKeys(payload, ['outcome']) ||
+    (payload.outcome !== 'opened_homepage' &&
+      payload.outcome !== 'opened_existing')
+  ) {
+    throw new PlatformConnectionApiError(
+      '专用浏览器接口返回的数据与当前应用不匹配。',
+      'invalid_response',
+      response.status,
+    )
+  }
+  return { outcome: payload.outcome }
 }

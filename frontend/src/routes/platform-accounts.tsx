@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { useAppShell } from '@/app/shell'
 import douyinLogo from '@/assets/platforms/douyin.svg'
@@ -17,6 +17,7 @@ import {
 import {
   PLATFORM_CONNECTIONS_QUERY_KEY,
   PlatformConnectionApiError,
+  openManagedBrowser,
   startPlatformConnectionAttempt,
   type PlatformConnection,
   type PlatformConnectionStatus,
@@ -41,6 +42,8 @@ const statusLabels: Record<PlatformConnectionStatus, string> = {
   failed: '检查失败',
   coming_soon: '暂不可用',
 }
+
+const BATCH_CHECK_DEADLINE_MS = 100_000
 
 function statusBadgeClass(status: PlatformConnectionStatus) {
   switch (status) {
@@ -75,7 +78,7 @@ function formatLastChecked(timestamp: string | null) {
 }
 
 function attemptButtonLabel(status: PlatformConnectionStatus) {
-  if (status === 'checking' || status === 'action_required') {
+  if (status === 'checking') {
     return '处理中…'
   }
   if (status === 'not_checked') {
@@ -85,32 +88,23 @@ function attemptButtonLabel(status: PlatformConnectionStatus) {
 }
 
 function rowRecoveryMessage(connection: PlatformConnection) {
-  if (
-    connection.status === 'checking' &&
-    connection.guidance === 'starting_browser'
-  ) {
-    return '正在启动应用专用的谷歌浏览器，请稍候。'
-  }
-  if (
-    connection.status === 'action_required' &&
-    connection.guidance === 'complete_login'
-  ) {
-    return `请在应用打开的专用谷歌浏览器中登录${connection.display_name}。`
-  }
-  if (connection.status === 'action_required') {
-    return `请在应用打开的专用谷歌浏览器中完成${connection.display_name}的操作。`
-  }
   if (connection.status === 'disconnected') {
-    return `请在应用打开的专用谷歌浏览器中登录${connection.display_name}，然后重新检查。`
+    return '尚未登录，请在专用浏览器中登录后重新检查。'
+  }
+  if (
+    connection.status === 'failed' &&
+    connection.guidance === 'complete_verification'
+  ) {
+    return '请在专用浏览器中完成安全验证后重新检查。'
   }
   if (
     connection.status === 'failed' &&
     connection.guidance === 'retry_browser'
   ) {
-    return '专用谷歌浏览器暂时不可用，请重新检查；应用会在需要时自动启动。'
+    return '专用浏览器已关闭，请打开后重新检查。'
   }
   if (connection.status === 'failed') {
-    return '检查未能完成，请重新检查；应用会在需要时启动专用的谷歌浏览器。'
+    return '检查失败，请稍后重试。'
   }
   return null
 }
@@ -122,12 +116,20 @@ type BatchDetection = {
   platforms: BatchPlatform[]
   currentIndex: number
   phase: 'starting' | 'waiting'
+  deadlineAt: number
 }
+
+type AttemptMutationContext = {
+  token: number
+}
+
+type BatchStep = Pick<BatchDetection, 'runId' | 'currentIndex'>
 
 type PlatformRowProps = {
   connection: PlatformConnection
   operationActive: boolean
   serviceAvailable: boolean
+  onOpen: (platform: PlatformId) => void
   onStart: (platform: PlatformId) => void
 }
 
@@ -135,6 +137,7 @@ function PlatformRow({
   connection,
   operationActive,
   serviceAvailable,
+  onOpen,
   onStart,
 }: PlatformRowProps) {
   const active = isPlatformConnectionActive(connection)
@@ -182,16 +185,30 @@ function PlatformRow({
           {statusLabels[connection.status]}
         </Badge>
         {actionable ? (
-          <Button
-            type="button"
-            size="sm"
-            variant={connection.status === 'connected' ? 'outline' : 'default'}
-            className="min-h-11 min-w-24 sm:min-h-7 sm:min-w-20"
-            disabled={disabled}
-            onClick={() => onStart(connection.platform)}
-          >
-            {attemptButtonLabel(connection.status)}
-          </Button>
+          <>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="min-h-11 min-w-20 sm:min-h-7"
+              disabled={disabled}
+              onClick={() => onOpen(connection.platform)}
+            >
+              打开平台
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant={
+                connection.status === 'connected' ? 'outline' : 'default'
+              }
+              className="min-h-11 min-w-24 sm:min-h-7 sm:min-w-20"
+              disabled={disabled}
+              onClick={() => onStart(connection.platform)}
+            >
+              {attemptButtonLabel(connection.status)}
+            </Button>
+          </>
         ) : (
           <span className="w-20 text-right text-xs text-muted-foreground">
             暂不可用
@@ -206,11 +223,16 @@ export function PlatformAccounts() {
   const { healthState, retryHealth } = useAppShell()
   const queryClient = useQueryClient()
   const attemptController = useRef<AbortController | null>(null)
+  const attemptSequence = useRef(0)
+  const browserController = useRef<AbortController | null>(null)
   const batchRunSequence = useRef(0)
   const launchedBatchStep = useRef<string | null>(null)
   const [batchDetection, setBatchDetection] = useState<BatchDetection | null>(
     null,
   )
+  const batchDetectionRef = useRef<BatchDetection | null>(null)
+  batchDetectionRef.current = batchDetection
+  const [batchMessage, setBatchMessage] = useState<string | null>(null)
   const connectionsQuery = usePlatformConnections()
   const attemptMutation = useMutation({
     mutationFn: (platform: PlatformId) => {
@@ -219,7 +241,13 @@ export function PlatformAccounts() {
       attemptController.current = controller
       return startPlatformConnectionAttempt(platform, controller.signal)
     },
-    onSuccess: (result) => {
+    onMutate: (): AttemptMutationContext => ({
+      token: ++attemptSequence.current,
+    }),
+    onSuccess: (result, _platform, context) => {
+      if (context?.token !== attemptSequence.current) {
+        return
+      }
       queryClient.setQueryData(
         PLATFORM_CONNECTIONS_QUERY_KEY,
         (current: { platforms: PlatformConnection[] } | undefined) => {
@@ -239,14 +267,33 @@ export function PlatformAccounts() {
         queryKey: PLATFORM_CONNECTIONS_QUERY_KEY,
       })
     },
+    onSettled: (_result, _error, _platform, context) => {
+      if (context?.token === attemptSequence.current) {
+        attemptController.current = null
+      }
+    },
+  })
+  const browserMutation = useMutation({
+    mutationFn: (platform: PlatformId | undefined) => {
+      browserController.current?.abort()
+      const controller = new AbortController()
+      browserController.current = controller
+      return openManagedBrowser(platform, controller.signal)
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: PLATFORM_CONNECTIONS_QUERY_KEY,
+      })
+    },
     onSettled: () => {
-      attemptController.current = null
+      browserController.current = null
     },
   })
 
   useEffect(
     () => () => {
       attemptController.current?.abort()
+      browserController.current?.abort()
     },
     [],
   )
@@ -257,7 +304,16 @@ export function PlatformAccounts() {
   )
   const platformOperationActive =
     attemptMutation.isPending || platforms.some(isPlatformConnectionActive)
-  const operationActive = batchDetection !== null || platformOperationActive
+  const operationActive =
+    batchDetection !== null ||
+    platformOperationActive ||
+    browserMutation.isPending
+  const browserMessage =
+    browserMutation.error instanceof PlatformConnectionApiError
+      ? browserMutation.error.message
+      : browserMutation.error instanceof Error
+        ? '专用浏览器打开失败，请重试。'
+        : null
   const mutationMessage =
     attemptMutation.error instanceof PlatformConnectionApiError
       ? attemptMutation.error.message
@@ -275,7 +331,11 @@ export function PlatformAccounts() {
       : null
   const panelAlertMessage =
     platforms.length > 0
-      ? (mutationMessage ?? queryMessage ?? healthMessage)
+      ? (browserMessage ??
+        mutationMessage ??
+        queryMessage ??
+        healthMessage ??
+        batchMessage)
       : null
 
   const currentBatchPlatform =
@@ -291,11 +351,59 @@ export function PlatformAccounts() {
     enabledPlatforms.length === 0 ||
     operationActive
 
+  const mutateAttempt = attemptMutation.mutate
+  const resetAttempt = attemptMutation.reset
+
+  const stopBatch = useCallback(
+    (message: string | null, expectedStep?: BatchStep) => {
+      const activeBatch = batchDetectionRef.current
+      if (
+        expectedStep !== undefined &&
+        (activeBatch === null ||
+          activeBatch.runId !== expectedStep.runId ||
+          activeBatch.currentIndex !== expectedStep.currentIndex)
+      ) {
+        return
+      }
+      // An aborted request may still settle after the next batch starts.
+      // Invalidate its callbacks before releasing the current batch state.
+      attemptSequence.current += 1
+      attemptController.current?.abort()
+      resetAttempt()
+      queryClient.setQueryData(
+        PLATFORM_CONNECTIONS_QUERY_KEY,
+        (current: { platforms: PlatformConnection[] } | undefined) => {
+          if (current === undefined) {
+            return current
+          }
+          return {
+            platforms: current.platforms.map((connection) =>
+              connection.status === 'checking'
+                ? {
+                    ...connection,
+                    status: 'failed' as const,
+                    guidance: 'retry' as const,
+                    active_attempt_id: null,
+                  }
+                : connection,
+            ),
+          }
+        },
+      )
+      batchDetectionRef.current = null
+      setBatchDetection(null)
+      setBatchMessage(message)
+    },
+    [queryClient, resetAttempt],
+  )
+
   const startAttempt = (platform: PlatformId) => {
     if (operationActive || healthState.status !== 'connected') {
       return
     }
+    browserMutation.reset()
     attemptMutation.reset()
+    setBatchMessage(null)
     attemptMutation.mutate(platform)
   }
 
@@ -304,9 +412,11 @@ export function PlatformAccounts() {
       return
     }
 
+    browserMutation.reset()
     attemptMutation.reset()
+    setBatchMessage(null)
     batchRunSequence.current += 1
-    setBatchDetection({
+    const nextBatch: BatchDetection = {
       runId: batchRunSequence.current,
       platforms: enabledPlatforms.map(({ platform, display_name }) => ({
         platform,
@@ -314,11 +424,43 @@ export function PlatformAccounts() {
       })),
       currentIndex: 0,
       phase: 'starting',
-    })
+      deadlineAt: Date.now() + BATCH_CHECK_DEADLINE_MS,
+    }
+    batchDetectionRef.current = nextBatch
+    setBatchDetection(nextBatch)
   }
 
-  const mutateAttempt = attemptMutation.mutate
-  const resetAttempt = attemptMutation.reset
+  useEffect(() => {
+    if (batchDetection === null) {
+      return
+    }
+
+    const remaining = batchDetection.deadlineAt - Date.now()
+    if (remaining <= 0) {
+      stopBatch('检查失败，请稍后重试。', batchDetection)
+      return
+    }
+
+    const timer = window.setTimeout(
+      () => stopBatch('检查失败，请稍后重试。', batchDetection),
+      remaining,
+    )
+    return () => window.clearTimeout(timer)
+  }, [batchDetection, stopBatch])
+
+  useEffect(() => {
+    if (batchDetection === null) {
+      return
+    }
+    if (healthState.status !== 'connected' || connectionsQuery.error) {
+      stopBatch(
+        connectionsQuery.error instanceof PlatformConnectionApiError
+          ? connectionsQuery.error.message
+          : '无法连接本地服务，请确认服务已启动。',
+        batchDetection,
+      )
+    }
+  }, [batchDetection, connectionsQuery.error, healthState.status, stopBatch])
 
   useEffect(() => {
     if (batchDetection === null) {
@@ -327,6 +469,7 @@ export function PlatformAccounts() {
 
     const current = batchDetection.platforms[batchDetection.currentIndex]
     if (current === undefined) {
+      batchDetectionRef.current = null
       setBatchDetection(null)
       return
     }
@@ -348,10 +491,58 @@ export function PlatformAccounts() {
               : activeBatch,
           )
         },
-        onError: () => {
-          setBatchDetection((activeBatch) =>
-            activeBatch?.runId === batchDetection.runId ? null : activeBatch,
+        onError: (error) => {
+          const expectedStep: BatchStep = batchDetection
+          const canSkipPlatform =
+            error instanceof PlatformConnectionApiError &&
+            (error.code === 'platform_not_found' ||
+              error.code === 'platform_not_available')
+          if (!canSkipPlatform) {
+            stopBatch(null, expectedStep)
+            return
+          }
+          const activeBatch = batchDetectionRef.current
+          if (
+            activeBatch === null ||
+            activeBatch.runId !== expectedStep.runId ||
+            activeBatch.currentIndex !== expectedStep.currentIndex
+          ) {
+            return
+          }
+
+          queryClient.setQueryData(
+            PLATFORM_CONNECTIONS_QUERY_KEY,
+            (snapshot: { platforms: PlatformConnection[] } | undefined) => {
+              if (snapshot === undefined) {
+                return snapshot
+              }
+              return {
+                platforms: snapshot.platforms.map((connection) =>
+                  connection.platform === current.platform
+                    ? {
+                        ...connection,
+                        status: 'failed' as const,
+                        guidance: 'retry' as const,
+                        active_attempt_id: null,
+                      }
+                    : connection,
+                ),
+              }
+            },
           )
+          setBatchMessage(error.message)
+          setBatchDetection((activeBatch) => {
+            if (
+              activeBatch?.runId !== expectedStep.runId ||
+              activeBatch.currentIndex !== expectedStep.currentIndex
+            ) {
+              return activeBatch
+            }
+            const nextIndex = activeBatch.currentIndex + 1
+            return nextIndex < activeBatch.platforms.length
+              ? { ...activeBatch, currentIndex: nextIndex, phase: 'starting' }
+              : null
+          })
         },
       })
       return
@@ -380,11 +571,21 @@ export function PlatformAccounts() {
         ? { ...activeBatch, currentIndex: nextIndex, phase: 'starting' }
         : null
     })
-  }, [batchDetection, mutateAttempt, platforms, resetAttempt])
+  }, [batchDetection, mutateAttempt, platforms, resetAttempt, stopBatch])
 
   const retryPlatformState = () => {
     retryHealth()
     void connectionsQuery.refetch()
+  }
+
+  const openBrowser = (platform?: PlatformId) => {
+    if (operationActive || healthState.status !== 'connected') {
+      return
+    }
+    attemptMutation.reset()
+    browserMutation.reset()
+    setBatchMessage(null)
+    browserMutation.mutate(platform)
   }
 
   return (
@@ -408,15 +609,29 @@ export function PlatformAccounts() {
                   {batchProgress}
                 </div>
               )}
-              <Button
-                type="button"
-                size="sm"
-                className="ml-auto min-h-11 min-w-24 sm:min-h-7"
-                disabled={batchUnavailable}
-                onClick={startBatchDetection}
-              >
-                {batchDetection === null ? '一键检测' : '检测中…'}
-              </Button>
+              <div className="ml-auto flex flex-wrap justify-end gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  className="min-h-11 min-w-32 sm:min-h-7"
+                  disabled={
+                    operationActive || healthState.status !== 'connected'
+                  }
+                  onClick={() => openBrowser()}
+                >
+                  {browserMutation.isPending ? '打开中…' : '打开专用浏览器'}
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="min-h-11 min-w-24 sm:min-h-7"
+                  disabled={batchUnavailable}
+                  onClick={startBatchDetection}
+                >
+                  {batchDetection === null ? '检查全部' : '检查中…'}
+                </Button>
+              </div>
             </div>
           </CardHeader>
 
@@ -479,6 +694,7 @@ export function PlatformAccounts() {
                   connection={connection}
                   operationActive={operationActive}
                   serviceAvailable={healthState.status === 'connected'}
+                  onOpen={openBrowser}
                   onStart={startAttempt}
                 />
               ))}

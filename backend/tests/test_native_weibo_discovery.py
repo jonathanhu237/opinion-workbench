@@ -12,9 +12,11 @@ from test_search_runs import _wait_for_terminal
 
 from longtian_api.main import create_app
 from longtian_api.services.ai_settings import AISettingsService
+from longtian_api.services.collector_contracts import AuthWorkerResult
 from longtian_api.services.monitoring_rules import MonitoringRuleService
 from longtian_api.services.native_weibo import (
     NativeWeiboCollector,
+    _classify_connection_page,
     _generic_detail_text,
 )
 from longtian_api.services.platform_connections import PlatformConnectionService
@@ -103,8 +105,7 @@ def test_plain_browser_403_is_not_security_verification_without_evidence():
 
 def test_generic_detail_text_rejects_page_chrome_and_untrusted_metadata():
     root = document(
-        '<meta property="og:description" content="搜索摘要">'
-        "<main>导航 推荐内容</main>"
+        '<meta property="og:description" content="搜索摘要"><main>导航 推荐内容</main>'
     )
     assert _generic_detail_text(root) == ("", False)
 
@@ -112,7 +113,7 @@ def test_generic_detail_text_rejects_page_chrome_and_untrusted_metadata():
 def test_generic_detail_text_marks_limits_and_preserves_quoted_attribution():
     root = document(
         '<div class="post-content">自己的正文 '
-        '<blockquote>被引用的原文</blockquote></div>'
+        "<blockquote>被引用的原文</blockquote></div>"
     )
     body, truncated = _generic_detail_text(root, max_chars=20)
     assert body == "自己的正文\n\n【转发附带原帖】\n被引用的"
@@ -147,20 +148,25 @@ class BrowserFixture:
 
     def __init__(self, pages):
         self.pages = deque(pages)
+        self.check_pages = deque(pages)
         self.visits = []
+        self.check_visits = []
         self.html = ""
+        self.check_html = ""
         self.url = "about:blank"
-        self.frozen = True
+        self.check_url = "about:blank"
         self.closed = False
+        self.check_closed = False
+        self.page_present = False
         self.block_at = None
+        self.check_block = False
         self.entered = asyncio.Event()
         self.fronted = False
 
-    async def start(self, *, max_requests):
-        self.frozen = False
+    async def start(self):
+        self.page_present = True
 
     async def navigate(self, url):
-        assert not self.frozen
         self.visits.append(url)
         if len(self.visits) == self.block_at:
             self.entered.set()
@@ -174,14 +180,30 @@ class BrowserFixture:
     async def snapshot(self):
         return self.url, self.html, 200
 
-    async def freeze(self):
-        self.frozen = True
+    async def start_check_page(self):
+        self.check_closed = False
+
+    async def navigate_check(self, url):
+        self.check_visits.append(url)
+        if self.check_block:
+            self.entered.set()
+            await asyncio.Event().wait()
+        self.check_url = url
+        self.check_html = self.check_pages.popleft()
+
+    async def snapshot_check(self):
+        return self.check_url, self.check_html, 200
+
+    async def close_check_page(self):
+        self.check_closed = True
 
     async def show(self):
-        self.frozen = False
+        self.fronted = True
+        self.page_present = True
 
     async def close_page(self):
-        self.frozen = True
+        self.closed = True
+        self.page_present = False
 
     async def shutdown(self):
         self.closed = True
@@ -206,6 +228,218 @@ def environment(tmp_path, pages, *, model=None, **runtime_options):
         ),
     )
     return app, browser
+
+
+def test_open_browser_is_separate_from_login_status_check(tmp_path):
+    logged_in = '<header><a href="/u/123456">退出</a></header>'
+    app, browser = environment(tmp_path, [logged_in])
+    with TestClient(app) as client:
+        opened = client.post("/api/v1/platform-connections/browser")
+        assert opened.status_code == 200
+        assert opened.json() == {"outcome": "opened_homepage"}
+        assert browser.visits == []
+
+        started = client.post("/api/v1/platform-connections/wb/attempts")
+        assert started.status_code == 202
+        for _ in range(30):
+            connection = client.get("/api/v1/platform-connections").json()["platforms"][
+                0
+            ]
+            if connection["status"] != "checking":
+                break
+            client.portal.call(asyncio.sleep, 0.01)
+
+    assert connection["status"] == "connected"
+    assert browser.check_visits == ["https://weibo.com/"]
+    assert browser.check_closed
+    assert browser.fronted
+
+
+def test_open_browser_reuses_existing_window_and_reopens_after_close(tmp_path):
+    app, browser = environment(tmp_path, [EMPTY])
+    with TestClient(app) as client:
+        first = client.post("/api/v1/platform-connections/browser")
+        second = client.post("/api/v1/platform-connections/browser")
+        assert first.json() == {"outcome": "opened_homepage"}
+        assert second.json() == {"outcome": "opened_existing"}
+
+        client.portal.call(browser.close_page)
+        reopened = client.post("/api/v1/platform-connections/browser")
+        assert reopened.json() == {"outcome": "opened_homepage"}
+
+    assert browser.closed
+
+
+def test_open_platform_browser_navigates_only_the_selected_homepage(tmp_path):
+    app, browser = environment(tmp_path, [EMPTY, EMPTY])
+    with TestClient(app) as client:
+        douyin = client.post("/api/v1/platform-connections/dy/browser")
+        assert douyin.status_code == 200
+        assert douyin.json() == {"outcome": "opened_homepage"}
+        xiaohongshu = client.post("/api/v1/platform-connections/xhs/browser")
+        assert xiaohongshu.status_code == 200
+        assert xiaohongshu.json() == {"outcome": "opened_existing"}
+        unknown = client.post("/api/v1/platform-connections/unknown/browser")
+        assert unknown.status_code == 404
+        assert unknown.json()["detail"]["code"] == "platform_not_found"
+
+    assert browser.visits == [
+        "https://www.douyin.com/",
+    ]
+
+
+def test_open_browser_failure_is_sanitized_and_releases_admission(tmp_path):
+    app, browser = environment(tmp_path, [EMPTY])
+
+    async def fail_show():
+        from longtian_api.services.native_browser_contracts import BrowserUnavailable
+
+        raise BrowserUnavailable()
+
+    browser.show = fail_show
+    with TestClient(app) as client:
+        failed = client.post("/api/v1/platform-connections/browser")
+        assert failed.status_code == 503
+        assert failed.json() == {
+            "detail": {
+                "code": "browser_open_failed",
+                "message": "专用浏览器打开失败，请重试。",
+            }
+        }
+
+        # The failed opener must release the shared browser admission.  Restore
+        # the real async method before retrying the same service instance.
+        async def recover_show():
+            browser.fronted = True
+            browser.page_present = True
+
+        browser.show = recover_show
+        recovered = client.post("/api/v1/platform-connections/browser")
+        assert recovered.status_code == 200
+
+
+def test_login_status_check_finishes_as_not_logged_in_without_waiting(tmp_path):
+    login_page = '<form>请先登录<input type="password"></form>'
+    app, browser = environment(tmp_path, [login_page])
+    with TestClient(app) as client:
+        assert client.post("/api/v1/platform-connections/browser").status_code == 200
+        started = client.post("/api/v1/platform-connections/wb/attempts")
+        assert started.status_code == 202
+        for _ in range(30):
+            connection = client.get("/api/v1/platform-connections").json()["platforms"][
+                0
+            ]
+            if connection["status"] != "checking":
+                break
+            client.portal.call(asyncio.sleep, 0.01)
+
+    assert connection["status"] == "disconnected"
+    assert connection["guidance"] == "retry"
+    assert browser.check_closed
+
+
+def test_login_status_check_requires_an_open_managed_browser(tmp_path):
+    app, browser = environment(tmp_path, [EMPTY])
+    browser.available = False
+    with TestClient(app) as client:
+        response = client.post("/api/v1/platform-connections/wb/attempts")
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "browser_not_open"
+    assert browser.check_visits == []
+
+
+@pytest.mark.parametrize(
+    ("platform", "marker"),
+    [
+        ("wb", '<a href="/u/123456">我的主页</a>'),
+        ("dy", "创作中心"),
+        ("ks", "创作者服务"),
+        ("xhs", "发布笔记"),
+        ("toutiao", "发布文章"),
+    ],
+)
+def test_platform_specific_authenticated_markers_are_connected(platform, marker):
+    result = _classify_connection_page(
+        platform,
+        f"https://example.test/{platform}",
+        f"<main>{marker}</main>",
+        200,
+    )
+    assert result == AuthWorkerResult("connected", "none")
+
+
+@pytest.mark.parametrize(
+    ("platform", "marker"),
+    [
+        ("wb", '<a href="/u/123456">我的主页</a>'),
+        ("dy", "创作中心"),
+        ("ks", "创作者服务"),
+        ("xhs", "发布笔记"),
+        ("toutiao", "发布文章"),
+    ],
+)
+def test_http_error_with_authenticated_shell_marker_is_not_connected(platform, marker):
+    result = _classify_connection_page(
+        platform,
+        f"https://example.test/{platform}",
+        f"<main>{marker}</main>",
+        500,
+    )
+    assert result == AuthWorkerResult("failed", "check_failed")
+
+
+@pytest.mark.parametrize(
+    ("url", "raw"),
+    [
+        ("https://weibo.com/", "<header><a>登录</a></header>"),
+        ("https://weibo.com/", "<main>请登录</main>"),
+        ("https://weibo.com/login", "<main>登录</main>"),
+    ],
+)
+def test_weibo_compact_anonymous_shell_is_not_logged_in(url, raw):
+    result = _classify_connection_page("wb", url, raw, 200)
+    assert result == AuthWorkerResult("disconnected", "login_required")
+
+
+def test_platform_challenge_wins_over_authenticated_shell_marker():
+    result = _classify_connection_page(
+        "xhs",
+        "https://www.xiaohongshu.com/",
+        "<title>安全验证</title><main>创作中心</main>",
+        200,
+    )
+    assert result == AuthWorkerResult("failed", "manual_challenge")
+
+
+def test_browser_disconnect_marks_connected_rows_as_requiring_reopen(tmp_path):
+    app, browser = environment(tmp_path, [EMPTY])
+    with TestClient(app) as client:
+        service = app.state.platform_connection_service
+        service._connections["wb"] = service._connections["wb"].model_copy(
+            update={"status": "connected", "guidance": "none"}
+        )
+        client.portal.call(service._invalidate_connected, None)
+        connection = client.get("/api/v1/platform-connections").json()["platforms"][0]
+
+    assert connection["status"] == "failed"
+    assert connection["guidance"] == "retry_browser"
+
+
+def test_login_status_check_timeout_covers_navigation_and_cleans_check_page():
+    async def run():
+        browser = BrowserFixture([EMPTY])
+        browser.check_block = True
+        collector = NativeWeiboCollector(browser=browser, check_timeout_seconds=0.01)
+        result = await asyncio.wait_for(
+            collector.check(request_id="request", platform="wb"),
+            timeout=0.2,
+        )
+        return result, browser
+
+    result, browser = asyncio.run(run())
+    assert result == AuthWorkerResult("failed", "check_failed")
+    assert browser.check_closed
 
 
 def collect(client, limit=1):
@@ -250,7 +484,6 @@ def test_native_discovery_saves_aliases_across_terms_and_runs_without_analysis(
         assert all(
             url.startswith("https://s.weibo.com/weibo?") for url in browser.visits
         )
-        assert browser.frozen
     assert browser.closed
 
 
@@ -346,7 +579,6 @@ def test_native_discovery_marks_unresolved_view_all_keyword_and_continues(
         detail = client.get(f"/api/v1/search-runs/{run['id']}").json()
         assert detail["incomplete_terms"] == run["incomplete_terms"]
         assert len(browser.visits) == 7
-        assert browser.frozen
 
 
 def test_batch_finishes_with_incomplete_coverage_instead_of_pausing(
@@ -384,7 +616,6 @@ def test_batch_finishes_with_incomplete_coverage_instead_of_pausing(
         )
         assert batch["items"][0]["status"] == "completed"
         assert batch["items"][0]["latest_attempt"]["run"]["incomplete_terms"]
-        assert browser.frozen
 
 
 def test_all_incomplete_keywords_are_not_reported_as_successful_empty(
@@ -476,7 +707,7 @@ def test_incomplete_keyword_remains_visible_after_later_manual_pause_and_resume(
         assert finished["items"][0]["incomplete_terms"][0]["term"] == "龙田街道"
 
 
-def test_native_connection_check_brings_owned_browser_to_front(tmp_path):
+def test_native_connection_check_does_not_foreground_the_login_page(tmp_path):
     logged_in = '<header><a href="/u/123456">已登录</a></header>'
     app, browser = environment(tmp_path, [logged_in] * 5)
     with TestClient(app) as client:
@@ -490,7 +721,7 @@ def test_native_connection_check_brings_owned_browser_to_front(tmp_path):
                 break
             client.portal.call(asyncio.sleep, 0.01)
         assert connection["status"] == "connected"
-    assert browser.fronted
+    assert not browser.fronted
 
 
 def test_native_connection_accepts_user_marker_with_hidden_login_markup(tmp_path):
@@ -510,7 +741,7 @@ def test_native_connection_accepts_user_marker_with_hidden_login_markup(tmp_path
                 break
             client.portal.call(asyncio.sleep, 0.01)
         assert connection["status"] == "connected"
-    assert browser.fronted
+    assert not browser.fronted
 
 
 def test_search_budget_stops_instead_of_silently_reducing_configured_work(tmp_path):
@@ -522,7 +753,6 @@ def test_search_budget_stops_instead_of_silently_reducing_configured_work(tmp_pa
         assert run["max_results_per_term"] == 50
         assert run["new_count"] == 1
         assert len(browser.visits) == 1
-        assert browser.frozen
         assert client.get(f"/api/v1/search-runs/{run['id']}").json() == run
 
 
@@ -558,7 +788,6 @@ def test_native_page_states_are_not_mistaken_for_empty_results(
         assert (run["status"], run["failure_reason"]) == (status, reason)
         assert run["total_count"] == 0
         assert len(browser.visits) == (5 if status == "completed_empty" else 1)
-        assert browser.frozen
 
 
 def test_security_pause_keeps_discoveries_and_requires_explicit_continue(tmp_path):
@@ -578,7 +807,6 @@ def test_security_pause_keeps_discoveries_and_requires_explicit_continue(tmp_pat
         paused = _wait_for_batch(client, identity, {"paused_for_manual_action"})
         assert paused["items"][0]["completed_term_count"] == 1
         assert paused["items"][0]["new_count"] == 1
-        assert browser.frozen
         control = _control(client, identity)
         shown = client.post(
             f"/api/v1/search-batches/{identity}/manual-page", json=control
@@ -633,7 +861,6 @@ def test_cancel_stops_browser_work_and_keeps_saved_discoveries(tmp_path):
         assert cancelled.status_code == 202
         run = _wait_for_terminal(client, identity)
         assert (run["status"], run["new_count"]) == ("cancelled", 1)
-        assert browser.frozen
         assert len(browser.visits) == 2
         assert (
             client.get(f"/api/v1/search-runs/{identity}/results").json()["total"] == 1
@@ -672,7 +899,7 @@ def test_rediscovery_of_a_failed_summary_is_repeated_and_does_not_retry_analysis
         assert len(browser.visits) == 10
 
 
-def test_batch_keeps_the_browser_budget_cause_for_manual_recovery(tmp_path):
+def test_batch_keeps_the_page_budget_cause_in_failed_platform(tmp_path):
     app, _ = environment(tmp_path, [CARD], max_pages=1)
     with TestClient(app) as client:
         created = client.post(
@@ -684,7 +911,7 @@ def test_batch_keeps_the_browser_budget_cause_for_manual_recovery(tmp_path):
             },
         )
         paused = _wait_for_batch(
-            client, created.json()["id"], {"paused_for_manual_action"}
+            client, created.json()["id"], {"completed_with_failures"}
         )
         run = paused["items"][0]["latest_attempt"]["run"]
         assert (run["status"], run["execution_limit"]) == ("timed_out", "pages")

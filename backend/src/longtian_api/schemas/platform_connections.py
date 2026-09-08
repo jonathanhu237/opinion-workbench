@@ -24,12 +24,15 @@ PlatformConnectionGuidance = Literal[
     "enable_remote_debugging",
     "approve_connection",
     "complete_login",
+    "complete_verification",
     "retry",
 ]
 PlatformConnectionErrorCode = Literal[
     "platform_not_found",
     "platform_not_available",
     "connection_attempt_active",
+    "browser_not_open",
+    "browser_open_failed",
 ]
 
 
@@ -53,6 +56,8 @@ class PlatformConnection(BaseModel):
             raise ValueError("starting_browser guidance requires checking status")
         if self.guidance == "retry_browser" and self.status != "failed":
             raise ValueError("retry_browser guidance requires failed status")
+        if self.guidance == "complete_verification" and self.status != "failed":
+            raise ValueError("complete_verification guidance requires failed status")
         return self
 
 
@@ -71,6 +76,14 @@ class PlatformConnectionAttemptResponse(BaseModel):
 
     attempt_id: UUID
     platform: PlatformConnection
+
+
+class PlatformBrowserResponse(BaseModel):
+    """Result of explicitly opening the project-owned browser window."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    outcome: Literal["opened_homepage", "opened_existing"]
 
 
 class PlatformConnectionErrorDetail(BaseModel):

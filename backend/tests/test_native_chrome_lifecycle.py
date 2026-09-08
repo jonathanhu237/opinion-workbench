@@ -138,14 +138,15 @@ class ChromeSDK:
     def __init__(self, profile):
         self.profile = profile
         self.launches = []
-        self.approved = []
-        self.denied = []
+        self.routes = []
+        self.commands = []
+        self.visits = []
+        self.contents = []
         self.events = {}
         self.url = "about:blank"
         self.returncode = None
         self.page_closed = False
         self.stopped = False
-        self.extra_url = None
         self.contexts = [self]
         self.chromium = self
 
@@ -200,31 +201,23 @@ class ChromeSDK:
     async def new_cdp_session(self, page):
         return self
 
+    async def route(self, *args):
+        self.routes.append(args)
+
     async def route_web_socket(self, *args):
-        pass
+        self.routes.append(args)
 
     async def send(self, method, params=None):
-        if method == "Fetch.continueRequest":
-            self.approved.append(params["requestId"])
-        if method == "Fetch.failRequest":
-            self.denied.append(params["requestId"])
+        self.commands.append(method)
 
     async def goto(self, url, **kwargs):
         self.url = url
-        for suffix in ("document", "image-1", "image-2"):
-            self.events["Fetch.requestPaused"](
-                {
-                    "requestId": url + ":" + suffix,
-                    "request": {"url": url},
-                }
-            )
-        if self.extra_url:
-            self.events["Fetch.requestPaused"](
-                {
-                    "requestId": "out-of-scope",
-                    "request": {"url": self.extra_url},
-                }
-            )
+        self.visits.append(url)
+        await asyncio.sleep(0)
+
+    async def set_content(self, html, **kwargs):
+        self.contents.append(html)
+        self.url = "about:blank"
         await asyncio.sleep(0)
 
     async def content(self):
@@ -244,7 +237,7 @@ def test_shutdown_settles_owned_process_even_when_sdk_cleanup_fails(tmp_path, fa
             playwright_factory=lambda: sdk,
             control_timeout_seconds=0.02,
         )
-        await browser.start(max_requests=5)
+        await browser.start()
         if fault == "driver_stop":
 
             async def fail():
@@ -271,7 +264,7 @@ def test_shutdown_settles_owned_process_even_when_sdk_cleanup_fails(tmp_path, fa
     asyncio.run(run())
 
 
-def test_browser_request_budget_preserves_first_page_and_owns_only_dedicated_process(
+def test_collection_uses_normal_browser_loading_and_owns_only_dedicated_process(
     tmp_path,
 ):
     profile = tmp_path / "runtime/browser/managed-chrome"
@@ -282,7 +275,7 @@ def test_browser_request_budget_preserves_first_page_and_owns_only_dedicated_pro
     browser = ManagedChrome(
         profile=profile, launcher=chrome.launch, playwright_factory=lambda: chrome
     )
-    runtime = NativeWeiboCollector(browser=browser, delay_seconds=0, max_requests=4)
+    runtime = NativeWeiboCollector(browser=browser, delay_seconds=0)
     app = create_app(
         platform_connection_service_factory=lambda: PlatformConnectionService(
             collector_factory=lambda **kwargs: runtime
@@ -302,20 +295,45 @@ def test_browser_request_budget_preserves_first_page_and_owns_only_dedicated_pro
         )
         run = _wait_for_terminal(client, created.json()["id"])
         assert (run["status"], run["execution_limit"], run["new_count"]) == (
-            "timed_out",
-            "requests",
+            "completed_with_results",
+            None,
             1,
         )
-        assert len(chrome.approved) == 4
-        assert len(chrome.denied) == 2
+        assert chrome.visits
+        assert not chrome.routes
+        assert not chrome.commands
+        assert "popup" not in chrome.events
     assert marker.read_text() == "synthetic marker, not a real session"
     assert chrome.returncode == 0 and chrome.stopped
     assert len(chrome.launches) == 1
     args, options = chrome.launches[0]
     assert f"--user-data-dir={profile}" in args
     assert "--remote-debugging-address=127.0.0.1" in args
-    assert "--no-startup-window" in args
+    # The managed browser must create a visible native window so the user can
+    # complete login and security challenges in the same profile that the
+    # collector controls.
+    assert "--no-startup-window" not in args
     assert not any("headless" in arg or "AutomationControlled" in arg for arg in args)
+
+
+def test_first_browser_window_shows_a_blank_tab(tmp_path):
+    async def run():
+        profile = tmp_path / "runtime/browser/managed-chrome"
+        chrome = ChromeSDK(profile)
+        browser = ManagedChrome(
+            profile=profile, launcher=chrome.launch, playwright_factory=lambda: chrome
+        )
+        try:
+            await browser.show()
+            assert chrome.contents == []
+            assert chrome.visits == []
+            await browser.show()
+            assert chrome.contents == []
+            assert chrome.visits == []
+        finally:
+            await browser.shutdown()
+
+    asyncio.run(run())
 
 
 @pytest.mark.parametrize("obstacle", ["symlink", "non_private", "owned"])
@@ -359,7 +377,7 @@ def test_unsafe_or_already_owned_profile_is_not_repaired_or_launched(
 
 def test_legacy_collector_backend_is_rejected(tmp_path, monkeypatch):
     monkeypatch.setenv("LONGTIAN_COLLECTOR_BACKEND", "legacy")
-    with pytest.raises(ValueError, match="Only the native Weibo collector"):
+    with pytest.raises(ValueError, match="Unsupported collector backend"):
         PlatformConnectionService(
             browser_profile_dir=tmp_path / "runtime" / "browser" / "managed-chrome"
         )
@@ -368,38 +386,57 @@ def test_legacy_collector_backend_is_rejected(tmp_path, monkeypatch):
 @pytest.mark.parametrize(
     "external",
     [
-        "https://www.xiaohongshu.com/explore/123",
+        "https://unrelated.example/explore/123",
         "http://127.0.0.1:8000/api/v1/results",
         "https://weibo.com.attacker.invalid/",
     ],
 )
-def test_native_page_cannot_issue_requests_outside_the_reviewed_weibo_hosts(
-    tmp_path, external
-):
-    profile = tmp_path / "runtime/browser/managed-chrome"
-    chrome = ChromeSDK(profile)
-    chrome.extra_url = external
-    browser = ManagedChrome(
-        profile=profile, launcher=chrome.launch, playwright_factory=lambda: chrome
-    )
-    runtime = NativeWeiboCollector(browser=browser, delay_seconds=0, max_pages=1)
-    app = create_app(
-        platform_connection_service_factory=lambda: PlatformConnectionService(
-            collector_factory=lambda **kwargs: runtime
-        ),
-        monitoring_rule_service_factory=lambda: MonitoringRuleService(
-            database_path=tmp_path / "db.sqlite3"
-        ),
-    )
-    with TestClient(app) as client:
-        created = client.post(
-            "/api/v1/search-runs",
-            json={
-                "monitoring_rule_id": 1,
-                "platform": "wb",
-                "max_results_per_term": 1,
-            },
+def test_application_navigation_stays_on_selected_platforms(tmp_path, external):
+    from longtian_api.services.native_browser_contracts import BrowserUnavailable
+
+    async def run():
+        profile = tmp_path / "runtime/browser/managed-chrome"
+        chrome = ChromeSDK(profile)
+        browser = ManagedChrome(
+            profile=profile, launcher=chrome.launch, playwright_factory=lambda: chrome
         )
-        _wait_for_terminal(client, created.json()["id"])
-    assert "out-of-scope" not in chrome.approved
-    assert "out-of-scope" in chrome.denied
+        try:
+            await browser.start()
+            with pytest.raises(BrowserUnavailable):
+                await browser.navigate(external)
+            assert not chrome.visits
+            assert not chrome.routes
+        finally:
+            await browser.shutdown()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("authenticated", [False, True])
+def test_login_completion_or_timeout_keeps_the_page_usable(tmp_path, authenticated):
+    from uuid import uuid4
+
+    async def run():
+        profile = tmp_path / "runtime/browser/managed-chrome"
+        chrome = ChromeSDK(profile)
+
+        async def content():
+            return "<main>我的主页</main>" if authenticated else "<main>扫码登录</main>"
+
+        chrome.content = content
+        browser = ManagedChrome(
+            profile=profile, launcher=chrome.launch, playwright_factory=lambda: chrome
+        )
+        runtime = NativeWeiboCollector(browser=browser, timeout_seconds=0.02)
+        try:
+            result = await runtime.check(request_id=uuid4(), platform="dy")
+            assert result.outcome == ("connected" if authenticated else "disconnected")
+            assert browser.page_present
+            assert not chrome.routes
+            assert not chrome.commands
+            assert "popup" not in chrome.events
+            await browser.snapshot()
+        finally:
+            await browser.shutdown()
+
+    asyncio.run(run())
