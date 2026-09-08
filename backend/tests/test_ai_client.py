@@ -64,6 +64,57 @@ async def public_resolver(_host, _port):
     return ("8.8.8.8",)
 
 
+@pytest.mark.parametrize(
+    "base_url,model,system,expected",
+    [
+        (
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "qwen3.8-max",
+            "仅输出严格JSON",
+            True,
+        ),
+        (
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "qwen3.8-max-0902",
+            "仅输出严格JSON",
+            True,
+        ),
+        (
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "qwen3.8-max",
+            "只回答OK",
+            False,
+        ),
+        ("https://api.example.com/v1", "qwen3.8-max", "严格JSON", False),
+        (
+            "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "other-model",
+            "严格JSON",
+            False,
+        ),
+    ],
+)
+def test_verified_qwen_structured_requests_bound_thinking(
+    base_url, model, system, expected
+):
+    configuration = AIConfiguration(base_url, model, 3, SecretStr(KEY))
+    payload = json.loads(
+        encode_completion_request(
+            configuration,
+            messages=[{"role": "system", "content": system}],
+            max_tokens=4096,
+        )
+    )
+    assert payload["max_tokens"] == 4096
+    if expected:
+        assert payload["enable_thinking"] is True
+        assert payload["thinking_budget"] == 1024
+        assert payload["response_format"] == {"type": "json_object"}
+    else:
+        assert "enable_thinking" not in payload
+        assert "thinking_budget" not in payload
+
+
 def test_synthetic_payload_pins_destination_tls_host_and_has_explicit_bounds(caplog):
     requests = []
     stream = Chunks([COMPLETE])
@@ -350,6 +401,104 @@ def test_nonpublic_or_mixed_dns_answers_never_receive_a_credential(addresses):
 
 
 @pytest.mark.parametrize(
+    "answers,expected_calls,allowed",
+    [
+        (["198.18.1.229", "8.8.8.8"], 2, True),
+        (["198.18.1.229"] * 3, 3, False),
+        (["127.0.0.1"], 1, False),
+    ],
+)
+def test_synthetic_dns_retry_never_sends_to_nonpublic_address(
+    monkeypatch, answers, expected_calls, allowed
+):
+    sent = []
+
+    def respond(request):
+        assert request.url.host == "8.8.8.8"
+        sent.append(request)
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=Chunks([COMPLETE]),
+        )
+
+    async def run():
+        lookup = AsyncMock(
+            side_effect=[[(2, 1, 6, "", (address, 443))] for address in answers]
+        )
+        monkeypatch.setattr(asyncio.get_running_loop(), "getaddrinfo", lookup)
+        client = AIClient(transport=httpx.MockTransport(respond))
+        try:
+            if allowed:
+                await client.test_connection(CONFIGURATION)
+            else:
+                with pytest.raises(AIError, match="ai_destination_forbidden"):
+                    await client.test_connection(CONFIGURATION)
+            assert lookup.await_count == expected_calls
+            assert len(sent) == int(allowed)
+        finally:
+            await client.aclose()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    "addresses,expired,other_host,allowed",
+    [
+        (("198.18.1.229",), False, False, True),
+        (("198.18.1.229",), True, False, False),
+        (("198.18.1.229",), False, True, False),
+        (("127.0.0.1",), False, False, False),
+        (("8.8.8.8", "198.18.1.229"), False, False, False),
+    ],
+)
+def test_public_dns_cache_is_bounded_and_only_bridges_synthetic_answers(
+    addresses, expired, other_host, allowed
+):
+    sent = []
+
+    def respond(request):
+        assert request.url.host == "8.8.8.8"
+        assert request.headers["host"] == "api.example.com"
+        assert request.extensions["sni_hostname"] == "api.example.com"
+        sent.append(request)
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=Chunks([COMPLETE]),
+        )
+
+    async def run():
+        client = AIClient(
+            transport=httpx.MockTransport(respond),
+            resolver=AsyncMock(side_effect=[("8.8.8.8",), addresses]),
+        )
+        try:
+            await client.test_connection(CONFIGURATION)
+            cached = client._public_destination
+            if expired:
+                client._public_destination = (*cached[:3], 0)
+            configuration = (
+                AIConfiguration(
+                    "https://other.example.com/v1", "test-model", 3, SecretStr(KEY)
+                )
+                if other_host
+                else CONFIGURATION
+            )
+            if allowed:
+                await client.test_connection(configuration)
+                assert client._public_destination == cached
+            else:
+                with pytest.raises(AIError, match="ai_destination_forbidden"):
+                    await client.test_connection(configuration)
+            assert len(sent) == 1 + int(allowed)
+        finally:
+            await client.aclose()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
     "url",
     [
         "http://api.example.com",
@@ -629,3 +778,116 @@ def test_cancelled_typed_completion_closes_stream_and_does_not_retry():
 
     asyncio.run(run())
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize(
+    "base", ["https://api.deepseek.com", "https://api.deepseek.com/v1"]
+)
+@pytest.mark.parametrize("model", ["deepseek-v4-pro", "deepseek-v4-flash"])
+def test_deepseek_uses_its_verified_text_json_protocol(base, model):
+    configuration = AIConfiguration(base, model, 1, SecretStr(KEY))
+    payload = json.loads(
+        encode_completion_request(
+            configuration,
+            messages=[{"role": "system", "content": "输出 JSON"}],
+            max_tokens=4096,
+        )
+    )
+    assert payload["thinking"] == {"type": "disabled"}
+    assert payload["response_format"] == {"type": "json_object"}
+    assert "modalities" not in payload
+    assert "enable_thinking" not in payload
+    assert "thinking_budget" not in payload
+    probe = json.loads(
+        encode_completion_request(
+            configuration,
+            messages=[{"role": "user", "content": "Reply OK"}],
+            max_tokens=16,
+        )
+    )
+    assert "response_format" not in probe
+
+
+@pytest.mark.parametrize(
+    "base,model",
+    [
+        ("https://api.example.com/v1", "deepseek-v4-pro"),
+        ("https://api.deepseek.com", "unknown-model"),
+    ],
+)
+def test_deepseek_extensions_do_not_change_other_compatible_configurations(base, model):
+    payload = json.loads(
+        encode_completion_request(
+            AIConfiguration(base, model, 1, SecretStr(KEY)),
+            messages=[{"role": "system", "content": "输出 JSON"}],
+            max_tokens=4096,
+        )
+    )
+    assert "thinking" not in payload
+    assert "response_format" not in payload
+    assert payload["modalities"] == ["text"]
+
+
+@pytest.mark.parametrize(
+    "addresses,expected",
+    [
+        (["8.8.8.8"], ("8.8.8.8",)),
+        (["127.0.0.1"], ()),
+        (["8.8.8.8", "198.18.4.118"], ()),
+    ],
+)
+def test_provider_https_dns_validates_public_answers_without_credentials(
+    monkeypatch, addresses, expected
+):
+    original = httpx.AsyncClient
+
+    def respond(request):
+        assert request.url.host == "1.1.1.1"
+        assert request.url.params["name"] == "api.deepseek.com"
+        assert "authorization" not in request.headers
+        return httpx.Response(
+            200,
+            json={
+                "Status": 0,
+                "TC": False,
+                "Question": [{"name": "api.deepseek.com", "type": 1}],
+                "Answer": [{"type": 1, "data": address} for address in addresses],
+            },
+        )
+
+    def client(**kwargs):
+        assert kwargs["trust_env"] is False
+        assert kwargs["follow_redirects"] is False
+        return original(transport=httpx.MockTransport(respond), **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", client)
+    assert (
+        asyncio.run(ai_client._resolve_provider_dns_https("api.deepseek.com"))
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    "host,addresses,called",
+    [
+        ("api.deepseek.com", ["198.18.4.118"], True),
+        ("api.deepseek.com", ["127.0.0.1"], False),
+        ("api.deepseek.com", ["8.8.8.8", "198.18.4.118"], False),
+        ("custom.example.com", ["198.18.4.118"], False),
+    ],
+)
+def test_https_dns_fallback_only_for_known_provider_with_all_fake_ip(
+    monkeypatch, host, addresses, called
+):
+    async def run():
+        lookup = AsyncMock(
+            return_value=[(2, 1, 6, "", (address, 443)) for address in addresses]
+        )
+        fallback = AsyncMock(return_value=("8.8.8.8",))
+        monkeypatch.setattr(asyncio.get_running_loop(), "getaddrinfo", lookup)
+        monkeypatch.setattr(ai_client, "_resolve_provider_dns_https", fallback)
+        actual = await ai_client.resolve_public_addresses(host, 443)
+        assert bool(fallback.await_count) == called
+        assert actual == (("8.8.8.8",) if called else tuple(addresses))
+
+    asyncio.run(run())

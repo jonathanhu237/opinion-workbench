@@ -327,13 +327,10 @@ def test_retry_after_engine_upgrade_recomputes_without_touching_saved_reports(
     async def run():
         db, initial, reports, ai, model, worker, _ = environment(tmp_path, count=2)
         with monkeypatch.context() as old:
-            for module in (
-                "longtian_api.services.topic_report_engine",
-                "longtian_api.services.topic_reports",
-                "longtian_api.repositories.topic_reports",
-            ):
+            for constant in ("ENGINE_VERSION", "OVERVIEW_ENGINE_VERSION"):
                 old.setattr(
-                    f"{module}.ENGINE_VERSION", "topic-text-engine-v2-citations"
+                    f"longtian_api.services.topic_report_engine.{constant}",
+                    "topic-text-engine-v2-citations",
                 )
             _, original = await analyse_all(db, initial, reports)
         baseline = len(worker.calls), model.counts["initial"]
@@ -547,6 +544,27 @@ def test_invalid_transport_usage_stays_unknown_and_history_readable(
                 (report.id,),
             ).fetchall()
             assert all(row[0] == 1 and row[1] is None for row in rows)
+        await initial.shutdown()
+        await reports.shutdown()
+        await ai.shutdown()
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("stage", ["judgment", "leaf", "overview"])
+def test_report_retains_concrete_model_output_failure_instead_of_internal_error(
+    tmp_path, stage
+):
+    async def run():
+        db, initial, reports, ai, model, *_ = environment(tmp_path, count=9)
+        model.answers[stage] = ["{}", "{}"]
+        _, report = await analyse_all(db, initial, reports)
+        assert report.status == "failed"
+        assert report.error.code == "invalid_schema"
+        assert report.error.message == "模型返回的分析格式不正确，请重新生成汇总。"
+        assert report.error.stage == (
+            "analysis" if stage == "judgment" else "composition"
+        )
         await initial.shutdown()
         await reports.shutdown()
         await ai.shutdown()

@@ -1,6 +1,8 @@
 """Independent report queue: saved text only, existing provider lease/transport."""
 
 import asyncio
+import json
+import logging
 from datetime import datetime
 
 from longtian_api.repositories.topic_reports import (
@@ -17,8 +19,8 @@ from longtian_api.services.model_retry import RETRYABLE_OUTPUT_ERRORS
 from longtian_api.services.settled_tasks import database_call, settle
 from longtian_api.services.summary_errors import FAILURE_MESSAGES, failure
 from longtian_api.services.topic_report_engine import (
-    ENGINE_VERSION,
     check_request,
+    engine_version,
     parse_completion,
     prepare_judgment,
     take_leaf,
@@ -285,7 +287,10 @@ class TopicReportService:
                             error.code,
                         ),
                     )
-                except Exception:
+                except Exception as error:
+                    logging.getLogger(__name__).warning(
+                        "Report execution failed: %s", type(error).__name__
+                    )
                     # A bounded per-report failure must not abandon a later
                     # independently admitted intent in this same owned queue.
                     await database_call(
@@ -342,7 +347,8 @@ class TopicReportService:
                 self.repository.finish,
                 report.id,
                 "failed",
-                error=failure("analysis", "internal_error"),
+                error=await database_call(self.repository.first_node_failure, report.id)
+                or failure("analysis", "internal_error"),
             )
             return
         if progress.coverage.relevant == 0:
@@ -378,7 +384,8 @@ class TopicReportService:
                 self.repository.finish,
                 report.id,
                 "failed",
-                error=failure("composition", "internal_error"),
+                error=await database_call(self.repository.first_node_failure, report.id)
+                or failure("composition", "internal_error"),
             )
             return
         current = []
@@ -424,7 +431,10 @@ class TopicReportService:
                     self.repository.finish,
                     report.id,
                     "failed",
-                    error=failure("composition", "internal_error"),
+                    error=await database_call(
+                        self.repository.first_node_failure, report.id
+                    )
+                    or failure("composition", "internal_error"),
                 )
                 return
             current = next_level
@@ -482,7 +492,7 @@ class TopicReportService:
                 self.repository.prepare,
                 node_id,
                 call,
-                ENGINE_VERSION,
+                engine_version(call.kind),
                 proof.request_hash,
             )
             candidate = await database_call(
@@ -490,7 +500,9 @@ class TopicReportService:
             )
             # An old engine's request hash cannot be reconstructed by the new
             # engine. Version changes are cache misses, not storage corruption.
-            if candidate is not None and candidate["engine_version"] == ENGINE_VERSION:
+            if candidate is not None and candidate["engine_version"] == engine_version(
+                call.kind
+            ):
                 original_context = await database_call(
                     self.repository.frozen_context, candidate["report_id"]
                 )
@@ -515,14 +527,15 @@ class TopicReportService:
                     )
                     return
             await database_call(self.repository.mark_attempt, node_id)
+            messages = [
+                {"role": "system", "content": call.system_text},
+                {"role": "user", "content": call.user_text},
+            ]
             for attempt_number in range(2):
                 usage = None
                 completion = await self._ai.complete(
                     configuration,
-                    messages=[
-                        {"role": "system", "content": call.system_text},
-                        {"role": "user", "content": call.user_text},
-                    ],
+                    messages=messages,
                     max_tokens=call.max_tokens,
                     deadline=call.deadline_seconds,
                 )
@@ -538,6 +551,30 @@ class TopicReportService:
                     if attempt_number or error.code not in RETRYABLE_OUTPUT_ERRORS:
                         raise
                     await database_call(self.repository.mark_retry, node_id, usage)
+                    # Keep the frozen evidence and writing contract unchanged.
+                    # A bounded, application-owned diagnostic makes the one
+                    # output retry corrective instead of repeating blindly.
+                    correction = {
+                        "validation_error": error.code,
+                        "instruction": (
+                            "前一次输出未通过校验。请根据相同材料重新输出完整JSON，"
+                            "遵守既有格式、逐段引用与事件合并要求，不新增材料或事实。"
+                            "overview和text中禁止写来源123等编号注释，来源编号只写入source_ids数组。"
+                        ),
+                    }
+                    if call.kind == "leaf":
+                        correction["required_source_ids"] = list(call.source_ids)
+                        correction["citation_rule"] = (
+                            "以上每个来源编号必须至少出现在一个items条目的source_ids中，"
+                            "同一事件合并文字并合并来源编号，不遗漏，也不添加其他编号。"
+                        )
+                    messages = [
+                        *messages,
+                        {
+                            "role": "user",
+                            "content": json.dumps(correction, ensure_ascii=False),
+                        },
+                    ]
             await database_call(
                 self.repository.finish_node, node_id, output=output, usage=usage
             )
@@ -551,6 +588,9 @@ class TopicReportService:
                 usage=observed_usage(error.usage) or usage,
             )
         except AIError as error:
+            logging.getLogger(__name__).warning(
+                "Report provider rejected: %s", error.code
+            )
             code = error.code if error.code in FAILURE_MESSAGES else "internal_error"
             await database_call(
                 self.repository.finish_node,

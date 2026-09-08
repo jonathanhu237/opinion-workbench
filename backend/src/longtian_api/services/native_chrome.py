@@ -396,6 +396,92 @@ class ManagedChrome:
         except Exception:
             raise BrowserUnavailable() from None
 
+    async def prefer_latest_search(self, platform):
+        """Best-effort public search controls; reload default search on failure."""
+        if platform not in {"xhs", "dy"}:
+            return False
+        self._check()
+        page = self._page
+        original_url = page.url
+        host = urlsplit(original_url).hostname
+        if host != {"xhs": "www.xiaohongshu.com", "dy": "www.douyin.com"}[platform]:
+            return False
+        selector = (
+            "section.note-item" if platform == "xhs" else '[id^="waterfall_item_"]'
+        )
+        signature = """els => els.map(e =>
+            e.id || e.querySelector('a[href]')?.getAttribute('href') || '')"""
+        try:
+            async with asyncio.timeout(12):
+                await page.locator(selector).first.wait_for(
+                    state="visible", timeout=4000
+                )
+                await page.get_by_text("筛选", exact=True).first.hover(timeout=3000)
+                option = page.get_by_text(
+                    "最新" if platform == "xhs" else "最新发布", exact=True
+                ).last
+                await option.wait_for(state="visible", timeout=2000)
+                before = await page.locator(selector).evaluate_all(signature)
+                await option.click(timeout=2000)
+                # Do not admit the old comprehensive results while the site
+                # asynchronously replaces them after the click.
+                await page.wait_for_function(
+                    """({selector, before}) => {
+                        const cards = [...document.querySelectorAll(selector)];
+                        return cards.length > 0 &&
+                            JSON.stringify(cards.map(e => e.id ||
+                                e.querySelector('a[href]')?.getAttribute('href') ||
+                                '')) !==
+                            JSON.stringify(before);
+                    }""",
+                    arg={"selector": selector, "before": before},
+                    timeout=5000,
+                )
+                return True
+        except Exception:
+            self._check()
+            await self.navigate(original_url)
+            return False
+
+    async def wait_detail_update(self):
+        self._check()
+        await asyncio.sleep(0.25)
+        self._check()
+
+    async def open_xhs_search_result(self, search_url, content_id):
+        """Follow the selected rendered card; keep access parameters in Chrome."""
+        if (
+            urlsplit(search_url).hostname != "www.xiaohongshu.com"
+            or urlsplit(search_url).path != "/search_result"
+            or re.fullmatch(r"[0-9a-f]{24}", content_id) is None
+        ):
+            return False
+        await self.navigate(search_url)
+        page = self._page
+        card = page.locator(f'section.note-item a.cover[href*="/{content_id}"]').first
+        try:
+            async with asyncio.timeout(60):
+                for latest, attempts in ((False, 3), (True, 8)):
+                    if latest:
+                        # Discovery can use newest-first cards that are absent
+                        # from the first comprehensive result window. Retry
+                        # that public sort before declaring the note missing.
+                        await self.prefer_latest_search("xhs")
+                    for attempt in range(attempts):
+                        try:
+                            await card.wait_for(state="visible", timeout=3000)
+                            await card.click(timeout=3000)
+                            return True
+                        except Exception:
+                            self._check()
+                            if attempt + 1 < attempts:
+                                await page.locator(
+                                    "section.note-item"
+                                ).last.scroll_into_view_if_needed(timeout=2000)
+        except Exception:
+            self._check()
+        return False
+
     async def weibo_cookies(self):
         """Runtime-only, scoped ephemeral credentials for the owned HTTP broker."""
         await self._ensure()

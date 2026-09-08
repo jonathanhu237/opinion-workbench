@@ -35,9 +35,9 @@ from longtian_api.services.ai_client import (
 )
 from longtian_api.services.ai_errors import AIError
 from longtian_api.services.topic_report_engine import (
-    ENGINE_VERSION,
     canonical_hash,
     check_request,
+    engine_version,
     output_digest,
     parse_completion,
     prepare_judgment,
@@ -204,7 +204,7 @@ def parsed(kind, answer=None):
 
 def saved_output(call, output):
     return CompletedOutput(
-        engine_version=ENGINE_VERSION,
+        engine_version=engine_version(call.kind),
         input_hash=call.input_hash,
         output_hash=output.output_hash,
         output=output.output,
@@ -1094,3 +1094,23 @@ def test_all_functions_are_synchronous_no_io(monkeypatch):
             == result
         )
         canonical_hash({"safe": "text"})
+
+
+@pytest.mark.parametrize("ending", ["，", "、", "：", "“"])
+def test_overview_rejects_obviously_unfinished_prose(ending):
+    answer = answer_for("overview")
+    answer["items"][0]["text"] = "材料反映龙田街道相关事项" + ending
+    with pytest.raises(AIAnalysisError) as exc:
+        parsed("overview", answer)
+    assert exc.value.code == "invalid_schema"
+
+
+@pytest.mark.parametrize(
+    "text", ["来源170称发生该事件。", "来源为168、169。", "来源编号181。"]
+)
+def test_overview_rejects_internal_source_number_annotations(text):
+    answer = answer_for("overview")
+    answer["items"][0]["text"] = text
+    with pytest.raises(AIAnalysisError) as exc:
+        parsed("overview", answer)
+    assert exc.value.code == "invalid_schema"

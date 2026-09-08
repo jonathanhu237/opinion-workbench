@@ -59,6 +59,14 @@ from longtian_api.services.ai_client import (
 from longtian_api.services.ai_errors import AIError
 
 ENGINE_VERSION = "topic-text-engine-v4-event-prose"
+OVERVIEW_ENGINE_VERSION = "topic-text-engine-v8-reader-overview"
+
+
+def engine_version(kind: NodeKind) -> str:
+    # Changing the overview writing budget must not invalidate already verified
+    # source judgments and detailed leaves. Each stage retains its own proof.
+    return OVERVIEW_ENGINE_VERSION if kind == "overview" else ENGINE_VERSION
+
 
 _EVENT_WRITING_CONTRACT = """报告按事件组织，而不是逐条帖子罗列。
 同一事件只写一个items条目，将事实陈述、时间地点、相关文字证据和待核实事项简洁整合在该条目中；不要拆成重复的文字段落或把待核实内容写成事实。
@@ -100,6 +108,19 @@ _OUTPUT_CONTRACTS: dict[NodeKind, str] = {
         "根据子节items中的文字及source_ids归纳，每段只引用直接支持本段论述的具体来源，"
         "不得复制整个子节的全部来源。不同事件分段，不能把堵路来源引用到电费等无关段落。"
         "source_ids必须从输入children的items中的source_ids选择，逐层保留真实来源编号。"
+        "总览是供快速阅读的精简摘要，详细证据与完整叙述已保留在子节中，不要逐段重写子节。"
+        "先通读全部children，按事件而非子节或来源建立分组，再选择最需要关注的6至10个事件；不足6个时按实际事件数。"
+        "同一项目名称的全称、简称或省略后缀可能指向同一事件，必须结合地点和经过核对。"
+        "同一楼盘的延期、验收及交付进展应在同一段按时间串联，合并该事件来源编号。"
+        "输出前逐段核对：同一事件只能出现一次，不能先写完整名称再另起一段写简称。"
+        "其余事件保留在详细子节中，不必逐一重复到总览，也不能为凑数量合并无关事件。"
+        "写作长度目标：overview为80至150字，每项text为60至100字，全部文字合计不超过1800字。"
+        "每个事件只保留核心事实、必要时间地点、来源归属及关键待核实事项；不要重复铺陈共同限制。"
+        "overview用完整句子概括主要问题与材料局限，不罗列所有事件名称。"
+        "正文用平台名称、媒体名称或来源反映来归属事实；严禁写来源168、来源为168、来源编号168等内部编号注释。"
+        "所有整数来源编号只出现在source_ids数组，不出现在overview或text中。"
+        "每段必须是完整句子并以句号、问号或叹号结束，不能在逗号或引用开头截断。"
+        "优先转述事实；如需原文引用，使用中文引号，不要使用未转义的英文双引号。"
         "不凭概述创造新事实，不输出URL。"
     ),
 }
@@ -239,7 +260,7 @@ def _prepare(
         raise AIAnalysisError("input", "request_too_large")
     max_tokens = ANALYSIS_MAX_TOKENS if kind == "judgment" else SUMMARY_MAX_TOKENS
     manifest = {
-        "engine_version": ENGINE_VERSION,
+        "engine_version": engine_version(kind),
         "schema_version": REPORT_SCHEMA_VERSION,
         "kind": kind,
         "key": key,
@@ -504,7 +525,7 @@ def _validate_output(
             "Report %s output schema rejected: %s",
             call.kind,
             [
-                entry["type"]
+                (entry["loc"], entry["type"])
                 for entry in error.errors(include_input=False, include_context=False)
             ],
         )
@@ -545,6 +566,16 @@ def _validate_output(
         # Enforce the neutral report-writing contract, not a guessed author
         # count. Never silently rewrite a provider's accepted saved prose.
         raise AIAnalysisError("schema", "invalid_schema", usage)
+    if call.kind == "overview" and any(
+        re.search(r"来源(?:为|编号|[（(])?\s*[0-9]+(?![0-9年月日])", text)
+        for text in prose
+    ):
+        raise AIAnalysisError("schema", "invalid_schema", usage)
+    if call.kind == "overview" and any(
+        text.rstrip().endswith(("，", ",", "：", ":", "、", "；", ";", "“"))
+        for text in prose
+    ):
+        raise AIAnalysisError("schema", "invalid_schema", usage)
     for text in prose:
         check_credential(text, api_key, usage)
     return ValidatedOutput(
@@ -575,7 +606,10 @@ def validate_reuse(
     call = _checked_call(call)
     if not isinstance(saved, CompletedOutput):
         raise AIAnalysisError("schema", "invalid_schema")
-    if saved.engine_version != ENGINE_VERSION or saved.input_hash != call.input_hash:
+    if (
+        saved.engine_version != engine_version(call.kind)
+        or saved.input_hash != call.input_hash
+    ):
         return None
     try:
         fresh = CompletedOutput.model_validate(saved.model_dump(warnings=False))

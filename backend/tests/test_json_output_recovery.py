@@ -290,3 +290,43 @@ def test_stop_during_output_retry_keeps_first_usage_without_more_calls(tmp_path,
             await ai.shutdown()
 
     asyncio.run(run())
+
+
+def test_leaf_retry_supplies_citation_error_and_exact_required_sources(tmp_path):
+    app, database, model, media = api_environment(tmp_path, count=1)
+    save_body(database, 1)
+    original = model.complete
+
+    async def needs_feedback(*args, **kwargs):
+        messages = kwargs["messages"]
+        user = messages[1]["content"]
+        payload = json.loads(user) if isinstance(user, str) else {}
+        if "sources" in payload and len(messages) == 2:
+            model.answers["leaf"] = [
+                {
+                    "overview": "来源称有相关情况。",
+                    "items": [{"text": "相关情况尚未核实。", "source_ids": [999]}],
+                }
+            ]
+        return await original(*args, **kwargs)
+
+    model.complete = needs_feedback
+    # The API fixture binds the transport method during construction.
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        app.state.ai_settings_service._client.complete = needs_feedback
+        saved(client)
+        admitted = client.post(
+            "/api/v1/report-generations", json=generation_request([1])
+        )
+        client.portal.call(finish, app.state.report_generation_service)
+        result = client.get(
+            f"/api/v1/report-generations/{admitted.json()['id']}"
+        ).json()
+        assert result["status"] == "completed"
+        attempts = [messages for stage, messages in model.calls if stage == "leaf"]
+        assert len(attempts) == 2
+        assert attempts[0] == attempts[1][:2]
+        feedback = json.loads(attempts[1][-1]["content"])
+        assert feedback["validation_error"] == "invalid_citations"
+        assert feedback["required_source_ids"] == [1]
+        assert model.counts["initial"] == model.counts["judgment"] == 1

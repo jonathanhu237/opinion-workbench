@@ -154,11 +154,13 @@ class ContentAnalysisRepository(AnalysisRepository):
                 connection,
                 row["initial_prompt_version_id"],
                 mode=row["initial_prompt_mode"],
+                historical=row["status"] not in ("queued", "running"),
             ),
             report_prompt=read_prompt(
                 connection,
                 row["report_prompt_version_id"],
                 mode=row["report_prompt_mode"],
+                historical=row["status"] not in ("queued", "running"),
             ),
             force_refresh=bool(row["force_refresh"]),
             counts=AnalysisCounts(

@@ -29,6 +29,7 @@ def read_prompt(
     version_id: int,
     *,
     mode: str | None = None,
+    historical: bool = False,
 ) -> PromptVersion:
     row = connection.execute(
         "SELECT * FROM analysis_prompt_versions WHERE id=?", (version_id,)
@@ -70,7 +71,14 @@ def read_prompt(
     # A row marked as the built-in default must still contain the current
     # code-owned template; otherwise a corrupted/raw SQL update could make a
     # future operation silently execute custom text as the default.
-    if mode == "default" and prompt.instructions != default_instructions:
+    # Historical projections retain the frozen template that was the default
+    # at admission. Only new/executable snapshots must match today's template.
+    # Hash, schema and collision validation still apply to historical rows.
+    if (
+        mode == "default"
+        and prompt.instructions != default_instructions
+        and not historical
+    ):
         raise AnalysisError("analysis_storage_unavailable")
     # A collision is unsafe for every source mode: the same digest is part of
     # the cache key and execution proof, so reading either colliding row could

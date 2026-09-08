@@ -10,6 +10,8 @@ from topic_report_fixtures import api_environment, finish
 
 from longtian_api.repositories.analysis_shared import source_snapshot
 from longtian_api.repositories.content_materials import ContentMaterialRepository
+from longtian_api.schemas.report_generations import GenerationCreate
+from longtian_api.services import topic_report_engine
 from longtian_api.services.enrichment_models import EnrichedContent
 
 
@@ -84,6 +86,8 @@ def test_one_start_reuses_three_summaries_and_analyses_seven_saved_bodies(tmp_pa
         assert result["status"] == "completed", result
         assert result["analysis"]["counts"]["completed"] == 10
         assert result["analysis"]["counts"]["reused"] == 3
+        assert result["report"]["coverage"]["ready"] == 10
+        assert result["report"]["coverage"]["unavailable"] == 0
         assert len(media.calls) == baseline[0]
         assert model.counts["initial"] == baseline[1] + 7
         report_id = result["report"]["id"]
@@ -195,6 +199,34 @@ def save_body(database, content_id=1):
     )
 
 
+def test_new_generation_reacquires_saved_unavailable_text(tmp_path):
+    app, database, _, _ = api_environment(tmp_path, count=1)
+    save_body(database)
+    with database.connect() as connection:
+        raw = connection.execute(
+            "SELECT content_json FROM content_materials WHERE content_id=1"
+        ).fetchone()[0]
+    content = EnrichedContent.model_validate_json(raw).model_dump()
+    content["text"] = {"title": "", "body": "", "coverage": "unavailable"}
+    content["status"] = "partial"
+    content["issues"] = [{"code": "text_unavailable", "asset_position": None}]
+    ContentMaterialRepository(database).save(1, EnrichedContent.model_validate(content))
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        saved(client)
+        # Admission alone must leave this input open for a new acquisition.
+        generation = app.state.report_generation_service.repository.create_generation(
+            GenerationCreate.model_validate(generation_request([1]))
+        )
+        with database.connect() as connection:
+            attempt = connection.execute(
+                "SELECT input_json,status FROM content_analysis_attempts "
+                "WHERE job_id=?",
+                (generation.analysis.id,),
+            ).fetchone()
+        assert attempt["input_json"] is None
+        assert attempt["status"] == "queued"
+
+
 def test_never_started_stored_body_runs_offline_and_freezes_selection(tmp_path):
     app, database, model, media = api_environment(tmp_path, count=2)
     save_body(database)
@@ -241,3 +273,53 @@ def test_restart_preserves_interrupted_selection_without_automatic_model_retry(
         assert result["analysis"]["counts"]["interrupted"] == 1
         assert client.post("/api/v1/report-generations", json=intent).json() == result
         assert model.counts == baseline and not media.calls
+
+
+def test_overview_budget_upgrade_reuses_judgments_and_detailed_sections(
+    tmp_path, monkeypatch
+):
+    app, database, model, _ = api_environment(tmp_path, count=10)
+    for content_id in range(1, 11):
+        save_body(database, content_id)
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        saved(client)
+        with monkeypatch.context() as old_engine:
+            old_engine.setattr(
+                topic_report_engine,
+                "OVERVIEW_ENGINE_VERSION",
+                topic_report_engine.ENGINE_VERSION,
+            )
+            old_engine.setitem(
+                topic_report_engine._OUTPUT_CONTRACTS,
+                "overview",
+                topic_report_engine._OUTPUT_CONTRACTS["overview"] + "旧版写作预算。",
+            )
+            response = client.post(
+                "/api/v1/report-generations",
+                json=generation_request(list(range(1, 11))),
+            )
+            client.portal.call(finish, app.state.report_generation_service)
+            generation = client.get(
+                f"/api/v1/report-generations/{response.json()['id']}"
+            ).json()
+            parent = generation["report"]
+            assert parent["status"] == "completed"
+        before = model.counts.copy()
+        retry = client.post(
+            f"/api/v1/topic-reports/{parent['id']}/retry",
+            json={
+                "request_id": str(uuid4()),
+                "expected_revision": parent["revision"],
+                "configuration_revision": 1,
+            },
+        )
+        assert retry.status_code == 202, retry.text
+        client.portal.call(finish, app.state.topic_report_service)
+        report = client.get(f"/api/v1/topic-reports/{retry.json()['id']}").json()
+        assert report["status"] == "completed", report
+        assert report["nodes"]["judgments"]["reused"] == 10
+        assert report["nodes"]["composition"]["reused"] == 2
+        assert model.counts["initial"] == before["initial"]
+        assert model.counts["judgment"] == before["judgment"]
+        assert model.counts["leaf"] == before["leaf"]
+        assert model.counts["overview"] == before["overview"] + 1

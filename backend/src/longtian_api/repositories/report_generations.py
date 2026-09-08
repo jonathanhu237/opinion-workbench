@@ -452,12 +452,13 @@ class ReportGenerationRepository(AnalysisRepository):
                 connection.execute(
                     """UPDATE content_analysis_attempts SET status='completed',
                     input_json=?,input_fingerprint=?,output_json=?,reused_from_attempt_id=?,
-                    started_at=?,finished_at=? WHERE id=?""",
+                    analysis_input_version=?,started_at=?,finished_at=? WHERE id=?""",
                     (
                         cached["input_json"],
                         cached["input_fingerprint"],
                         cached["output_json"],
                         cached["id"],
+                        cached["analysis_input_version"],
                         timestamp(),
                         timestamp(),
                         attempt["id"],
@@ -484,7 +485,12 @@ class ReportGenerationRepository(AnalysisRepository):
                 ),
             ).fetchone()
         if material is not None:
-            SavedInput.model_validate_json(material["input_json"])
+            saved = SavedInput.model_validate_json(material["input_json"])
+            # A new explicit report attempt may reacquire previously missing
+            # text. Freezing an unavailable document would make a transient
+            # loading/access failure permanent, even after the adapter is fixed.
+            if saved.text.coverage == "unavailable":
+                return
             connection.execute(
                 """UPDATE content_analysis_attempts SET input_json=?,
                 input_fingerprint=? WHERE id=?""",

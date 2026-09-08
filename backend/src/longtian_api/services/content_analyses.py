@@ -2,7 +2,9 @@
 
 import asyncio
 import hashlib
+import logging
 import time
+import traceback
 from typing import cast
 from uuid import UUID
 
@@ -273,10 +275,16 @@ class ContentAnalysisService:
                         await asyncio.sleep(0.25)
                         continue
                     # Unsettled ownership cannot safely proceed to another item.
+                    logging.getLogger(__name__).error(
+                        "Analysis job %s acquisition stopped: %s", job.id, error.code
+                    )
                     await database_call(self.repository.finish, job.id, "interrupted")
-                except AnalysisError:
+                except AnalysisError as error:
                     # A storage write may have failed: settle history if possible,
                     # never retry an ambiguous model request automatically.
+                    logging.getLogger(__name__).error(
+                        "Analysis job %s storage stopped: %s", job.id, error.code
+                    )
                     await database_call(self.repository.finish, job.id, "interrupted")
                 self._active_id = None
         except asyncio.CancelledError:
@@ -287,7 +295,18 @@ class ContentAnalysisService:
                     "interrupted" if self._closed else "cancelled",
                 )
             raise
-        except Exception:
+        except Exception as error:
+            # Exception messages may contain source text or provider secrets.
+            # Keep only the type and code locations for operational diagnosis.
+            logging.getLogger(__name__).error(
+                "Analysis job %s stopped (%s): %s",
+                self._active_id,
+                type(error).__name__,
+                "; ".join(
+                    f"{frame.name}:{frame.lineno}"
+                    for frame in traceback.extract_tb(error.__traceback__)
+                ),
+            )
             if self._active_id is not None:
                 await database_call(
                     self.repository.finish, self._active_id, "interrupted"

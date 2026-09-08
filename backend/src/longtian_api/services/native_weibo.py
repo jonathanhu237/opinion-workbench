@@ -5,7 +5,7 @@ import hashlib
 import re
 from collections import deque
 from time import monotonic, time
-from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlsplit
+from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urljoin, urlsplit
 
 from longtian_api.search_platforms import is_valid_search_content_url
 from longtian_api.services.collector_contracts import (
@@ -66,7 +66,10 @@ _PLATFORM_HOME = {
 }
 _PLATFORM_SEARCH = {
     "toutiao": lambda term: (
-        "https://so.toutiao.com/search?keyword=" + urlencode({"": term})[1:]
+        # The site's 综合 tab is a web search and can contain only external
+        # sites. Its 资讯 tab exposes native article result links.
+        "https://so.toutiao.com/search?"
+        + urlencode({"keyword": term, "pd": "information"})
     ),
     "ks": lambda term: (
         "https://www.kuaishou.com/search/video?searchKey=" + urlencode({"": term})[1:]
@@ -88,9 +91,49 @@ _PLATFORM_HOSTS = {
 }
 
 
+def _toutiao_content_target(target):
+    """Unwrap public search links without following redirects or storing tokens."""
+    for _ in range(3):
+        try:
+            parts = urlsplit(target)
+            if (
+                parts.scheme != "https"
+                or parts.username
+                or parts.password
+                or parts.port not in (None, 443)
+                or parts.fragment
+            ):
+                return ""
+        except ValueError:
+            return ""
+        host = (parts.hostname or "").lower()
+        if host == "so.toutiao.com" and parts.path == "/search/jump":
+            values = parse_qs(parts.query).get("url", [])
+        elif host == "article.zlink.toutiao.com":
+            values = parse_qs(parts.query).get("h5_url", [])
+        else:
+            if host in {"toutiao.com", "www.toutiao.com"}:
+                match = re.fullmatch(r"/group/([0-9]{8,24})/?", parts.path)
+                if match:
+                    return f"https://www.toutiao.com/article/{match[1]}/"
+            if host == "weitoutiao.zjurl.cn":
+                match = re.fullmatch(
+                    r"/ugc/share/wap/thread/([0-9]{8,24})/?", parts.path
+                )
+                if match:
+                    return f"https://www.toutiao.com/w/{match[1]}/"
+            return target
+        if len(values) != 1:
+            return ""
+        target = values[0]
+    return ""
+
+
 def _generic_content_identity(platform, href, base):
     """Extract only canonical public links owned by the selected platform."""
     target = urljoin(base, href)
+    if platform == "toutiao":
+        target = _toutiao_content_target(target)
     try:
         parts = urlsplit(target)
         port = parts.port
@@ -113,7 +156,7 @@ def _generic_content_identity(platform, href, base):
         "toutiao": r"/(article|w|video)/([0-9]{8,24})/?$",
         "ks": r"/short-video/([A-Za-z0-9_-]+)/?$",
         "dy": r"/video/([0-9]+)/?$",
-        "xhs": r"/explore/([0-9a-f]{24})/?$",
+        "xhs": r"/(?:explore|search_result)/([0-9a-f]{24})/?$",
     }
     match = re.fullmatch(patterns[platform], parts.path)
     if not match:
@@ -167,7 +210,13 @@ def _read_generic_page(platform, url, raw, term, status=200):
     if status >= 400:
         return "structure_changed", ()
     title = " ".join(root.xpath("//title/text()"))[:300]
-    values = list(_read_douyin_cards(root, url)) if platform == "dy" else []
+    values = (
+        list(_read_douyin_cards(root, url))
+        if platform == "dy"
+        else list(_read_kuaishou_cards(root, url))
+        if platform == "ks"
+        else []
+    )
     seen = {item.content_id for item in values}
     for anchor in root.xpath("//a[@href]"):
         identity = _generic_content_identity(platform, anchor.get("href", ""), url)
@@ -196,17 +245,87 @@ def _read_generic_page(platform, url, raw, term, status=200):
         )
     if values:
         return "results", tuple(values)
-    if platform == "dy":
-        # An unloaded client-side search shell is not an empty result set.
-        # Only an explicit empty-state message proves that the term is empty.
-        empty_labels = {"暂无搜索结果", "没有找到相关内容", "未找到相关结果"}
-        if any(
-            text_of(node).strip() in empty_labels
-            for node in root.xpath("//main//*[not(*)] | //*[@role='main']//*[not(*)]")
-        ):
-            return "empty", ()
-        return "pending", ()
-    return "empty", ()
+    # An unloaded or unsupported result page is never proof of an empty term.
+    # This applies to all client-rendered platforms, not just Douyin.
+    empty_labels = {"暂无搜索结果", "没有找到相关内容", "未找到相关结果"}
+    if any(
+        text_of(node).strip() in empty_labels
+        for node in root.xpath(
+            "//main//*[not(*)] | //*[@role='main']//*[not(*)] | "
+            "//*[contains(@class,'empty') or contains(@class,'no-result')]//*[not(*)]"
+        )
+    ):
+        return "empty", ()
+    return "pending", ()
+
+
+def _read_kuaishou_cards(root, url):
+    """Read current public search cards and their cover's content identifier."""
+    parts = urlsplit(url)
+    if parts.hostname != "www.kuaishou.com" or parts.path != "/search/video":
+        return ()
+    values = []
+    seen = set()
+    for card in root.xpath(
+        "//*[contains(concat(' ',normalize-space(@class),' '),' video-list ')]"
+        "//*[contains(concat(' ',normalize-space(@class),' '),' photo-card ')]"
+    ):
+        covers = card.xpath(".//img[contains(@class,'cover-img')]/@src")
+        if not covers:
+            continue
+        try:
+            cover = urlsplit(covers[0])
+            host = cover.hostname or ""
+            if cover.scheme != "https" or not any(
+                host.endswith("." + domain) for domain in ("yximgs.com", "kwimgs.com")
+            ):
+                continue
+            keys = parse_qs(cover.query).get("clientCacheKey", [])
+        except ValueError:
+            continue
+        # The public thumbnail names the same ID as /short-video/<id>.
+        # No image is downloaded; reject unknown filename formats.
+        match = (
+            re.fullmatch(r"([A-Za-z0-9]{15})(?:_ccc)?\.jpg", keys[0])
+            if len(keys) == 1
+            else None
+        )
+        if not match or match[1] in seen:
+            continue
+        identity = _generic_content_identity("ks", f"/short-video/{match[1]}", url)
+        captions = card.xpath(
+            ".//*[contains(concat(' ',normalize-space(@class),' '),' caption ')]"
+        )
+        snippet = _clean_generic_text(text_of(captions[0]), 1000) if captions else ""
+        if identity is None or not snippet:
+            continue
+        names = card.xpath(
+            ".//*[contains(concat(' ',normalize-space(@class),' '),' name ')]"
+        )
+        publisher, creator_hash = _masked_publisher(
+            text_of(names[0]).strip() if names else ""
+        )
+        likes = card.xpath(
+            ".//*[contains(concat(' ',normalize-space(@class),' '),' like ')]"
+        )
+        count = _parse_generic_count(text_of(likes[0])) if likes else None
+        values.append(
+            SearchWorkerItem(
+                content_id=identity[0],
+                content_type=identity[1],
+                content_url=identity[2],
+                title=snippet[:300],
+                snippet=snippet,
+                publisher_name=publisher,
+                creator_hash=creator_hash,
+                published_at_text="",
+                discovered_at=int(time() * 1000),
+                hashtags=_generic_hashtags(captions[0]),
+                interaction_stats={"likes": count} if count is not None else {},
+            )
+        )
+        seen.add(identity[0])
+    return tuple(values)
 
 
 def _read_douyin_cards(root, url):
@@ -271,7 +390,36 @@ def _read_douyin_cards(root, url):
     return tuple(values)
 
 
-def _generic_signal_text(root):
+def _hidden_dom_node(node):
+    for ancestor in (node, *node.iterancestors()):
+        # Text tails can belong to lxml comment/processing-instruction nodes.
+        # Those nodes have no HTML attributes; their surrounding element still
+        # determines visibility.
+        if not isinstance(ancestor.tag, str):
+            continue
+        if (
+            ancestor.tag in {"script", "style", "template", "noscript"}
+            or "hidden" in ancestor.attrib
+            or ancestor.get("aria-hidden", "").lower() == "true"
+            or re.search(
+                r"(?:display\s*:\s*none|visibility\s*:\s*(?:hidden|collapse))",
+                ancestor.get("style", ""),
+                re.I,
+            )
+        ):
+            return True
+    return False
+
+
+def _visible_generic_text(node):
+    return " ".join(
+        str(value).strip()
+        for value in node.xpath(".//text()")
+        if not _hidden_dom_node(value.getparent()) and str(value).strip()
+    )
+
+
+def _generic_signal_text(root, *, include_title=True):
     """Return platform chrome used for barrier detection, excluding post text.
 
     A user's post can legitimately mention verification, login, or rate-limit
@@ -303,11 +451,13 @@ def _generic_signal_text(root):
     values = []
     seen = set()
     for node in nodes:
+        if _hidden_dom_node(node) or (node.tag == "title" and not include_title):
+            continue
         identity = id(node)
         if identity in seen:
             continue
         seen.add(identity)
-        value = _clean_generic_text(text_of(node), 2_000)
+        value = _clean_generic_text(_visible_generic_text(node), 2_000)
         if value:
             values.append(value)
     return " ".join(values)[:20_000]
@@ -321,11 +471,15 @@ def _clean_generic_text(value, limit):
 
 def _generic_card_text(anchor, page_title):
     """Prefer the nearest rendered result card over the search-page title."""
-    cards = anchor.xpath(
-        "ancestor::*[self::article or self::li or @role='article' or "
-        "contains(concat(' ', normalize-space(@class), ' '), ' card ')][1]"
-    )
-    card_text = _clean_generic_text(text_of(cards[0]), 1000) if cards else ""
+    card = _generic_card(anchor)
+    if "note-item" in card.get("class", "").split():
+        titles = card.xpath(
+            ".//*[contains(concat(' ',normalize-space(@class),' '),' title ')]"
+        )
+        # Image-only notes have no rendered caption. Do not substitute the
+        # author's name, counters or the search page title as their content.
+        return _clean_generic_text(text_of(titles[0]), 1000) if titles else ""
+    card_text = _clean_generic_text(text_of(card), 1000) if card is not anchor else ""
     anchor_text = _clean_generic_text(
         anchor.text_content() or anchor.get("title", ""), 1000
     )
@@ -334,13 +488,11 @@ def _generic_card_text(anchor, page_title):
 
 def _generic_publisher(anchor):
     """Read optional author metadata and apply the existing masked contract."""
-    cards = anchor.xpath(
-        "ancestor::*[self::article or self::li or @role='article' or "
-        "contains(concat(' ', normalize-space(@class), ' '), ' card ')][1]"
-    )
-    card = cards[0] if cards else anchor
+    card = _generic_card(anchor)
     values = []
     for query in (
+        ".//*[contains(concat(' ',normalize-space(@class),' '),' author ')]"
+        "//*[contains(concat(' ',normalize-space(@class),' '),' name ')]",
         ".//*[@data-author]/@data-author",
         ".//*[@data-user]/@data-user",
         ".//*[@itemprop='author']",
@@ -376,12 +528,15 @@ def _masked_publisher(name):
 
 
 def _generic_published_text(anchor):
-    cards = anchor.xpath(
-        "ancestor::*[self::article or self::li or @role='article' or "
-        "contains(concat(' ', normalize-space(@class), ' '), ' card ')][1]"
-    )
-    card = cards[0] if cards else anchor
+    card = _generic_card(anchor)
     values = card.xpath(".//time/@datetime | .//time/text()")
+    if "note-item" in card.get("class", "").split():
+        values.extend(
+            card.xpath(
+                ".//*[contains(concat(' ',normalize-space(@class),' '),' time ')]"
+                "/text()"
+            )
+        )
     for value in values:
         text = _clean_generic_text(value, 100)
         if text:
@@ -399,6 +554,8 @@ def _generic_published_text(anchor):
 def _generic_card(anchor):
     cards = anchor.xpath(
         "ancestor::*[self::article or self::li or @role='article' or "
+        "(self::section and "
+        "contains(concat(' ',normalize-space(@class),' '),' note-item ')) or "
         "contains(concat(' ', normalize-space(@class), ' '), ' card ')][1]"
     )
     return cards[0] if cards else anchor
@@ -462,6 +619,13 @@ def _generic_interaction_stats(anchor):
         "收藏": "favorites",
     }
     result = {}
+    if "note-item" in card.get("class", "").split():
+        counts = card.xpath(
+            ".//*[contains(@class,'like-wrapper')]"
+            "//*[contains(concat(' ',normalize-space(@class),' '),' count ')]/text()"
+        )
+        if counts and (count := _parse_generic_count(counts[0])) is not None:
+            result["likes"] = count
     for node in [card, *card.xpath(".//*")]:
         for key, raw in node.attrib.items():
             normalized = key.lower().replace("data-", "").replace("_", "-")
@@ -865,7 +1029,7 @@ class NativeWeiboCollector:
 
         The adapter deliberately uses rendered links and text only. It does
         not call private JSON endpoints or download media; unsupported DOM
-        changes become a bounded empty/incomplete result for that platform.
+        changes fail without confirming an empty result for that platform.
         """
         deadline = monotonic() + self.timeout_seconds
         found = False
@@ -911,9 +1075,39 @@ class NativeWeiboCollector:
                     if identity in visited:
                         return SearchWorkerResult("search_pagination_incompatible")
                     visited.add(identity)
-                    pages += 1
-                    await self.browser.navigate(url)
-                    current_url, raw, status = await self.browser.snapshot()
+                    # A loaded tab may briefly reject DOM reads during a slow
+                    # navigation. Retry once before admitting any records, only
+                    # while the same browser and page are still present.
+                    for navigation_attempt in range(2):
+                        if monotonic() >= deadline:
+                            return SearchWorkerResult(
+                                "timed_out", execution_limit="time"
+                            )
+                        if pages >= self.max_pages:
+                            return SearchWorkerResult(
+                                "timed_out", execution_limit="pages"
+                            )
+                        pages += 1
+                        try:
+                            await self.browser.navigate(url)
+                            prefer_latest = getattr(
+                                self.browser, "prefer_latest_search", None
+                            )
+                            if (
+                                self.latest_first
+                                and platform in {"xhs", "dy"}
+                                and prefer_latest is not None
+                            ):
+                                await prefer_latest(platform)
+                            current_url, raw, status = await self.browser.snapshot()
+                            break
+                        except BrowserUnavailable:
+                            if (
+                                navigation_attempt
+                                or not self.browser.available
+                                or not getattr(self.browser, "page_present", False)
+                            ):
+                                raise
                     state, items = _read_generic_page(
                         platform, current_url, raw, term, status
                     )
@@ -1160,15 +1354,72 @@ class NativeWeiboCollector:
                 return EnrichmentWorkerResult("content_unavailable")
             await self.browser.start()
             await self.browser.navigate(content_url)
-            url, raw, status = await self.browser.snapshot()
-            root = document(raw)
-            if root is None:
-                return EnrichmentWorkerResult("content_unavailable")
-            barrier_outcome = _generic_detail_barrier(url, root, status)
-            if barrier_outcome is not None:
-                return EnrichmentWorkerResult(barrier_outcome)
-            title = _generic_detail_title(root)
-            body, body_truncated = _generic_detail_text(root)
+            wait_update = getattr(self.browser, "wait_detail_update", None)
+            render_deadline = monotonic() + 12
+            search_fallback = False
+            while True:
+                try:
+                    url, raw, status = await self.browser.snapshot()
+                except BrowserUnavailable:
+                    # A client-side /video -> /note redirect can temporarily
+                    # invalidate a DOM read without losing the owned browser.
+                    if (
+                        callable(wait_update)
+                        and self.browser.available
+                        and getattr(self.browser, "page_present", False)
+                        and monotonic() < render_deadline
+                    ):
+                        await wait_update()
+                        continue
+                    raise
+                root = document(raw)
+                barrier_outcome = (
+                    _generic_detail_barrier(url, root, status)
+                    if root is not None
+                    else None
+                )
+                # XHS commonly requires the access context carried by its
+                # rendered search card. Follow only the matching content ID;
+                # never persist or reconstruct the transient access parameters.
+                open_search = getattr(self.browser, "open_xhs_search_result", None)
+                if (
+                    platform == "xhs"
+                    and barrier_outcome == "content_unavailable"
+                    and not search_fallback
+                    and callable(open_search)
+                ):
+                    search_fallback = True
+                    if await open_search(_PLATFORM_SEARCH["xhs"](term), content_id):
+                        render_deadline = monotonic() + 12
+                        continue
+                if barrier_outcome is not None:
+                    return EnrichmentWorkerResult(barrier_outcome)
+                title = _generic_detail_title(root) if root is not None else ""
+                body, body_truncated = (
+                    _generic_detail_text(root, platform=platform, content_id=content_id)
+                    if root is not None
+                    else ("", False)
+                )
+                article_needs_body = platform == "toutiao" and urlsplit(
+                    url
+                ).path.startswith("/article/")
+                xhs_title_ready = (
+                    platform == "xhs"
+                    and root is not None
+                    and bool(root.xpath("//*[@id='detail-title'][normalize-space()]"))
+                    and bool(root.xpath("//*[@id='detail-desc']"))
+                )
+                if body or (
+                    title
+                    and not article_needs_body
+                    and (platform != "xhs" or xhs_title_ready)
+                ):
+                    break
+                if not callable(wait_update):
+                    break
+                if monotonic() >= render_deadline:
+                    return EnrichmentWorkerResult("timed_out")
+                await wait_update()
             body_limit = max(0, budget.max_text_chars - len(title))
             if len(body) > body_limit:
                 body = body[:body_limit]
@@ -1399,24 +1650,33 @@ def _generic_detail_barrier(url, root, status):
         path = (urlsplit(url).path or "").lower()
     except ValueError:
         path = ""
+    if path == "/404" or path.startswith("/404/"):
+        return "content_unavailable"
     if path == "/login" or path.startswith("/login/") or path.endswith("/login"):
         return "login_required"
-    signal = _generic_signal_text(root)
+    has_post = bool(root.xpath(_generic_detail_container_query()))
+    signal = _generic_signal_text(root, include_title=not has_post)
     if status >= 400:
-        signal = " ".join((signal, _clean_generic_text(text_of(root), 20_000)))
+        signal = " ".join(
+            (signal, _clean_generic_text(_visible_generic_text(root), 20_000))
+        )
     # Bare 200 login/challenge shells may contain only a heading and text.
     # When no recognizable content container exists, the full document is a
     # safe fallback because there is no post body to misclassify.
-    if status < 400 and not root.xpath(_generic_detail_container_query()):
-        signal = " ".join((signal, _clean_generic_text(text_of(root), 20_000)))
+    if status < 400 and not has_post:
+        signal = " ".join(
+            (signal, _clean_generic_text(_visible_generic_text(root), 20_000))
+        )
     if any(word in signal for word in ("验证码", "安全验证", "人机验证", "滑动验证")):
         return "manual_challenge_required"
-    if status in (403, 429) or any(
+    if status == 429 or any(
         word in signal for word in ("访问频繁", "请求过于频繁", "稍后再试")
     ):
         return "platform_blocked_or_rate_limited"
     if any(word in signal for word in ("请登录", "登录后查看", "登录后继续")):
         return "login_required"
+    if status == 403:
+        return "access_denied"
     if status >= 400:
         return "content_unavailable"
     return None
@@ -1428,7 +1688,7 @@ def _normalize_generic_text(value):
     return " ".join(value.split())
 
 
-def _generic_detail_text(root, *, max_chars=20_000):
+def _generic_detail_text(root, *, max_chars=20_000, platform=None, content_id=None):
     """Return bounded post prose and whether the rendered text was truncated.
 
     Only dedicated post/article/caption containers are trusted.  Page-level
@@ -1436,7 +1696,22 @@ def _generic_detail_text(root, *, max_chars=20_000):
     copy, recommendations, or search excerpts, so they are intentionally
     treated as unavailable instead of being presented as original text.
     """
-    nodes = root.xpath(_generic_detail_container_query(include_main=False))
+    if platform == "xhs":
+        # The surrounding note container also includes author controls and
+        # comments. Only the selected note's caption is source prose.
+        nodes = root.xpath("//*[@id='detail-desc']")
+    elif platform == "ks":
+        nodes = root.xpath(
+            "//*[contains(concat(' ',normalize-space(@class),' '),"
+            "' video-info-title ')]"
+        )
+    elif platform == "dy" and content_id:
+        nodes = root.xpath(
+            "//*[@data-e2e='detail-video-info' and @data-e2e-aweme-id=$identity]//h1",
+            identity=content_id,
+        )
+    else:
+        nodes = root.xpath(_generic_detail_container_query(include_main=False))
     candidates = []
     seen = set()
     for node in nodes:
@@ -1517,6 +1792,7 @@ def _generic_detail_container_query(*, include_main=False):
             "feed-detail-content",
             "video-desc",
             "video-description",
+            "video-info-title",
             "caption",
             "content-body",
         )
@@ -1527,6 +1803,7 @@ def _generic_detail_container_query(*, include_main=False):
         "//*[@data-testid='video-desc'] | //*[@data-e2e='video-desc' or "
         "@data-e2e='feed-video-desc' or @data-e2e='note-content'] | "
         "//*[@id='detail-desc' or @id='noteContainer' or @id='article-content'] | "
+        "//*[@data-e2e='detail-video-info']//h1 | "
         "//*[" + class_terms + "]"
     )
     if include_main:

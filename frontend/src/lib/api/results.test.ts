@@ -18,6 +18,40 @@ describe('global result boundary', () => {
     vi.stubGlobal('fetch', fetchMock)
     fetchMock.mockReset()
   })
+  it.each([{}, { likes: 83 }, { comments: null, shares: 0 }])(
+    'accepts partial platform statistics without inventing missing counts: %j',
+    async (stats) => {
+      const result = resultFixture()
+      result.source.interaction_stats = stats
+      fetchMock.mockResolvedValue(
+        json({
+          items: [result],
+          total: 1,
+          offset: 0,
+          limit: 5,
+          eligible_count: 1,
+          active_count: 0,
+        }),
+      )
+      const page = await fetchResults({ offset: 0 }, signal, 5)
+      expect(page.items[0].source.interaction_stats).toEqual(stats)
+    },
+  )
+  it.each([{ likes: -1 }, { likes: '83' }, { unknown: 1 }])(
+    'still rejects invalid platform statistics: %j',
+    async (stats) => {
+      const result = resultFixture()
+      fetchMock.mockResolvedValue(
+        json({
+          ...result,
+          source: { ...result.source, interaction_stats: stats },
+        }),
+      )
+      await expect(fetchResult(result.id, signal)).rejects.toMatchObject({
+        code: 'invalid_response',
+      })
+    },
+  )
   it('keeps library eligibility counts independent from the filtered page', async () => {
     fetchMock.mockResolvedValue(
       json({

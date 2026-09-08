@@ -8,6 +8,7 @@ import asyncio
 import codecs
 import ipaddress
 import json
+import logging
 import math
 import re
 import socket
@@ -140,19 +141,41 @@ def encode_completion_request(
         payload["stream_options"] = {"include_usage": True}
     # Only the verified provider/model combination; arbitrary compatible
     # endpoints and the plain-text connectivity probe retain their protocol.
-    if (
-        configuration.base_url.rstrip("/")
-        == "https://dashscope.aliyuncs.com/compatible-mode/v1"
-        and configuration.model == "qwen3.5-omni-plus"
-        and any(
-            isinstance(message, dict)
-            and message.get("role") == "system"
+    if configuration.base_url.rstrip(
+        "/"
+    ) == "https://dashscope.aliyuncs.com/compatible-mode/v1" and any(
+        isinstance(message, dict)
+        and message.get("role") == "system"
+        and isinstance(message.get("content"), str)
+        and "json" in message["content"].lower()
+        for message in messages
+    ):
+        if configuration.model == "qwen3.5-omni-plus":
+            payload["response_format"] = {"type": "json_object"}
+        elif configuration.model in {"qwen3.8-max", "qwen3.8-max-0902"}:
+            # Qwen3.8 defaults to xhigh thinking; max_tokens bounds only the
+            # answer, so an otherwise bounded report can time out before it.
+            # The verified DashScope extension caps reasoning independently.
+            # https://help.aliyun.com/zh/model-studio/deep-thinking
+            payload["enable_thinking"] = True
+            payload["thinking_budget"] = 1024
+            payload["response_format"] = {"type": "json_object"}
+    if configuration.base_url.rstrip("/") in {
+        "https://api.deepseek.com",
+        "https://api.deepseek.com/v1",
+    } and configuration.model in {"deepseek-v4-pro", "deepseek-v4-flash"}:
+        # Official DeepSeek text completions use this thinking switch, not
+        # DashScope's enable_thinking/thinking_budget extension.
+        payload.pop("modalities", None)
+        payload["thinking"] = {"type": "disabled"}
+        if any(
+            message.get("role") == "system"
             and isinstance(message.get("content"), str)
             and "json" in message["content"].lower()
             for message in messages
-        )
-    ):
-        payload["response_format"] = {"type": "json_object"}
+            if isinstance(message, dict)
+        ):
+            payload["response_format"] = {"type": "json_object"}
     try:
         data = json.dumps(
             payload, ensure_ascii=False, separators=(",", ":"), allow_nan=False
@@ -233,12 +256,84 @@ def normalize_base_url(value: str) -> str:
 
 
 async def resolve_public_addresses(host: str, port: int) -> tuple[str, ...]:
-    answers = await asyncio.get_running_loop().getaddrinfo(
-        host,
-        port,
-        type=socket.SOCK_STREAM,
-    )
-    return tuple(dict.fromkeys(str(answer[4][0]) for answer in answers))
+    for attempt in range(3):
+        answers = await asyncio.get_running_loop().getaddrinfo(
+            host,
+            port,
+            type=socket.SOCK_STREAM,
+        )
+        addresses = tuple(dict.fromkeys(str(answer[4][0]) for answer in answers))
+        # Local DNS interceptors can briefly return synthetic benchmarking IPs
+        # during a network transition. Retry DNS only; never connect to these
+        # addresses or relax the public-address check at the call boundary.
+        if not _synthetic_dns_addresses(addresses):
+            return addresses
+        if attempt == 2:
+            # The local-first app may run behind a fake-IP DNS proxy. Resolve
+            # only known public provider names through a fixed TLS-verified
+            # public resolver; private/mixed answers never enter this fallback.
+            if host in {"api.deepseek.com", "dashscope.aliyuncs.com"}:
+                resolved = await _resolve_provider_dns_https(host)
+                if resolved:
+                    return resolved
+            return addresses
+        await asyncio.sleep(0.25 * (attempt + 1))
+    return ()
+
+
+async def _resolve_provider_dns_https(host: str) -> tuple[str, ...]:
+    # Fixed IP avoids recursively using the intercepted system resolver.
+    # This request contains only a public provider hostname, no model data/key.
+    try:
+        async with httpx.AsyncClient(
+            trust_env=False, follow_redirects=False, timeout=4.0
+        ) as client:
+            async with client.stream(
+                "GET",
+                "https://1.1.1.1/dns-query",
+                params={"name": host, "type": "A"},
+                headers={"Accept": "application/dns-json"},
+            ) as response:
+                if response.status_code != 200:
+                    return ()
+                body = bytearray()
+                async for chunk in response.aiter_bytes():
+                    body.extend(chunk)
+                    if len(body) > 16384:
+                        return ()
+        value = decode_model_json(body.decode())
+        if (
+            value.get("Status") != 0
+            or value.get("TC") is not False
+            or value.get("Question")
+            not in (
+                [{"name": host, "type": 1}],
+                [{"name": host + ".", "type": 1}],
+            )
+        ):
+            return ()
+        addresses = tuple(
+            dict.fromkeys(
+                item["data"]
+                for item in value.get("Answer", [])
+                if item.get("type") == 1
+            )
+        )
+        if addresses and all(is_public_address(item) for item in addresses):
+            return addresses
+    except (httpx.HTTPError, ValueError, TypeError, KeyError, AttributeError):
+        pass
+    return ()
+
+
+def _synthetic_dns_addresses(addresses: tuple[str, ...]) -> bool:
+    try:
+        return bool(addresses) and all(
+            ipaddress.ip_address(value) in ipaddress.ip_network("198.18.0.0/15")
+            for value in addresses
+        )
+    except ValueError:
+        return False
 
 
 class _TextStream:
@@ -383,6 +478,7 @@ class AIClient:
         ] = resolve_public_addresses,
     ) -> None:
         self._resolver = resolver
+        self._public_destination: tuple[str, int, tuple[str, ...], float] | None = None
         # Do not reuse TLS connections across different configured hosts that share
         # a pinned IP. No environment proxy, insecure TLS, or automatic retry path.
         self._http = httpx.AsyncClient(
@@ -403,7 +499,27 @@ class AIClient:
         )
 
     async def aclose(self) -> None:
+        self._public_destination = None
         await self._http.aclose()
+
+    async def _resolve_destination(self, host: str, port: int) -> tuple[str, ...]:
+        addresses = await self._resolver(host, port)
+        now = asyncio.get_running_loop().time()
+        if addresses and all(is_public_address(value) for value in addresses):
+            self._public_destination = (host, port, addresses, now + 60)
+        elif _synthetic_dns_addresses(addresses):
+            cached = self._public_destination
+            if cached is not None and cached[:2] == (host, port) and cached[3] > now:
+                # A short DNS cache can bridge a local fake-IP transition. It
+                # contains only previously validated public IPs for this exact
+                # authority. The cache expiry is never extended by a fallback;
+                # the connection still pins the IP and verifies the host's TLS.
+                return cached[2]
+        else:
+            # Ordinary private/mixed answers must fail closed, including after
+            # a previous public resolution. Do not treat them as proxy fake IPs.
+            self._public_destination = None
+        return addresses
 
     async def test_connection(self, configuration: AIConfiguration) -> None:
         await self.complete_text(
@@ -464,10 +580,17 @@ class AIClient:
                 endpoint = httpx.URL(
                     normalize_base_url(configuration.base_url) + "/chat/completions"
                 )
-                addresses = await self._resolver(endpoint.host, endpoint.port or 443)
+                addresses = await self._resolve_destination(
+                    endpoint.host, endpoint.port or 443
+                )
                 if not addresses or not all(
                     is_public_address(item) for item in addresses
                 ):
+                    logging.getLogger(__name__).warning(
+                        "Model DNS address validation rejected %s: %s",
+                        endpoint.host,
+                        addresses,
+                    )
                     raise AIError("ai_destination_forbidden")
                 # Pin the checked address. TLS still verifies the original host,
                 # and Host retains the configured authority (including its port).

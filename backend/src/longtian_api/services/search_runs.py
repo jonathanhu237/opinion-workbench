@@ -245,8 +245,8 @@ class SearchRunService:
         """Describe the ordering the injected collector will actually use."""
 
         # The native Weibo adapter exposes its latest-first switch.  Other
-        # platform adapters currently preserve the order rendered by the
-        # platform search page, so callers must label that order as observed.
+        # platform adapters may try latest sorting, but can fall back for each
+        # term. Keep their run-level label conservative: platform order.
         if platform == "wb" and getattr(self._worker, "latest_first", False):
             return "latest"
         return "platform"

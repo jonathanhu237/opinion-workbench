@@ -291,7 +291,7 @@ const sourceSchema = z
     matched_terms: z.array(z.string().min(1)).min(1).max(MAX_TERMS_PER_RULE),
     hashtags: z.array(z.string().min(1).max(50)).max(32).optional(),
     interaction_stats: z
-      .record(
+      .partialRecord(
         z.enum(['likes', 'comments', 'shares', 'favorites']),
         z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullable(),
       )

@@ -232,7 +232,7 @@ def test_smoke_normal_handoff_cross_page_citations_and_report_only_override_retr
         failed = settled_report(client, app, response.json()["id"])
         assert failed["status"] == "failed"
         assert failed["error"]["stage"] == "composition"
-        assert failed["error"]["code"] == "internal_error"
+        assert failed["error"]["code"] == "invalid_citations"
         failed_leaf = client.get(
             f"/api/v1/topic-reports/{failed['id']}/sections?kind=leaf&limit=1"
         ).json()["sections"][0]

@@ -57,8 +57,8 @@ from longtian_api.services.analysis_errors import AnalysisError
 from longtian_api.services.model_retry import combined_usage, usage_records
 from longtian_api.services.summary_errors import failure
 from longtian_api.services.topic_report_engine import (
-    ENGINE_VERSION,
     canonical_hash,
+    engine_version,
     output_digest,
 )
 from longtian_api.services.topic_report_errors import (
@@ -435,9 +435,7 @@ class TopicReportRepository:
                     "unsupported",
                 }:
                     return False
-                if row["status"] != row["unavailable_reason"] or not row[
-                    "error_json"
-                ]:
+                if row["status"] != row["unavailable_reason"] or not row["error_json"]:
                     return False
                 try:
                     error = SummaryFailure.model_validate_json(row["error_json"])
@@ -1350,6 +1348,16 @@ class TopicReportRepository:
                 )
             ]
 
+    def first_node_failure(self, report_id):
+        """Keep the concrete provider/output error visible on the report."""
+        with self.connection() as connection:
+            row = connection.execute(
+                """SELECT error_json FROM topic_report_nodes
+                WHERE report_id=? AND status='failed' ORDER BY id LIMIT 1""",
+                (report_id,),
+            ).fetchone()
+            return saved_failure(row["error_json"]) if row else None
+
     def evidence(self, node_id):
         with self.connection() as connection:
             result = []
@@ -1492,7 +1500,7 @@ class TopicReportRepository:
                 (
                     membership,
                     call.input_hash,
-                    ENGINE_VERSION,
+                    engine_version(call.kind),
                     call.model_dump_json(),
                     node_id,
                 ),
