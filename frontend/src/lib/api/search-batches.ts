@@ -13,6 +13,7 @@ import {
 } from '@/lib/api/search-runs'
 
 export const SEARCH_BATCHES_QUERY_KEY = ['search-batches'] as const
+export const SEARCH_BATCH_RESULTS_PAGE_SIZE = 5
 
 const activeStatuses = ['queued', 'running'] as const
 export const searchBatchStatusSchema = z.enum([
@@ -598,7 +599,7 @@ export async function fetchSearchBatchResults(
 ) {
   const query = new URLSearchParams({
     kind,
-    limit: '50',
+    limit: String(SEARCH_BATCH_RESULTS_PAGE_SIZE),
     offset: String(offset),
   })
   const response = await request(

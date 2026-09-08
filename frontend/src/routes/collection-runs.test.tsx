@@ -228,7 +228,9 @@ describe('Weibo collection routes', () => {
   it('starts a Weibo-only collection from the selected monitoring rule', async () => {
     const user = userEvent.setup()
     const { router } = renderRoute()
-    const limit = await screen.findByRole('spinbutton', { name: '每词最多采集' })
+    const limit = await screen.findByRole('spinbutton', {
+      name: '每词最多采集',
+    })
     expect(limit).toHaveValue(10)
     await waitFor(() => expect(limit).toBeEnabled())
     await user.clear(limit)
@@ -335,7 +337,7 @@ describe('Weibo collection routes', () => {
       await screen.findByRole('heading', { name: '采集进度' }),
     ).toBeVisible()
     expect(screen.getByText('微博')).toBeVisible()
-    expect(screen.getAllByRole('link', { name: /查看结果/u })).toHaveLength(1)
+    expect(screen.getAllByRole('button', { name: /查看结果/u })).toHaveLength(1)
   })
 
   it('does not start legacy summary generation when opening a collection run', async () => {

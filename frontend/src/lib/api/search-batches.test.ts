@@ -709,7 +709,7 @@ describe('search batch API boundary', () => {
       first_observed_at: run.created_at,
       last_observed_at: run.created_at,
     }
-    const payload = { results: [result], total: 51, limit: 50, offset: 50 }
+    const payload = { results: [result], total: 51, limit: 5, offset: 50 }
     const signal = new AbortController().signal
     fetchMock.mockResolvedValueOnce(
       new Response(JSON.stringify(payload), { status: 200 }),
@@ -718,7 +718,7 @@ describe('search batch API boundary', () => {
       fetchSearchBatchResults(4, 0, 'new', 50, signal),
     ).resolves.toEqual(payload)
     expect(fetchMock).toHaveBeenLastCalledWith(
-      '/api/v1/search-batches/4/items/0/results?kind=new&limit=50&offset=50',
+      '/api/v1/search-batches/4/items/0/results?kind=new&limit=5&offset=50',
       expect.objectContaining({ signal }),
     )
     for (const invalid of [

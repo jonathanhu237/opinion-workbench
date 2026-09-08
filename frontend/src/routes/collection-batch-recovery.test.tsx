@@ -129,7 +129,7 @@ describe('manual batch recovery', () => {
     vi.mocked(api.fetchSearchBatchResults).mockResolvedValue({
       results: [],
       total: 0,
-      limit: 50,
+      limit: 5,
       offset: 0,
     })
     vi.mocked(api.continueSearchBatch).mockResolvedValue(fixture())
@@ -392,7 +392,7 @@ describe('manual batch recovery', () => {
     expect(screen.getByText(/已结束 1 \/ 1 个采集项/u)).toBeVisible()
   })
 
-  it('selects aggregate results by URL, resets paging with filters, and opens Weibo through source_run_id', async () => {
+  it('opens aggregate results in a dialog, resets paging with filters, and opens Weibo through source_run_id', async () => {
     const user = userEvent.setup()
     const batch = ended(fixture())
     const item = batch.items[0]
@@ -420,35 +420,45 @@ describe('manual batch recovery', () => {
     vi.mocked(api.fetchSearchBatchResults).mockResolvedValue({
       results: [result],
       total: 51,
-      offset: 50,
-      limit: 50,
+      offset: 0,
+      limit: 5,
     })
-    const { router } = renderBatch(
-      batch,
-      '/collection-batches/8?platform=wb&kind=new&offset=50',
+    renderBatch(batch)
+    const trigger = await screen.findByRole('button', { name: '查看结果' })
+    expect(screen.getByRole('link', { name: '本次尝试' })).toHaveAttribute(
+      'href',
+      '/collection-runs/31',
     )
+    await user.click(trigger)
+    expect(screen.getByRole('dialog', { name: /微博.*3/u })).toBeVisible()
     expect(await screen.findByText('合并后的内容')).toBeVisible()
     expect(api.fetchSearchBatchResults).toHaveBeenCalledWith(
       8,
       0,
-      'new',
-      50,
+      'all',
+      0,
       expect.any(AbortSignal),
     )
     expect(screen.getByRole('link', { name: '查看来源尝试' })).toHaveAttribute(
       'href',
       '/collection-runs/20',
     )
-    expect(screen.getByRole('link', { name: '本次尝试' })).toHaveAttribute(
-      'href',
-      '/collection-runs/31',
-    )
     expect(screen.getByRole('link', { name: '打开原文' })).toHaveAttribute(
       'href',
       result.content_url,
     )
+    await user.click(screen.getByRole('button', { name: '下一页' }))
+    await waitFor(() =>
+      expect(api.fetchSearchBatchResults).toHaveBeenLastCalledWith(
+        8,
+        0,
+        'all',
+        5,
+        expect.any(AbortSignal),
+      ),
+    )
+    expect(screen.getByText('第 2 / 11 页')).toBeVisible()
     await user.click(screen.getByRole('tab', { name: '再次命中 1' }))
-    expect(router.state.location.search).toBe('?platform=wb&kind=repeated')
     await waitFor(() =>
       expect(api.fetchSearchBatchResults).toHaveBeenLastCalledWith(
         8,
@@ -462,6 +472,8 @@ describe('manual batch recovery', () => {
     expect(card).not.toBeNull()
     expect(within(card!).getByText('龙田街道')).toBeVisible()
     expect(within(card!).getByText('竹坑社区')).toBeVisible()
+    await user.keyboard('{Escape}')
+    await waitFor(() => expect(trigger).toHaveFocus())
   })
 
   it('keeps aggregate Weibo source links stable while the paused batch owns the browser', async () => {
@@ -490,10 +502,13 @@ describe('manual batch recovery', () => {
         },
       ],
       total: 1,
-      limit: 50,
+      limit: 5,
       offset: 0,
     })
-    renderBatch(batch, '/collection-batches/8?platform=wb')
+    renderBatch(batch)
+    await userEvent
+      .setup()
+      .click(await screen.findByRole('button', { name: '查看结果' }))
     expect(
       await screen.findByRole('link', { name: '打开原文' }),
     ).toHaveAttribute('href', 'https://m.weibo.cn/detail/5012345678901234')

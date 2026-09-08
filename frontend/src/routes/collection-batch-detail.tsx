@@ -2,7 +2,6 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { collectionLimitLabel } from '@/lib/collection-limit'
 import {
   ArrowLeft,
-  ArrowRight,
   Check,
   Circle,
   LoaderCircle,
@@ -11,7 +10,7 @@ import {
   TriangleAlert,
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { Link, useParams, useSearchParams } from 'react-router'
+import { Link, useParams } from 'react-router'
 
 import { Badge } from '@/components/ui/badge'
 import { Button, buttonVariants } from '@/components/ui/button'
@@ -284,16 +283,10 @@ function BatchRail({
                       )}
                     {run && (
                       <>
-                        <Link
-                          className={buttonVariants({
-                            variant: 'outline',
-                            size: 'sm',
-                          })}
-                          to={`?platform=${item.platform}#batch-results`}
-                        >
-                          查看结果
-                          <ArrowRight aria-hidden />
-                        </Link>
+                        <CollectionBatchResults
+                          batchId={batch.id}
+                          item={item}
+                        />
                         <Link
                           className={buttonVariants({
                             variant: 'ghost',
@@ -327,7 +320,6 @@ export function CollectionBatchDetail() {
   const batchId = parseBatchId(useParams().batchId)
   const queryClient = useQueryClient()
   const batchQuery = useSearchBatch(batchId)
-  const [params] = useSearchParams()
   const [feedback, setFeedback] = useState<{
     message: string
     error: boolean
@@ -513,9 +505,6 @@ export function CollectionBatchDetail() {
   const pausedPlatform = pausedItem
     ? searchPlatformPresenters[pausedItem.platform].label
     : null
-  const selectedItem = batch.items.find(
-    (item) => item.platform === params.get('platform'),
-  )
   const cancelling =
     controlMutation.isPending && controlMutation.variables.kind === 'cancel'
   const continuing =
@@ -693,13 +682,6 @@ export function CollectionBatchDetail() {
           onRecover={(item) => act('recover', item)}
         />
       </section>
-      {selectedItem && (
-        <CollectionBatchResults
-          key={`${batch.id}-${selectedItem.position}`}
-          batchId={batch.id}
-          item={selectedItem}
-        />
-      )}
     </div>
   )
 }

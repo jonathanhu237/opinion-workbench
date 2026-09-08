@@ -7,6 +7,7 @@ import {
   fetchSearchBatches,
   isActiveSearchBatch,
   SEARCH_BATCHES_QUERY_KEY,
+  SEARCH_BATCH_RESULTS_PAGE_SIZE,
 } from '@/lib/api/search-batches'
 import type { SearchResultFilter } from '@/lib/api/search-runs'
 
@@ -16,6 +17,7 @@ export function useSearchBatchResults(
   kind: SearchResultFilter,
   offset: number,
   active: boolean,
+  open = true,
 ) {
   return useQuery({
     queryKey: [
@@ -26,6 +28,7 @@ export function useSearchBatchResults(
       'results',
       kind,
       offset,
+      SEARCH_BATCH_RESULTS_PAGE_SIZE,
     ],
     queryFn: ({ signal }) =>
       fetchSearchBatchResults(
@@ -35,9 +38,9 @@ export function useSearchBatchResults(
         offset,
         signal,
       ),
-    enabled: batchId !== null && position !== null,
+    enabled: open && batchId !== null && position !== null,
     retry: false,
-    refetchInterval: active ? 1000 : false,
+    refetchInterval: open && active ? 1000 : false,
   })
 }
 
