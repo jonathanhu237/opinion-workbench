@@ -1818,7 +1818,7 @@ function ReportDetailView({
   }
   return (
     <>
-      <div className="mx-auto flex w-full max-w-3xl flex-col gap-8 pb-12">
+      <div className="mx-auto flex w-full max-w-6xl min-w-0 flex-col gap-8 pb-12">
         <div className="flex flex-col items-start gap-5">
           <Button variant="ghost" onClick={onBack}>
             <ArrowLeft data-icon="inline-start" aria-hidden /> 返回报告列表

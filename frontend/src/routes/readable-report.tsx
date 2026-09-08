@@ -126,7 +126,7 @@ export function ReadableReport({ report }: { report: ReportRun }) {
     return (
       <article
         aria-label="报告正文"
-        className="flex flex-col gap-6 text-base leading-8 wrap-anywhere"
+        className="flex w-full max-w-5xl min-w-0 flex-col gap-6 text-base leading-8 wrap-anywhere"
       >
         <p className="rounded-lg bg-muted p-4 whitespace-pre-wrap">
           {report.empty_reason === 'text_insufficient'
@@ -155,7 +155,7 @@ export function ReadableReport({ report }: { report: ReportRun }) {
   return (
     <article
       aria-label="报告正文"
-      className="flex flex-col gap-8 text-base leading-8 wrap-anywhere"
+      className="flex w-full max-w-5xl min-w-0 flex-col gap-8 text-base leading-8 wrap-anywhere"
     >
       <section className="flex flex-col gap-3">
         <h3 className="text-lg font-semibold">摘要</h3>
