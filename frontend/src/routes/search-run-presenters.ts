@@ -48,7 +48,7 @@ const statusLabels: Record<SearchRunStatus, string> = {
 
 const failureReasonLabels: Record<SearchFailureReason, string> = {
   page_state_unrecognized: '平台页面状态无法识别',
-  search_context_unavailable: '平台搜索会话不可用',
+  search_context_unavailable: '平台搜索暂时不可用',
   search_response_incompatible: '搜索响应格式不兼容',
   search_results_incompatible: '搜索结果格式不兼容',
   search_pagination_incompatible: '搜索翻页信息不兼容',
@@ -73,7 +73,7 @@ function failureReasonGuidance(
 ) {
   const guidance: Record<SearchFailureReason, string> = {
     page_state_unrecognized: `${platformName}页面尚未完整加载，或页面结构暂时无法识别。请打开平台查看页面，待加载完成后继续采集；如果反复出现，请检查采集器兼容性。已保存的结果会保留。`,
-    search_context_unavailable: `无法确认${platformName}的搜索会话或必要登录信息。请检查应用打开的专用谷歌浏览器中的平台会话，确认后再重新采集。`,
+    search_context_unavailable: `暂时无法获取${platformName}搜索页面，可能是搜索服务或网络异常，也可能是搜索会话失效。请检查平台页面及网络后继续采集；已保存的结果会保留。`,
     search_response_incompatible: `收到的${platformName}搜索响应格式与采集器不兼容，需要更新采集器后再试；重新打开平台也无法修复这个问题。`,
     search_results_incompatible: `收到的${platformName}结果条目无法被当前采集器安全识别，需要更新采集器后再试；已经保存的结果仍会保留。`,
     search_pagination_incompatible: `无法确认${platformName}搜索结果的安全翻页信息，已停止以避免重复或漏采。需要更新采集器后再试。`,
@@ -141,7 +141,9 @@ export function searchRunDisplayLabel(run: SearchRunPresentation) {
   return searchRunStatusLabel(run.status, run.failure_reason)
 }
 
-export function searchRunOrderingLabel(run: Pick<SearchRunSummary, 'ordering'>) {
+export function searchRunOrderingLabel(
+  run: Pick<SearchRunSummary, 'ordering'>,
+) {
   return run.ordering === 'latest' ? '最新优先' : '平台实际顺序'
 }
 

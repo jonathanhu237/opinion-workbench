@@ -147,7 +147,7 @@ describe('manual batch recovery', () => {
   it.each([
     ['login_required', '请打开平台，在应用专用的谷歌浏览器中登录后继续采集。'],
     ['manual_challenge_required', '平台要求安全验证。'],
-    ['platform_blocked_or_rate_limited', '微博暂时限制了访问。'],
+    ['platform_blocked_or_rate_limited', '平台暂时限制了访问。'],
     ['structure_changed', '未能可靠识别微博的采集内容'],
     ['timed_out', '采集等待超时。'],
     ['browser_unavailable', '应用专用的谷歌浏览器暂时不可用。'],
@@ -169,8 +169,11 @@ describe('manual batch recovery', () => {
   )
 
   it.each([
-    ['page_state_unrecognized', '微博页面尚未完整加载，或页面结构暂时无法识别。'],
-    ['search_context_unavailable', '无法确认微博的搜索会话或必要登录信息。'],
+    [
+      'page_state_unrecognized',
+      '微博页面尚未完整加载，或页面结构暂时无法识别。',
+    ],
+    ['search_context_unavailable', '暂时无法获取微博搜索页面'],
     [
       'search_response_incompatible',
       '收到的微博搜索响应格式与采集器不兼容，需要更新采集器后再试',

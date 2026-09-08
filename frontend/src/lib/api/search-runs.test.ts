@@ -7,6 +7,7 @@ import {
   isActiveSearchRun,
   openSearchRunResult,
   searchFailureReasonSchema,
+  searchResultSchema,
   searchRunSummarySchema,
   SearchRunApiError,
   startSearchRun,
@@ -53,6 +54,24 @@ const result: SearchResult = {
 }
 
 describe('search runs API boundary', () => {
+  it.each([{}, { likes: 0 }, { shares: null }, { likes: 73, comments: 2 }])(
+    'accepts partial rendered interaction statistics %j',
+    (interaction_stats) => {
+      expect(
+        searchResultSchema.parse({ ...result, interaction_stats })
+          .interaction_stats,
+      ).toEqual(interaction_stats)
+    },
+  )
+
+  it.each([{ unknown: 1 }, { likes: -1 }, { likes: '73' }])(
+    'rejects invalid interaction statistics %j',
+    (interaction_stats) => {
+      expect(
+        searchResultSchema.safeParse({ ...result, interaction_stats }).success,
+      ).toBe(false)
+    },
+  )
   const fetchMock = vi.fn<typeof fetch>()
 
   beforeEach(() => {

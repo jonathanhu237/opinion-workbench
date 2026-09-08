@@ -5,7 +5,7 @@ import hashlib
 import re
 from collections import deque
 from time import monotonic, time
-from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit
+from urllib.parse import parse_qsl, quote, urlencode, urljoin, urlsplit
 
 from longtian_api.search_platforms import is_valid_search_content_url
 from longtian_api.services.collector_contracts import (
@@ -72,7 +72,9 @@ _PLATFORM_SEARCH = {
         "https://www.kuaishou.com/search/video?searchKey=" + urlencode({"": term})[1:]
     ),
     "dy": lambda term: (
-        "https://www.douyin.com/search/" + urlencode({"": term})[1:] + "?type=general"
+        "https://www.douyin.com/jingxuan/search/"
+        + quote(term, safe="")
+        + "?type=general"
     ),
     "xhs": lambda term: (
         "https://www.xiaohongshu.com/search_result?keyword=" + urlencode({"": term})[1:]
@@ -134,6 +136,8 @@ def _generic_content_identity(platform, href, base):
 def _read_generic_page(platform, url, raw, term, status=200):
     if status in (401,):
         return "login_required", ()
+    if status >= 500:
+        return "search_context_unavailable", ()
     root = document(raw)
     if root is None:
         if status in (403, 429):
@@ -163,8 +167,8 @@ def _read_generic_page(platform, url, raw, term, status=200):
     if status >= 400:
         return "structure_changed", ()
     title = " ".join(root.xpath("//title/text()"))[:300]
-    values = []
-    seen = set()
+    values = list(_read_douyin_cards(root, url)) if platform == "dy" else []
+    seen = {item.content_id for item in values}
     for anchor in root.xpath("//a[@href]"):
         identity = _generic_content_identity(platform, anchor.get("href", ""), url)
         if identity is None or identity[0] in seen:
@@ -192,7 +196,79 @@ def _read_generic_page(platform, url, raw, term, status=200):
         )
     if values:
         return "results", tuple(values)
+    if platform == "dy":
+        # An unloaded client-side search shell is not an empty result set.
+        # Only an explicit empty-state message proves that the term is empty.
+        empty_labels = {"暂无搜索结果", "没有找到相关内容", "未找到相关结果"}
+        if any(
+            text_of(node).strip() in empty_labels
+            for node in root.xpath("//main//*[not(*)] | //*[@role='main']//*[not(*)]")
+        ):
+            return "empty", ()
+        return "pending", ()
     return "empty", ()
+
+
+def _read_douyin_cards(root, url):
+    """Read public waterfall cards, whose content IDs are rendered in the DOM."""
+    parts = urlsplit(url)
+    if (
+        parts.scheme != "https"
+        or parts.hostname != "www.douyin.com"
+        or not parts.path.startswith(("/jingxuan/search/", "/search/"))
+    ):
+        return ()
+    values = []
+    seen = set()
+    for wrapper in root.xpath("//*[starts-with(@id, 'waterfall_item_')]"):
+        match = re.fullmatch(r"waterfall_item_([0-9]{8,24})", wrapper.get("id", ""))
+        cards = wrapper.xpath(
+            ".//*[contains(concat(' ', normalize-space(@class), ' '),"
+            " ' search-result-card ')]"
+        )
+        if not match or not cards or match[1] in seen:
+            continue
+        card = cards[0]
+        # The visible author row uses an @ span followed by the author name.
+        # Its preceding sibling is the description. Avoid hashed CSS classes
+        # and never mix recommendation/sidebar text into a result's snippet.
+        authors = card.xpath(".//span[normalize-space(text())='@']/parent::span")
+        if not authors:
+            continue
+        author = authors[0]
+        metadata = author.getparent()
+        description = metadata.getprevious()
+        snippet = (
+            _clean_generic_text(text_of(description), 1000)
+            if description is not None
+            else ""
+        )
+        if not snippet:
+            continue
+        publisher, creator_hash = _masked_publisher(text_of(author).lstrip("@ "))
+        date_nodes = metadata.xpath("./span[starts-with(normalize-space(), '·')]")
+        published_at = text_of(date_nodes[0]).lstrip("· ")[:100] if date_nodes else ""
+        content_id = match[1]
+        content_url = f"https://www.douyin.com/video/{content_id}"
+        if not is_valid_search_content_url("dy", content_id, content_url):
+            continue
+        seen.add(content_id)
+        values.append(
+            SearchWorkerItem(
+                content_id=content_id,
+                content_type="video",
+                title=snippet[:300],
+                snippet=snippet,
+                publisher_name=publisher,
+                creator_hash=creator_hash,
+                published_at_text=published_at,
+                content_url=content_url,
+                discovered_at=int(time() * 1000),
+                hashtags=_generic_hashtags(description),
+                interaction_stats={},
+            )
+        )
+    return tuple(values)
 
 
 def _generic_signal_text(root):
@@ -283,6 +359,10 @@ def _generic_publisher(anchor):
         ),
         "",
     )
+    return _masked_publisher(name)
+
+
+def _masked_publisher(name):
     if not name:
         return "", ""
     masked = (
@@ -837,11 +917,21 @@ class NativeWeiboCollector:
                     state, items = _read_generic_page(
                         platform, current_url, raw, term, status
                     )
+                    render_deadline = min(deadline, monotonic() + 15)
+                    while state == "pending" and monotonic() < render_deadline:
+                        await asyncio.sleep(min(0.25, render_deadline - monotonic()))
+                        if monotonic() >= render_deadline:
+                            break
+                        current_url, raw, status = await self.browser.snapshot()
+                        state, items = _read_generic_page(
+                            platform, current_url, raw, term, status
+                        )
                     if state in {
                         "login_required",
                         "manual_challenge_required",
                         "platform_blocked_or_rate_limited",
                         "structure_changed",
+                        "search_context_unavailable",
                         "pending",
                     }:
                         if state == "pending":

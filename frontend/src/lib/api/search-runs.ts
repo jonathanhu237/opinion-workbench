@@ -145,7 +145,7 @@ export const searchResultSchema = z
     content_url: z.string().url(),
     hashtags: z.array(z.string().min(1).max(50)).max(32).optional(),
     interaction_stats: z
-      .record(
+      .partialRecord(
         z.enum(['likes', 'comments', 'shares', 'favorites']),
         z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).nullable(),
       )
