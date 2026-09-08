@@ -311,6 +311,61 @@ describe('Longtian public opinion application', () => {
     ).toBeDisabled()
   })
 
+  it('opens the browser before batch checks and blocks duplicate clicks', async () => {
+    const user = userEvent.setup()
+    let finishOpening:
+      ((value: { outcome: 'opened_homepage' }) => void) | undefined
+    mockedOpenManagedBrowser.mockReturnValue(
+      new Promise((resolve) => {
+        finishOpening = resolve
+      }),
+    )
+    renderRoute('/platform-accounts')
+    await user.click(await screen.findByRole('button', { name: '检查全部' }))
+    await waitFor(() =>
+      expect(mockedOpenManagedBrowser).toHaveBeenCalledTimes(1),
+    )
+    expect(mockedStartAttempt).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: '检查中…' })).toBeDisabled()
+    await act(async () => finishOpening?.({ outcome: 'opened_homepage' }))
+    await waitFor(() => expect(mockedStartAttempt).toHaveBeenCalledTimes(1))
+  })
+
+  it('keeps browser startup failure visible and allows retrying the batch', async () => {
+    const user = userEvent.setup()
+    mockedOpenManagedBrowser.mockRejectedValueOnce(
+      new PlatformConnectionApiError(
+        '专用浏览器暂时无法打开，请重试。',
+        'browser_open_failed',
+      ),
+    )
+    renderRoute('/platform-accounts')
+    await user.click(await screen.findByRole('button', { name: '检查全部' }))
+    expect(
+      await screen.findByText('专用浏览器暂时无法打开，请重试。'),
+    ).toBeVisible()
+    expect(mockedStartAttempt).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: '检查全部' })).toBeEnabled()
+    await user.click(screen.getByRole('button', { name: '检查全部' }))
+    await waitFor(() => expect(mockedStartAttempt).toHaveBeenCalledTimes(1))
+  })
+
+  it('preserves batch admission errors after resetting the failed mutation', async () => {
+    const user = userEvent.setup()
+    mockedStartAttempt.mockRejectedValueOnce(
+      new PlatformConnectionApiError(
+        '请先打开专用浏览器，再检查登录状态。',
+        'browser_not_open',
+      ),
+    )
+    renderRoute('/platform-accounts')
+    await user.click(await screen.findByRole('button', { name: '检查全部' }))
+    expect(
+      await screen.findByText('请先打开专用浏览器，再检查登录状态。'),
+    ).toBeVisible()
+    expect(screen.getByRole('button', { name: '检查全部' })).toBeEnabled()
+  })
+
   it('runs batch detection for Weibo only and prevents overlapping starts', async () => {
     const user = userEvent.setup()
     let resolveAttempt:
@@ -498,7 +553,7 @@ describe('Longtian public opinion application', () => {
         screen.getByText('无法连接本地服务，请确认服务已启动。'),
       ).toBeVisible(),
     )
-    expect(screen.getByRole('button', { name: '检查全部' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: '检查全部' })).toBeDisabled()
   })
 
   it('keeps a connection conflict visible without starting another operation', async () => {

@@ -115,7 +115,7 @@ type BatchDetection = {
   runId: number
   platforms: BatchPlatform[]
   currentIndex: number
-  phase: 'starting' | 'waiting'
+  phase: 'opening' | 'starting' | 'waiting'
   deadlineAt: number
 }
 
@@ -351,6 +351,7 @@ export function PlatformAccounts() {
     enabledPlatforms.length === 0 ||
     operationActive
 
+  const mutateBrowser = browserMutation.mutate
   const mutateAttempt = attemptMutation.mutate
   const resetAttempt = attemptMutation.reset
 
@@ -423,7 +424,7 @@ export function PlatformAccounts() {
         display_name,
       })),
       currentIndex: 0,
-      phase: 'starting',
+      phase: 'opening',
       deadlineAt: Date.now() + BATCH_CHECK_DEADLINE_MS,
     }
     batchDetectionRef.current = nextBatch
@@ -474,6 +475,29 @@ export function PlatformAccounts() {
       return
     }
 
+    if (batchDetection.phase === 'opening') {
+      const stepKey = `${batchDetection.runId}:opening`
+      if (launchedBatchStep.current === stepKey) return
+      launchedBatchStep.current = stepKey
+      mutateBrowser(undefined, {
+        onSuccess: () => {
+          setBatchDetection((activeBatch) =>
+            activeBatch?.runId === batchDetection.runId &&
+            activeBatch.phase === 'opening'
+              ? { ...activeBatch, phase: 'starting' }
+              : activeBatch,
+          )
+        },
+        onError: (error) => {
+          stopBatch(
+            error instanceof Error ? error.message : '浏览器打开失败，请重试。',
+            batchDetection,
+          )
+        },
+      })
+      return
+    }
+
     if (batchDetection.phase === 'starting') {
       const stepKey = `${batchDetection.runId}:${batchDetection.currentIndex}`
       if (launchedBatchStep.current === stepKey) {
@@ -498,7 +522,10 @@ export function PlatformAccounts() {
             (error.code === 'platform_not_found' ||
               error.code === 'platform_not_available')
           if (!canSkipPlatform) {
-            stopBatch(null, expectedStep)
+            stopBatch(
+              error instanceof Error ? error.message : '检查失败，请稍后重试。',
+              expectedStep,
+            )
             return
           }
           const activeBatch = batchDetectionRef.current
@@ -571,7 +598,14 @@ export function PlatformAccounts() {
         ? { ...activeBatch, currentIndex: nextIndex, phase: 'starting' }
         : null
     })
-  }, [batchDetection, mutateAttempt, platforms, resetAttempt, stopBatch])
+  }, [
+    batchDetection,
+    mutateBrowser,
+    mutateAttempt,
+    platforms,
+    resetAttempt,
+    stopBatch,
+  ])
 
   const retryPlatformState = () => {
     retryHealth()
