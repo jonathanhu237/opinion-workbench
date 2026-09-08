@@ -273,18 +273,25 @@ def test_open_browser_reuses_existing_window_and_reopens_after_close(tmp_path):
 def test_open_platform_browser_navigates_only_the_selected_homepage(tmp_path):
     app, browser = environment(tmp_path, [EMPTY, EMPTY])
     with TestClient(app) as client:
+        opened = client.post("/api/v1/platform-connections/browser")
+        assert opened.status_code == 200
+        assert browser.visits == []
         douyin = client.post("/api/v1/platform-connections/dy/browser")
         assert douyin.status_code == 200
-        assert douyin.json() == {"outcome": "opened_homepage"}
+        assert douyin.json() == {"outcome": "opened_existing"}
         xiaohongshu = client.post("/api/v1/platform-connections/xhs/browser")
         assert xiaohongshu.status_code == 200
         assert xiaohongshu.json() == {"outcome": "opened_existing"}
+        visits = list(browser.visits)
+        client.post("/api/v1/platform-connections/browser")
+        assert browser.visits == visits
         unknown = client.post("/api/v1/platform-connections/unknown/browser")
         assert unknown.status_code == 404
         assert unknown.json()["detail"]["code"] == "platform_not_found"
 
     assert browser.visits == [
         "https://www.douyin.com/",
+        "https://www.xiaohongshu.com/",
     ]
 
 

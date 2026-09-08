@@ -933,10 +933,10 @@ class NativeWeiboCollector:
         try:
             existing = getattr(self.browser, "page_present", self.browser.available)
             await self.browser.show()
-            # Opening the dedicated browser is also the row-level platform
-            # entry point.  Once a window exists, only foreground it so an
-            # in-progress login, QR code, or verification page is preserved.
-            if platform is not None and not existing:
+            # A platform row explicitly requests that platform's homepage,
+            # including when the browser was already opened on a blank tab.
+            # The general browser button only foregrounds the current page.
+            if platform is not None:
                 await self.browser.navigate(_PLATFORM_HOME[platform])
                 await self.browser.bring_to_front()
             return ManualPageWorkerResult(
