@@ -11,10 +11,13 @@ import asyncio
 import base64
 import inspect
 import json
+import os
 import re
+import subprocess
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
@@ -39,6 +42,7 @@ _HEADER_NAMES = frozenset(
     }
 )
 _MEDIA_HOSTS = ("sinaimg.cn", "weibocdn.com")
+_WORKER_ENVIRONMENT_KEYS = ("SystemRoot", "WINDIR", "TEMP", "TMP")
 
 
 @dataclass(frozen=True, slots=True)
@@ -369,20 +373,32 @@ class GalleryComponent:
         )
 
     async def _start(self):
-        launch = asyncio.create_task(
-            self._launcher(
-                sys.executable,
-                "-I",
-                "-u",
-                "-m",
-                "longtian_api.gallery_worker",
-                stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.DEVNULL,
-                limit=FRAME_LIMIT,
-                env={"LANG": "C.UTF-8"},
+        command = _gallery_worker_command()
+        # The worker is a brokered parser.  Give it only the operating-system
+        # variables required by a frozen Windows process and its locale; do
+        # not forward API keys, proxy settings or other unrelated parent
+        # process state into the child.
+        environment = {
+            key: os.environ[key]
+            for key in _WORKER_ENVIRONMENT_KEYS
+            if key in os.environ
+        }
+        environment["LANG"] = os.environ.get("LANG", "C.UTF-8")
+        options = {
+            "stdin": asyncio.subprocess.PIPE,
+            "stdout": asyncio.subprocess.PIPE,
+            "stderr": asyncio.subprocess.DEVNULL,
+            "limit": FRAME_LIMIT,
+            # A Windows console-subsystem worker keeps real stdin/stdout
+            # handles for the JSON protocol while CREATE_NO_WINDOW prevents a
+            # transient console from flashing for the user.
+            "env": environment,
+        }
+        if os.name == "nt":
+            options["creationflags"] = getattr(
+                subprocess, "CREATE_NO_WINDOW", 0x08000000
             )
-        )
+        launch = asyncio.create_task(self._launcher(*command, **options))
         try:
             return await asyncio.shield(launch)
         except asyncio.CancelledError:
@@ -613,3 +629,25 @@ class GalleryComponent:
                 await process.wait()
         if process.stdin is not None:
             process.stdin.close()
+
+
+def _gallery_worker_command() -> tuple[str, ...]:
+    """Return a worker command that remains valid after freezing.
+
+    A frozen PyInstaller executable is an application, not a Python
+    interpreter, so ``sys.executable -m ...`` cannot be assumed to work.  The
+    Windows entry point accepts a private worker switch and dispatches to the
+    same module in the child process.
+    """
+
+    if getattr(sys, "frozen", False):
+        worker_name = (
+            "LongtianGalleryWorker.exe" if os.name == "nt" else "LongtianGalleryWorker"
+        )
+        worker = Path(sys.executable).with_name(worker_name)
+        if worker.is_file():
+            return (str(worker), "--longtian-gallery-worker")
+        if os.name == "nt":
+            raise FileNotFoundError("LongtianGalleryWorker.exe is missing")
+        return (sys.executable, "--longtian-gallery-worker")
+    return (sys.executable, "-I", "-u", "-m", "longtian_api.gallery_worker")

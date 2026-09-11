@@ -1,5 +1,6 @@
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
+import { z } from 'zod'
 
 import { Button } from '@/components/ui/button'
 import {
@@ -12,6 +13,13 @@ import {
 } from '@/components/ui/dialog'
 import { FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { PromptChoiceField } from '@/components/prompt-choice-field'
 import {
   promptChoiceSchema,
@@ -24,17 +32,52 @@ import {
   fetchGenerationEligibility,
   GENERATIONS_QUERY_KEY,
   generationCreateSchema,
+  summaryConcurrencySchema,
   previewReportSelection,
   type GenerationCreate,
   type ReportGeneration,
   type SelectionPreview,
 } from '@/lib/api/report-generations'
 import {
+  fetchSummaryPreference,
+  saveSummaryPreference,
+} from '@/lib/api/summary-preferences'
+import {
   analysisErrorMessage,
   isAmbiguousAnalysisError,
 } from '@/lib/api/analysis-shared'
 
 const pendingIntentKey = 'longtian:report-generation:pending-intent:v1'
+const summaryConcurrencyPreferenceKey =
+  'longtian:report-generation:summary-concurrency:v1'
+const DEFAULT_SUMMARY_CONCURRENCY = 8
+
+function readSummaryConcurrencyPreference(): z.infer<
+  typeof summaryConcurrencySchema
+> {
+  try {
+    const raw = localStorage.getItem(summaryConcurrencyPreferenceKey)
+    if (raw === null) return DEFAULT_SUMMARY_CONCURRENCY
+    const parsed = Number(raw)
+    const value = summaryConcurrencySchema.safeParse(parsed)
+    return value.success ? value.data : DEFAULT_SUMMARY_CONCURRENCY
+  } catch {
+    return DEFAULT_SUMMARY_CONCURRENCY
+  }
+}
+
+function saveSummaryConcurrencyPreference(
+  value: z.infer<typeof summaryConcurrencySchema>,
+) {
+  try {
+    localStorage.setItem(summaryConcurrencyPreferenceKey, String(value))
+  } catch {
+    // Local cache failure must not prevent durable preference storage.
+  }
+  void saveSummaryPreference(value).catch(() => {
+    // Preference persistence must not fail an already admitted report.
+  })
+}
 
 function defaultReportName(date = new Date()) {
   const parts = new Intl.DateTimeFormat('zh-CN', {
@@ -117,6 +160,13 @@ export function ReportSelectionActions({
     if (onSelectionChange) onSelectionChange(unique)
     else setInternalIds(unique)
   }
+  const queryClient = useQueryClient()
+  const preference = useQuery({
+    queryKey: ['summary-preferences'],
+    queryFn: ({ signal }) => fetchSummaryPreference(signal),
+    retry: false,
+  })
+  const concurrencyEdited = useRef(false)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [storageError, setStorageError] = useState(false)
   const [intent, setIntent] = useState<GenerationCreate | null>(restoredIntent)
@@ -127,6 +177,19 @@ export function ReportSelectionActions({
   const [reportPrompt, setReportPrompt] = useState<PromptChoice>({
     mode: 'default',
   })
+  const [summaryConcurrency, setSummaryConcurrency] = useState<
+    z.infer<typeof summaryConcurrencySchema>
+  >(readSummaryConcurrencyPreference)
+  useEffect(() => {
+    if (
+      dialogOpen &&
+      !intent &&
+      !concurrencyEdited.current &&
+      preference.data
+    ) {
+      setSummaryConcurrency(preference.data.summary_concurrency)
+    }
+  }, [dialogOpen, intent, preference.data])
   const currentIntent = intent
   // Once a request has been persisted for an ambiguous retry, the original
   // concrete selection is the source of truth even if the surrounding page
@@ -156,13 +219,21 @@ export function ReportSelectionActions({
   const start = useMutation({
     mutationFn: createReportGeneration,
     retry: false,
-    onSuccess: (report) => {
+    onSuccess: (report, request) => {
+      queryClient.setQueryData(['summary-preferences'], {
+        summary_concurrency:
+          request.summary_concurrency ?? DEFAULT_SUMMARY_CONCURRENCY,
+      })
+      saveSummaryConcurrencyPreference(
+        request.summary_concurrency ?? DEFAULT_SUMMARY_CONCURRENCY,
+      )
       setIntent(null)
       clearSavedIntent()
       setDialogOpen(false)
       setName(defaultReportName())
       setInitialPrompt({ mode: 'default' })
       setReportPrompt({ mode: 'default' })
+      setSummaryConcurrency(readSummaryConcurrencyPreference())
       onStarted(report)
     },
   })
@@ -185,12 +256,23 @@ export function ReportSelectionActions({
     !preview.isPending
 
   function openDialog() {
+    concurrencyEdited.current = false
     if (effectiveIds.length === 0 || active || !modelConfigured) return
     const saved = currentIntent
     if (saved) {
       setName(saved.name ?? defaultReportName())
       setInitialPrompt(saved.initial_prompt)
       setReportPrompt(saved.report_prompt)
+      setSummaryConcurrency(
+        saved.summary_concurrency ?? DEFAULT_SUMMARY_CONCURRENCY,
+      )
+    } else {
+      // Reopening after cancel starts from the last formally submitted value;
+      // an exploratory select change is never itself a preference commit.
+      setSummaryConcurrency(
+        preference.data?.summary_concurrency ??
+          readSummaryConcurrencyPreference(),
+      )
     }
     setDialogOpen(true)
     preview.reset()
@@ -205,6 +287,7 @@ export function ReportSelectionActions({
       configuration_revision: provider.revision,
       initial_prompt: initialPrompt,
       report_prompt: reportPrompt,
+      summary_concurrency: summaryConcurrency,
       selection: { kind: 'explicit' as const, result_ids: [...effectiveIds] },
     }
     if (!saveIntent(request)) {
@@ -355,6 +438,45 @@ export function ReportSelectionActions({
                     : undefined
                 }
               />
+            </div>
+            <div className="rounded-lg border bg-background p-3">
+              <label
+                className="text-sm font-medium"
+                htmlFor="report-summary-concurrency"
+              >
+                单条总结并发数
+              </label>
+              <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                只控制已取得正文后的模型总结，不改变平台访问间隔；新任务默认 8
+                条并发。
+              </p>
+              <Select
+                value={String(summaryConcurrency)}
+                onValueChange={(value) => {
+                  const parsed = Number(value)
+                  if (summaryConcurrencySchema.safeParse(parsed).success) {
+                    concurrencyEdited.current = true
+                    setSummaryConcurrency(
+                      parsed as z.infer<typeof summaryConcurrencySchema>,
+                    )
+                  }
+                }}
+                disabled={Boolean(currentIntent) || start.isPending}
+              >
+                <SelectTrigger
+                  id="report-summary-concurrency"
+                  className="mt-3 min-h-10 w-full sm:w-48"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {[1, 2, 4, 8, 16].map((value) => (
+                    <SelectItem key={value} value={String(value)}>
+                      {value} 条同时总结
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <dl className="grid gap-3 rounded-lg border p-3 text-sm sm:grid-cols-4">
               <div>

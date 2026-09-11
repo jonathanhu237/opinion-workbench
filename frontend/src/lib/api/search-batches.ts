@@ -11,6 +11,7 @@ import {
   type SearchPlatform,
   type SearchResultFilter,
 } from '@/lib/api/search-runs'
+import { platformAccessSnapshotSchema } from '@/lib/api/platform-access'
 
 export const SEARCH_BATCHES_QUERY_KEY = ['search-batches'] as const
 export const SEARCH_BATCH_RESULTS_PAGE_SIZE = 5
@@ -71,7 +72,13 @@ const searchBatchItemSchema = z
       'unknown',
     ]),
     recovery_available: z.boolean(),
-    pause_reason: z.enum(['attempt_failed', 'process_interrupted']).nullable(),
+    pause_reason: z
+      .enum([
+        'attempt_failed',
+        'process_interrupted',
+        'platform_blocked_or_rate_limited',
+      ])
+      .nullable(),
     completion_basis: z.enum(['attempt_success', 'confirmed_terms']).nullable(),
     new_count: nonnegativeSafeIntegerSchema,
     repeated_count: nonnegativeSafeIntegerSchema,
@@ -142,6 +149,7 @@ const summaryShape = {
   created_at: isoDateSchema,
   started_at: isoDateSchema.nullable(),
   finished_at: isoDateSchema.nullable(),
+  platform_access_snapshot: platformAccessSnapshotSchema.nullable().optional(),
 } as const
 const searchBatchSummarySchema = z
   .strictObject(summaryShape)

@@ -9,6 +9,7 @@ import {
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
+import { z } from 'zod'
 
 import { PromptChoiceField } from '@/components/prompt-choice-field'
 import { Badge } from '@/components/ui/badge'
@@ -23,6 +24,13 @@ import {
 } from '@/components/ui/dialog'
 import { Field, FieldError, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import {
   Sheet,
   SheetContent,
@@ -68,6 +76,7 @@ import {
   isActiveGeneration,
   previewReportSelection,
   REPORT_RECORDS_QUERY_KEY,
+  summaryConcurrencySchema,
   type GenerationCreate,
   type ReportGeneration,
   type ReportRecord,
@@ -101,10 +110,35 @@ import {
 } from '@/routes/results-report-details'
 import { searchPlatformPresenters } from '@/routes/search-run-presenters'
 import { cn } from '@/lib/utils'
+import { saveSummaryPreference } from '@/lib/api/summary-preferences'
 
 const selectionDraftKey = 'longtian:report-selection-draft:v1'
 const selectionPageSize = 5
 const pendingIntentKey = 'longtian:report-generation:pending-intent:v1'
+const summaryConcurrencyPreferenceKey =
+  'longtian:report-generation:summary-concurrency:v1'
+const DEFAULT_SUMMARY_CONCURRENCY = 8
+
+type SummaryConcurrency = z.infer<typeof summaryConcurrencySchema>
+
+function readSummaryConcurrencyPreference(): SummaryConcurrency {
+  try {
+    const raw = localStorage.getItem(summaryConcurrencyPreferenceKey)
+    const value = summaryConcurrencySchema.safeParse(Number(raw))
+    return value.success ? value.data : DEFAULT_SUMMARY_CONCURRENCY
+  } catch {
+    return DEFAULT_SUMMARY_CONCURRENCY
+  }
+}
+
+function saveSummaryConcurrencyPreference(value: SummaryConcurrency) {
+  try {
+    localStorage.setItem(summaryConcurrencyPreferenceKey, String(value))
+    void saveSummaryPreference(value)
+  } catch {
+    // Preference storage is optional and must not block a valid submission.
+  }
+}
 
 const recordStatusLabels: Record<ReportRecord['status'], string> = {
   summarising: '正在总结内容',
@@ -519,6 +553,10 @@ function ReportGenerationWizard({
   const [reportPrompt, setReportPrompt] = useState<PromptChoice>(
     () => restored?.report_prompt ?? { mode: 'default' },
   )
+  const [summaryConcurrency, setSummaryConcurrency] =
+    useState<SummaryConcurrency>(
+      () => restored?.summary_concurrency ?? readSummaryConcurrencyPreference(),
+    )
   const [detailId, setDetailId] = useState<number | null>(null)
   const [detailParams, setDetailParams] = useSearchParams()
   const savedDetailParams = useRef(new URLSearchParams())
@@ -621,7 +659,10 @@ function ReportGenerationWizard({
   const start = useMutation({
     mutationFn: createReportGeneration,
     retry: false,
-    onSuccess: (generation) => {
+    onSuccess: (generation, request) => {
+      saveSummaryConcurrencyPreference(
+        request.summary_concurrency ?? DEFAULT_SUMMARY_CONCURRENCY,
+      )
       setIntent(null)
       clearPendingIntent()
       setSelectedIds([])
@@ -630,6 +671,7 @@ function ReportGenerationWizard({
       setName(defaultReportName())
       setInitialPrompt({ mode: 'default' })
       setReportPrompt({ mode: 'default' })
+      setSummaryConcurrency(readSummaryConcurrencyPreference())
       setStorageError(false)
       onOpenChange(false)
       onStarted(generation)
@@ -681,6 +723,7 @@ function ReportGenerationWizard({
       configuration_revision: provider.data.revision,
       initial_prompt: initialPrompt,
       report_prompt: reportPrompt,
+      summary_concurrency: summaryConcurrency,
       selection: { kind: 'explicit' as const, result_ids: [...ids] },
     }
     if (!savePendingIntent(request)) {
@@ -697,6 +740,9 @@ function ReportGenerationWizard({
     if (!next && detailId !== null) {
       closeDetail()
       return
+    }
+    if (!next && intent === null) {
+      setSummaryConcurrency(readSummaryConcurrencyPreference())
     }
     onOpenChange(next)
   }
@@ -844,6 +890,41 @@ function ReportGenerationWizard({
                       无法读取默认提示词，请刷新后重试。
                     </p>
                   )}
+                  <div className="rounded-lg border bg-background p-3">
+                    <label
+                      className="text-sm font-medium"
+                      htmlFor="report-wizard-summary-concurrency"
+                    >
+                      单条总结并发数
+                    </label>
+                    <p className="mt-1 text-xs leading-5 text-muted-foreground">
+                      只控制已取得正文后的模型总结；内容补全仍逐条执行。新任务默认
+                      8 条同时总结。
+                    </p>
+                    <Select
+                      value={String(summaryConcurrency)}
+                      onValueChange={(value) => {
+                        const parsed = Number(value)
+                        const valid = summaryConcurrencySchema.safeParse(parsed)
+                        if (valid.success) setSummaryConcurrency(valid.data)
+                      }}
+                      disabled={intent !== null || start.isPending}
+                    >
+                      <SelectTrigger
+                        id="report-wizard-summary-concurrency"
+                        className="mt-3 min-h-10 w-full sm:w-48"
+                      >
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {[1, 2, 4, 8, 16].map((value) => (
+                          <SelectItem key={value} value={String(value)}>
+                            {value} 条同时总结
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
                   <dl className="grid gap-3 rounded-lg border p-3 text-sm sm:grid-cols-4">
                     <div>
                       <dt className="text-muted-foreground">选中总数</dt>
@@ -1179,6 +1260,39 @@ function GenerationProgress({
       {generation.analysis.queue_reason === 'browser_operation_active' && (
         <p className="rounded-lg border border-warning/40 bg-warning/5 p-3 text-sm">
           平台浏览器操作正在进行，其他依赖浏览器的任务会等待。
+        </p>
+      )}
+      {generation.analysis.access_waiting && (
+        <p
+          className="rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm"
+          role="status"
+        >
+          正在等待平台访问间隔；合法的访问等待不会被计入浏览器或模型超时。本次任务已固定启动时的间隔配置。
+        </p>
+      )}
+      {generation.analysis.access_notice && (
+        <p
+          className="rounded-lg border border-warning/40 bg-warning/5 p-3 text-sm"
+          role="alert"
+        >
+          已记录平台访问限制
+          {generation.analysis.access_notice.status_code
+            ? `（HTTP ${generation.analysis.access_notice.status_code}）`
+            : ''}
+          ，不会自动绕过限制。请确认平台状态后手动继续；
+          {generation.analysis.access_notice.manual_challenge_required
+            ? '平台还要求完成安全验证。'
+            : '系统保留了本次限制证据。'}
+        </p>
+      )}
+      {generation.analysis.model_retry_notice && (
+        <p
+          className="rounded-lg border border-warning/40 bg-warning/5 p-3 text-sm"
+          role="status"
+        >
+          {generation.analysis.model_retry_notice.action === 'retrying'
+            ? `模型服务暂时限流，正在等待 ${generation.analysis.model_retry_notice.wait_seconds.toFixed(1)} 秒后有限重试。`
+            : '模型服务持续限流，已达到本次自动重试上限；没有继续重复请求。'}
         </p>
       )}
       {generation.pause_reason && (

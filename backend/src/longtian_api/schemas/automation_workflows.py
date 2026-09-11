@@ -17,6 +17,7 @@ from longtian_api.schemas.analysis_settings import (
     PromptSnapshot,
 )
 from longtian_api.schemas.collection_schedules import UtcTimestamp
+from longtian_api.schemas.platform_access import PlatformAccessSnapshot
 from longtian_api.search_platforms import SEARCH_PLATFORMS, SearchPlatform
 
 MAX_SAFE_INTEGER = 9_007_199_254_740_991
@@ -243,6 +244,10 @@ class AutomationSnapshot(StrictModel):
     initial_template_version: str = Field(min_length=1, max_length=120)
     report_template_version: str = Field(min_length=1, max_length=120)
     admitted_at: UtcTimestamp
+    # Older automation rows predate platform pacing. ``None`` is retained for
+    # those rows and materialized to an upgrade-safe default before any resumed
+    # collection work, rather than pretending the old run used today's setting.
+    platform_access_snapshot: PlatformAccessSnapshot | None = None
 
     _task_name = field_validator("task_name", "rule_name", "analysis_goal")(_prose)
     _platforms = field_validator("platforms")(_valid_platforms)

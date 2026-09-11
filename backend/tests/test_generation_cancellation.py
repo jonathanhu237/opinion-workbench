@@ -138,9 +138,9 @@ def test_cancel_stops_model_stage_without_starting_later_members_or_reports(
     model.block_stage = stage
     with TestClient(app, base_url="http://127.0.0.1") as client:
         saved(client)
-        value = client.post(
-            "/api/v1/report-generations", json=generation_request([1, 2])
-        ).json()
+        request = generation_request([1, 2])
+        request["summary_concurrency"] = 1
+        value = client.post("/api/v1/report-generations", json=request).json()
         client.portal.call(asyncio.wait_for, model.entered.wait(), 5)
         current = client.get(f"/api/v1/report-generations/{value['id']}").json()
         result = client.post(
@@ -196,46 +196,39 @@ def test_cancel_paused_child_also_settles_parent_and_releases_browser(tmp_path):
         assert len(requests) == 2 and not model.calls
 
 
-def test_cancel_during_media_keeps_already_acquired_body(tmp_path):
-    entered = asyncio.Event()
-    stopped = []
-
+def test_cancel_after_text_only_acquisition_keeps_body_without_media_request(tmp_path):
     async def response(request):
-        if request.url.host == "weibo.com":
-            return httpx.Response(
-                200,
-                json={
-                    "ok": 1,
-                    "id": 3600375418559878,
-                    "idstr": "3600375418559878",
-                    "text": "龙田正文已取得，图片仍在下载",
-                    "created_at": "Thu Sep 03 10:00:00 +0800 2026",
-                    "pic_ids": ["one"],
-                    "pic_infos": {
-                        "one": {"largest": {"url": "https://wx1.sinaimg.cn/one.png"}}
-                    },
+        assert request.url.host == "weibo.com"
+        return httpx.Response(
+            200,
+            json={
+                "ok": 1,
+                "id": 3600375418559878,
+                "idstr": "3600375418559878",
+                "text": "龙田正文已取得，图片不应下载",
+                "created_at": "Thu Sep 03 10:00:00 +0800 2026",
+                "pic_ids": ["one"],
+                "pic_infos": {
+                    "one": {"largest": {"url": "https://wx1.sinaimg.cn/one.png"}}
                 },
-            )
-        entered.set()
-        try:
-            await asyncio.Event().wait()
-        finally:
-            stopped.append(True)
+            },
+        )
 
     app, _, model, requests = native_environment(tmp_path, response=response)
+    model.block_stage = "initial"
     with TestClient(app, base_url="http://127.0.0.1") as client:
         saved(client)
         service = app.state.report_generation_service
         value = client.post(
             "/api/v1/report-generations", json=generation_request([1])
         ).json()
-        client.portal.call(asyncio.wait_for, entered.wait(), 5)
+        client.portal.call(asyncio.wait_for, model.entered.wait(), 5)
         result = client.post(
             f"/api/v1/report-generations/{value['id']}/cancel",
             json={"expected_revision": value["control_revision"]},
         )
         assert result.status_code == 200
-        assert stopped == [True] and len(requests) == 2 and not model.calls
+        assert len(requests) == 1 and len(model.calls) == 1
         with service.repository.database.connect() as connection:
             saved_input = connection.execute(
                 "SELECT input_json FROM content_materials WHERE content_id=1"
@@ -243,5 +236,5 @@ def test_cancel_during_media_keeps_already_acquired_body(tmp_path):
             assert saved_input is not None
             assert (
                 json.loads(saved_input[0])["text"]["body"]
-                == "龙田正文已取得，图片仍在下载"
+                == "龙田正文已取得，图片不应下载"
             )

@@ -227,6 +227,30 @@ export function CollectionRunDetail() {
               )}
             </div>
           )}
+          {run.access_waiting && (
+            <p
+              className="rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm"
+              role="status"
+            >
+              正在等待{platform.label}
+              访问间隔，任务会在允许的访问开始时间继续；不会因合法等待被误报超时。
+            </p>
+          )}
+          {run.access_notice && (
+            <p
+              className="rounded-lg border border-warning/40 bg-warning/5 p-3 text-sm"
+              role="alert"
+            >
+              已记录{platform.label}返回的访问限制
+              {run.access_notice.status_code
+                ? `（HTTP ${run.access_notice.status_code}）`
+                : ''}
+              。本次任务不会自动绕过限制；请确认平台状态后手动重试。
+              {run.access_notice.manual_challenge_required
+                ? ' 平台还要求完成安全验证。'
+                : ''}
+            </p>
+          )}
           {run.incomplete_terms?.length &&
           run.status !== 'completed_with_results' &&
           run.status !== 'completed_empty' &&

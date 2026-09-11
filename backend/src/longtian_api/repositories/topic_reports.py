@@ -17,7 +17,11 @@ from longtian_api.repositories.analysis_settings import (
 )
 from longtian_api.repositories.analysis_shared import source_snapshot, timestamp
 from longtian_api.repositories.content_analyses import ContentAnalysisRepository
-from longtian_api.schemas.ai_summaries import SummaryFailure, TokenUsage
+from longtian_api.schemas.ai_summaries import (
+    ModelRetryNotice,
+    SummaryFailure,
+    TokenUsage,
+)
 from longtian_api.schemas.analysis_evidence import AnalysisSource
 from longtian_api.schemas.analysis_settings import PromptChoice, PromptSnapshot
 from longtian_api.schemas.content_analyses import AnalysisUsage
@@ -54,7 +58,11 @@ from longtian_api.schemas.topic_reports import (
 from longtian_api.services.ai_analysis import MODEL_INPUT_VERSION, AIAnalysisError
 from longtian_api.services.ai_client import MAX_USAGE_TOKENS, decode_model_json
 from longtian_api.services.analysis_errors import AnalysisError
-from longtian_api.services.model_retry import combined_usage, usage_records
+from longtian_api.services.model_retry import (
+    append_rate_limit_history,
+    combined_usage,
+    usage_records,
+)
 from longtian_api.services.summary_errors import failure
 from longtian_api.services.topic_report_engine import (
     canonical_hash,
@@ -103,15 +111,33 @@ def _read_report_prompt(value: str) -> ReportPrompt:
     )
 
 
+def _decode_model_retry_notice(value):
+    if value is None:
+        return None
+    try:
+        return ModelRetryNotice.model_validate_json(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def saved_failure(value, *, report=False):
     if value is None:
         return None
     result = ReportFailure.model_validate_json(value)
-    expected = (
-        configuration_failure(result.code)
-        if result.code in CONFIGURATION_FAILURES
-        else failure(result.stage, result.code)
-    )
+    if result.code in CONFIGURATION_FAILURES:
+        expected = configuration_failure(result.code)
+    else:
+        # Provider and acquisition diagnostics are bounded evidence produced at
+        # the transport boundary. Preserve them while still rebuilding the
+        # canonical stage/code/message/validation shape instead of accepting a
+        # tampered arbitrary failure payload.
+        expected = failure(
+            result.stage,
+            result.code,
+            diagnostic=result.diagnostic,
+            provider_diagnostic=result.provider_diagnostic,
+            validation_issues=result.validation_issues,
+        )
     if result.model_dump() != expected.model_dump():
         raise ValueError("invalid stored failure")
     return result if report else SummaryFailure.model_validate(result.model_dump())
@@ -119,34 +145,51 @@ def saved_failure(value, *, report=False):
 
 def observed_usage(value):
     """Freshly validate nested transport counters, otherwise retain unknown usage."""
-    if not isinstance(value, TokenUsage):
+    if value is None:
         return None
     try:
-        return TokenUsage.model_validate(value.model_dump(warnings=False))
+        if isinstance(value, TokenUsage):
+            value = value.model_dump(mode="json")
+        return TokenUsage.model_validate(value)
     except (ValueError, TypeError):
         return None
 
 
 def aggregate_usage(rows):
     attempted = accounted = prompt = completion = total = 0
+    count_overflow = False
     for row in (record for item in rows for record in usage_records(item)):
         attempted += row["attempted"]
         if row["usage_json"] is not None:
             usage = TokenUsage.model_validate_json(row["usage_json"])
             if not row["attempted"] or row["reused_from_node_id"] is not None:
                 raise ValueError("invalid usage ownership")
-            accounted += 1
+            accounted += row.get("accounted", 1)
             prompt += usage.prompt_tokens
             completion += usage.completion_tokens
             total += usage.total_tokens
-    unknown = (attempted > 0 and accounted == 0) or total > MAX_USAGE_TOKENS
+        else:
+            accounted += row.get("accounted", 0)
+        if attempted > MAX_USAGE_TOKENS or accounted > MAX_USAGE_TOKENS:
+            count_overflow = True
+            attempted = min(attempted, MAX_USAGE_TOKENS)
+            accounted = min(accounted, MAX_USAGE_TOKENS)
+    # An unknown retry keeps the aggregate incomplete, but known provider
+    # usage remains useful and must not be replaced with a confirmed zero.
+    overflow = total > MAX_USAGE_TOKENS
+    unknown = count_overflow or accounted != attempted or overflow
+    known_tokens = (
+        (accounted > 0 or attempted == 0)
+        and not overflow
+        and not count_overflow
+    )
     return AnalysisUsage(
         attempted_requests=attempted,
         accounted_requests=accounted,
         complete=not unknown and attempted == accounted,
-        prompt_tokens=None if unknown else prompt,
-        completion_tokens=None if unknown else completion,
-        total_tokens=None if unknown else total,
+        prompt_tokens=prompt if known_tokens else None,
+        completion_tokens=completion if known_tokens else None,
+        total_tokens=total if known_tokens else None,
     )
 
 
@@ -364,8 +407,8 @@ class TopicReportRepository:
         ):
             counts[self._source(connection, source).state] += 1
         nodes = connection.execute(
-            """SELECT kind,status,attempted,usage_json,reused_from_node_id,
-              retry_attempted,retry_usage_json FROM
+            """SELECT kind,status,attempted,usage_json,error_json,reused_from_node_id,
+              retry_attempted,retry_usage_json,rate_limit_attempts_json FROM
               topic_report_nodes
               WHERE report_id=? ORDER BY id""",
             (report_id,),
@@ -406,6 +449,9 @@ class TopicReportRepository:
             empty_reason=row["empty_reason"],
             queue_reason=row["queue_reason"],
             recovery_reason=row["recovery_reason"],
+            model_retry_notice=_decode_model_retry_notice(
+                row["model_retry_notice_json"]
+            ),
             error=saved_failure(row["error_json"], report=True),
             created_at=row["created_at"],
             started_at=row["started_at"],
@@ -900,6 +946,15 @@ class TopicReportRepository:
         if recovered:
             self._finish(connection, report_id, "interrupted", recovery=True)
         return self._read(connection, report_id)
+
+    def workflow_report(self, operation_key: str):
+        """Read the durably admitted workflow child by its stage key."""
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT id FROM topic_report_runs WHERE workflow_operation_key=?",
+                (operation_key,),
+            ).fetchone()
+            return self._read(connection, row[0]) if row is not None else None
 
     def create_workflow(
         self,
@@ -1733,6 +1788,33 @@ class TopicReportRepository:
                 """UPDATE topic_report_nodes SET retry_attempted=1,usage_json=?
                   WHERE id=?""",
                 (usage.model_dump_json() if usage else None, node_id),
+            )
+
+    def record_model_rate_limit(self, node_id, usage, notice: ModelRetryNotice):
+        """Persist one bounded rate-limit response and its report notice."""
+        with self.connection(write=True) as connection:
+            row = connection.execute(
+                "SELECT * FROM topic_report_nodes WHERE id=?", (node_id,)
+            ).fetchone()
+            self._active(connection, row["report_id"])
+            if row["status"] != "running":
+                raise TopicReportError("topic_report_not_active")
+            history = append_rate_limit_history(
+                row["rate_limit_attempts_json"], usage
+            )
+            connection.execute(
+                """UPDATE topic_report_nodes SET rate_limit_attempts_json=?
+                   WHERE id=?""",
+                (
+                    json.dumps(
+                        history, ensure_ascii=False, separators=(",", ":")
+                    ),
+                    node_id,
+                ),
+            )
+            connection.execute(
+                """UPDATE topic_report_runs SET model_retry_notice_json=? WHERE id=?""",
+                (notice.model_dump_json(), row["report_id"]),
             )
 
     def finish_node(

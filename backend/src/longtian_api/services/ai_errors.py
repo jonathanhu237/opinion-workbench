@@ -1,6 +1,41 @@
 """Constant-only errors shared by the configuration and transport boundaries."""
 
+import math
+import re
+
 from longtian_api.schemas.ai_settings import AIErrorCode
+
+_PROVIDER_CODE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,99}\Z")
+_QUOTA_CODES = frozenset(
+    {
+        "insufficient_quota",
+        "quota_exceeded",
+        "billing_hard_limit",
+        "no_balance",
+        "insufficient_balance",
+        "account_deactivated",
+    }
+)
+# Provider codes are deliberately allow-listed.  HTTP 429 alone is the
+# transport's "rate limit or quota" bucket and is not enough evidence to
+# replay a paid request safely.
+_TRANSIENT_RATE_LIMIT_CODES = frozenset(
+    {
+        "rate_limit",
+        "rate_limited",
+        "rate_limit_error",
+        "rate_limit_exceeded",
+        "request_rate_limited",
+        "requests_rate_limited",
+        "too_many_requests",
+        "throttled",
+        "throttled_error",
+        "throttling",
+        "throttling.ratequota",
+        "throttling.request",
+        "throttling.user",
+    }
+)
 
 AI_ERROR_CONTRACTS: dict[AIErrorCode, tuple[int, str]] = {
     "invalid_request": (422, "请求内容不正确。"),
@@ -33,11 +68,71 @@ AI_ERROR_CONTRACTS: dict[AIErrorCode, tuple[int, str]] = {
 }
 
 
+def transient_rate_limit_evidence(
+    provider_code: str | None, retry_after_seconds: float | None
+) -> bool:
+    """Classify already-bounded provider metadata without HTTP assumptions."""
+    normalized = provider_code.lower() if isinstance(provider_code, str) else None
+    if normalized in _QUOTA_CODES:
+        return False
+    return bool(
+        normalized in _TRANSIENT_RATE_LIMIT_CODES
+        or retry_after_seconds is not None
+    )
+
+
 class AIError(Exception):
-    def __init__(self, code: AIErrorCode) -> None:
+    def __init__(
+        self,
+        code: AIErrorCode,
+        *,
+        provider_status_code: int | None = None,
+        provider_code: str | None = None,
+        retry_after_seconds: float | None = None,
+        usage: object | None = None,
+    ) -> None:
         super().__init__(code)
         self.code = code
         self.status_code, self.message = AI_ERROR_CONTRACTS[code]
+        self.provider_status_code = (
+            provider_status_code
+            if type(provider_status_code) is int and 100 <= provider_status_code <= 599
+            else None
+        )
+        self.provider_code = (
+            provider_code
+            if isinstance(provider_code, str)
+            and _PROVIDER_CODE.fullmatch(provider_code)
+            else None
+        )
+        self.retry_after_seconds = (
+            retry_after_seconds
+            if type(retry_after_seconds) in (int, float)
+            and math.isfinite(retry_after_seconds)
+            and 0 <= retry_after_seconds <= 86_400
+            else None
+        )
+        # A provider can expose accounting even when it rejects a retryable
+        # request. Keep the value opaque at this layer to avoid importing the
+        # transport module (which imports AIError), and validate it when the
+        # durable attempt history is written.
+        self.usage = usage
+
+    @property
+    def transient_rate_limit(self) -> bool:
+        """Whether the error contains enough evidence for a bounded replay.
+
+        The public error code intentionally combines rate limiting and quota
+        exhaustion.  A bare 429 (or an unknown provider code) is therefore
+        ambiguous and must remain a single, accounted-for attempt.  A known
+        transient code or a server-supplied Retry-After is sufficient unless a
+        known quota/account code says otherwise.
+        """
+        if self.code != "ai_rate_limited":
+            return False
+        return transient_rate_limit_evidence(
+            self.provider_code, self.retry_after_seconds
+        )
 
 
 # Definite provider/configuration-wide failures, not a malformed single answer

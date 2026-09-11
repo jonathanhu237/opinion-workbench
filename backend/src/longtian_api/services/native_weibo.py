@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import inspect
 import re
 from collections import deque
 from time import monotonic, time
@@ -18,11 +19,13 @@ from longtian_api.services.collector_contracts import (
     SearchWorkerItem,
     SearchWorkerResult,
 )
+from longtian_api.services.enrichment_models import AcquisitionDiagnostic
 from longtian_api.services.native_browser_contracts import (
     BrowserBudgetExceeded,
     BrowserUnavailable,
     RenderedBrowser,
 )
+from longtian_api.services.platform_access import PlatformAccessBlockedError
 from longtian_api.services.weibo_dom import barrier, document, read_search_page, text_of
 
 _SIGNED_IN_XPATH = (
@@ -176,38 +179,106 @@ def _generic_content_identity(platform, href, base):
     return content_id, kind, canonical
 
 
+def _has_generic_result_cards(platform, root, url):
+    """Recognize a result container without interpreting its user text."""
+    if platform == "dy" and root.xpath("//*[starts-with(@id, 'waterfall_item_')]"):
+        return True
+    if platform == "ks" and root.xpath(
+        "//*[contains(concat(' ',normalize-space(@class),' '),' video-list ')]"
+        "//*[contains(concat(' ',normalize-space(@class),' '),' photo-card ')]"
+    ):
+        return True
+    for anchor in root.xpath("//a[@href]"):
+        if not _generic_content_identity(platform, anchor.get("href", ""), url):
+            continue
+        # A valid post URL can also occur inside arbitrary user-authored
+        # prose. Only treat it as a search result when the link is wrapped by
+        # a recognizable result/card container; otherwise a post mentioning
+        # “验证码” or “请求过于频繁” could suppress trusted page-chrome
+        # diagnostics.
+        card = _generic_card(anchor)
+        if card is not anchor:
+            return True
+        classes = set(str(card.get("class", "")).lower().split())
+        if classes.intersection({"card", "note-item", "photo-card", "feed-card"}):
+            return True
+    return False
+
+
+def _generic_search_manual_challenge(platform, url, raw, status):
+    """Return co-occurring challenge evidence from trusted page chrome."""
+    status_code = status if type(status) is int else 200
+    root = document(raw)
+    if root is None:
+        return False
+    result_cards = _has_generic_result_cards(platform, root, url)
+    signal = _generic_signal_text(root, include_title=not result_cards)
+    if status_code >= 400 and not result_cards:
+        signal = " ".join((signal, _clean_generic_text(text_of(root), 20_000)))
+    if status_code < 400 and not result_cards:
+        signal = " ".join((signal, _clean_generic_text(text_of(root), 20_000)))
+    return any(
+        word in signal
+        for word in ("验证码", "安全验证", "人机验证", "滑动验证", "请完成验证")
+    )
+
+
 def _read_generic_page(platform, url, raw, term, status=200):
-    if status in (401,):
+    status_code = status if type(status) is int else 200
+    if status_code == 401:
         return "login_required", ()
-    if status >= 500:
+    if status_code >= 500:
         return "search_context_unavailable", ()
     root = document(raw)
     if root is None:
-        if status in (403, 429):
+        if status_code == 429:
             return "platform_blocked_or_rate_limited", ()
-        if status >= 400:
-            return "structure_changed", ()
+        if status_code >= 400:
+            return (
+                "search_context_unavailable"
+                if status_code == 403
+                else "structure_changed",
+                (),
+            )
         return "pending", ()
-    signal = _generic_signal_text(root)
+    result_cards = _has_generic_result_cards(platform, root, url)
+    # Titles and visible prose may be user-authored content. Once a trusted
+    # result card is present, barrier detection must inspect only platform
+    # chrome; a 403 response is not permission to scan every post body.
+    signal = _generic_signal_text(root, include_title=not result_cards)
     # Error pages often render a bare text challenge without a dialog/class
-    # marker. Since this branch is reached only for an HTTP error, inspecting
-    # the page text cannot confuse a user's post copy with platform chrome.
-    if status >= 400:
+    # marker. Inspect the full document only when no trusted result exists, so
+    # that a source post mentioning “请求过于频繁” cannot become evidence.
+    if status_code >= 400 and not result_cards:
         signal = " ".join((signal, _clean_generic_text(text_of(root), 20_000)))
     # A few platforms return a bare 200 shell for login/challenge pages. With
-    # no result links there is no user post text to confuse with platform
-    # chrome, so inspect the rendered document as a final barrier signal.
-    if status < 400 and not root.xpath("//a[@href]"):
+    # no trusted result card there is no user post text to confuse with
+    # platform chrome, so inspect the rendered document as a final signal.
+    if status_code < 400 and not result_cards:
         signal = " ".join((signal, _clean_generic_text(text_of(root), 20_000)))
-    if any(word in signal for word in ("验证码", "安全验证", "人机验证", "滑动验证")):
-        return "manual_challenge_required", ()
-    if any(word in signal for word in ("访问频繁", "请求过于频繁", "稍后再试")):
+    if any(
+        word in signal
+        for word in (
+            "访问频次过高",
+            "访问频繁",
+            "操作频繁",
+            "请求过于频繁",
+            "请求太频繁",
+        )
+    ):
         return "platform_blocked_or_rate_limited", ()
+    if any(
+        word in signal
+        for word in ("验证码", "安全验证", "人机验证", "滑动验证", "请完成验证")
+    ):
+        return "manual_challenge_required", ()
     if any(word in signal for word in ("请登录", "登录后查看", "登录后继续")):
         return "login_required", ()
-    if status in (403, 429):
+    if status_code == 429:
         return "platform_blocked_or_rate_limited", ()
-    if status >= 400:
+    if status_code == 403:
+        return "search_context_unavailable", ()
+    if status_code >= 400:
         return "structure_changed", ()
     title = " ".join(root.xpath("//title/text()"))[:300]
     values = (
@@ -703,6 +774,7 @@ class NativeWeiboCollector:
         on_progress=None,
         enricher=None,
         latest_first=True,
+        platform_access=None,
     ):
         self.browser = browser
         self.delay_seconds = delay_seconds
@@ -712,11 +784,57 @@ class NativeWeiboCollector:
         self.check_timeout_seconds = check_timeout_seconds
         self.on_progress = on_progress
         self.latest_first = latest_first
+        self.platform_access = platform_access
         if enricher is None:
             from longtian_api.services.weibo_enrichment import WeiboEnricher
 
             enricher = WeiboEnricher(browser=browser)
         self.enricher = enricher
+        self.configure_platform_access(platform_access)
+
+    def configure_platform_access(self, coordinator):
+        self.platform_access = coordinator
+        configure = getattr(self.enricher, "configure_platform_access", None)
+        if callable(configure):
+            configure(coordinator)
+
+    async def _before_access(
+        self, platform, snapshot, *, stage="search", on_waiting=None
+    ):
+        if self.platform_access is None:
+            return 0.0
+        started = monotonic()
+        waited = await self.platform_access.wait_for_turn(
+            platform, snapshot, stage=stage, on_waiting=on_waiting
+        )
+        # Access pacing is not browser work. Callers with an active work
+        # deadline add this elapsed wait back so a legal cooldown cannot be
+        # misreported as a navigation timeout.  The coordinator's clock is
+        # used when a virtual test clock is injected; old doubles may return
+        # no value, so retain the local monotonic fallback.
+        return (
+            max(0.0, float(waited))
+            if isinstance(waited, (int, float))
+            else max(0.0, monotonic() - started)
+        )
+
+    async def _block_access(
+        self, platform, *, status_code=None, manual_challenge_required=False
+    ):
+        if self.platform_access is None:
+            return None
+        block = getattr(self.platform_access, "block_async", None)
+        if block is None:
+            block = self.platform_access.block
+        value = block(
+            platform,
+            status_code=status_code,
+            manual_challenge_required=manual_challenge_required,
+            basis=(
+                "http_status" if status_code in (403, 429) else "browser_dom_evidence"
+            ),
+        )
+        return await value if inspect.isawaitable(value) else value
 
     supports_manual_acquisition = True
     supports_per_term_resume_budget = True
@@ -742,6 +860,8 @@ class NativeWeiboCollector:
         max_total_results=None,
         previous_content_ids=(),
         previous_content_ids_by_term=(),
+        platform_access_snapshot=None,
+        on_access_waiting=None,
     ):
         if platform != "wb":
             return await self._search_generic(
@@ -754,6 +874,8 @@ class NativeWeiboCollector:
                 max_total_results=max_total_results,
                 previous_content_ids=previous_content_ids,
                 previous_content_ids_by_term=previous_content_ids_by_term,
+                platform_access_snapshot=platform_access_snapshot,
+                on_access_waiting=on_access_waiting,
             )
         if max_total_results is not None:
             return await self._search_latest(
@@ -763,17 +885,20 @@ class NativeWeiboCollector:
                 on_progress=on_progress,
                 on_item=on_item,
                 on_term_completed=on_term_completed,
+                platform_access_snapshot=platform_access_snapshot,
+                on_access_waiting=on_access_waiting,
             )
         found = any(previous_content_ids_by_term)
         pages = 0
         deadline = monotonic() + self.timeout_seconds
         incomplete_terms: list[SearchTermDiagnostic] = []
 
-        def result(outcome, execution_limit=None):
+        def result(outcome, execution_limit=None, platform_access_diagnostic=None):
             return SearchWorkerResult(
                 outcome,
                 execution_limit=execution_limit,
                 incomplete_terms=tuple(incomplete_terms),
+                platform_access_diagnostic=platform_access_diagnostic,
             )
 
         try:
@@ -807,14 +932,24 @@ class NativeWeiboCollector:
                         return result("search_pagination_incompatible")
                     visited.add(identity)
                     pages += 1
+                    deadline += await self._before_access(
+                        platform,
+                        platform_access_snapshot,
+                        stage="search",
+                        on_waiting=on_access_waiting,
+                    )
                     async with asyncio.timeout(max(0, deadline - monotonic())):
                         await self.browser.navigate(url)
                     parsed = None
+                    page_status = None
                     for poll in range(self.ready_polls):
                         if monotonic() >= deadline:
                             raise BrowserBudgetExceeded("time")
+                        page_url, page_raw, page_status = await self.browser.snapshot()
                         parsed = read_search_page(
-                            *(await self.browser.snapshot()),
+                            page_url,
+                            page_raw,
+                            page_status,
                             term,
                             latest=self.latest_first,
                         )
@@ -823,8 +958,11 @@ class NativeWeiboCollector:
                         if poll + 1 < self.ready_polls:
                             await asyncio.sleep(0.25)
                     if parsed is None:
+                        page_url, page_raw, page_status = await self.browser.snapshot()
                         parsed = read_search_page(
-                            *(await self.browser.snapshot()),
+                            page_url,
+                            page_raw,
+                            page_status,
                             term,
                             latest=self.latest_first,
                         )
@@ -836,6 +974,23 @@ class NativeWeiboCollector:
                             await on_item(position, item)
                             seen.add(item.content_id)
                             found = True
+                    if parsed.state == "platform_blocked_or_rate_limited":
+                        diagnostic = await self._block_access(
+                            platform,
+                            status_code=(
+                                page_status
+                                if type(page_status) is int
+                                and 100 <= page_status <= 599
+                                else None
+                            ),
+                            manual_challenge_required=(
+                                parsed.manual_challenge_required
+                            ),
+                        )
+                        return result(
+                            "platform_blocked_or_rate_limited",
+                            platform_access_diagnostic=diagnostic,
+                        )
                     if parsed.state == "omitted":
                         if recovery_attempted or parsed.view_all_url is None:
                             incomplete_reason = "view_all_unresolved"
@@ -859,7 +1014,7 @@ class NativeWeiboCollector:
                     ):
                         break
                     url = parsed.next_url
-                    if url:
+                    if url and self.platform_access is None:
                         await asyncio.sleep(self.delay_seconds)
                 if incomplete_reason is not None:
                     incomplete_terms.append(
@@ -870,7 +1025,7 @@ class NativeWeiboCollector:
                         )
                     )
                 await on_term_completed(position, len(seen), incomplete_reason)
-                if position + 1 < len(terms):
+                if position + 1 < len(terms) and self.platform_access is None:
                     await asyncio.sleep(self.delay_seconds)
             return result(
                 "completed_with_incomplete"
@@ -878,6 +1033,11 @@ class NativeWeiboCollector:
                 else "completed_with_results"
                 if found
                 else "completed_empty"
+            )
+        except PlatformAccessBlockedError as error:
+            return result(
+                "platform_blocked_or_rate_limited",
+                platform_access_diagnostic=error.diagnostic,
             )
         except BrowserBudgetExceeded as error:
             return result("timed_out", execution_limit=error.limit)
@@ -895,6 +1055,8 @@ class NativeWeiboCollector:
         on_progress,
         on_item,
         on_term_completed,
+        platform_access_snapshot=None,
+        on_access_waiting=None,
     ):
         """Take one fresh item per term per round, with one shared unique cap."""
         seen = set(previous_content_ids)
@@ -948,22 +1110,49 @@ class NativeWeiboCollector:
                         if identity in visited[position]:
                             return SearchWorkerResult("search_pagination_incompatible")
                         visited[position].add(identity)
-                        if pages:
+                        if pages and self.platform_access is None:
                             await asyncio.sleep(self.delay_seconds)
                         pages += 1
                         fetched = True
+                        deadline += await self._before_access(
+                            "wb",
+                            platform_access_snapshot,
+                            stage="search",
+                            on_waiting=on_access_waiting,
+                        )
                         async with asyncio.timeout(max(0, deadline - monotonic())):
                             await self.browser.navigate(url)
                             parsed = None
+                            page_status = None
                             for poll in range(self.ready_polls):
+                                page_url, page_raw, page_status = (
+                                    await self.browser.snapshot()
+                                )
                                 parsed = read_search_page(
-                                    *(await self.browser.snapshot()), term, latest=True
+                                    page_url, page_raw, page_status, term, latest=True
                                 )
                                 if parsed.state not in ("pending", "empty_page"):
                                     break
                                 if poll + 1 < self.ready_polls:
                                     await asyncio.sleep(0.25)
                         queues[position].extend(parsed.items)
+                        if parsed.state == "platform_blocked_or_rate_limited":
+                            diagnostic = await self._block_access(
+                                "wb",
+                                status_code=(
+                                    page_status
+                                    if type(page_status) is int
+                                    and 100 <= page_status <= 599
+                                    else None
+                                ),
+                                manual_challenge_required=(
+                                    parsed.manual_challenge_required
+                                ),
+                            )
+                            return SearchWorkerResult(
+                                "platform_blocked_or_rate_limited",
+                                platform_access_diagnostic=diagnostic,
+                            )
                         if parsed.state == "omitted":
                             if position in recovered or parsed.view_all_url is None:
                                 incomplete.add(position)
@@ -1002,6 +1191,11 @@ class NativeWeiboCollector:
                 if seen
                 else "completed_empty"
             )
+        except PlatformAccessBlockedError as error:
+            return SearchWorkerResult(
+                "platform_blocked_or_rate_limited",
+                platform_access_diagnostic=error.diagnostic,
+            )
         except BrowserBudgetExceeded as error:
             return SearchWorkerResult("timed_out", execution_limit=error.limit)
         except TimeoutError:
@@ -1024,6 +1218,8 @@ class NativeWeiboCollector:
         max_total_results=None,
         previous_content_ids=(),
         previous_content_ids_by_term=(),
+        platform_access_snapshot=None,
+        on_access_waiting=None,
     ):
         """Collect visible public cards from a platform search page.
 
@@ -1089,6 +1285,12 @@ class NativeWeiboCollector:
                             )
                         pages += 1
                         try:
+                            deadline += await self._before_access(
+                                platform,
+                                platform_access_snapshot,
+                                stage="search",
+                                on_waiting=on_access_waiting,
+                            )
                             await self.browser.navigate(url)
                             prefer_latest = getattr(
                                 self.browser, "prefer_latest_search", None
@@ -1098,7 +1300,38 @@ class NativeWeiboCollector:
                                 and platform in {"xhs", "dy"}
                                 and prefer_latest is not None
                             ):
-                                await prefer_latest(platform)
+                                deadline += await self._before_access(
+                                    platform,
+                                    platform_access_snapshot,
+                                    stage="search",
+                                    on_waiting=on_access_waiting,
+                                )
+                                prefer_kwargs = {}
+                                try:
+                                    prefer_parameters = inspect.signature(
+                                        prefer_latest
+                                    ).parameters
+                                except (TypeError, ValueError):
+                                    prefer_parameters = {}
+                                if "before_access" in prefer_parameters or any(
+                                    parameter.kind
+                                    is inspect.Parameter.VAR_KEYWORD
+                                    for parameter in prefer_parameters.values()
+                                ):
+
+                                    async def before_prefer_fallback():
+                                        nonlocal deadline
+                                        deadline += await self._before_access(
+                                            platform,
+                                            platform_access_snapshot,
+                                            stage="search",
+                                            on_waiting=on_access_waiting,
+                                        )
+
+                                    prefer_kwargs["before_access"] = (
+                                        before_prefer_fallback
+                                    )
+                                await prefer_latest(platform, **prefer_kwargs)
                             current_url, raw, status = await self.browser.snapshot()
                             break
                         except BrowserUnavailable:
@@ -1119,6 +1352,22 @@ class NativeWeiboCollector:
                         current_url, raw, status = await self.browser.snapshot()
                         state, items = _read_generic_page(
                             platform, current_url, raw, term, status
+                        )
+                    if state == "platform_blocked_or_rate_limited":
+                        diagnostic = await self._block_access(
+                            platform,
+                            status_code=(
+                                status
+                                if type(status) is int and 100 <= status <= 599
+                                else None
+                            ),
+                            manual_challenge_required=_generic_search_manual_challenge(
+                                platform, current_url, raw, status
+                            ),
+                        )
+                        return SearchWorkerResult(
+                            "platform_blocked_or_rate_limited",
+                            platform_access_diagnostic=diagnostic,
                         )
                     if state in {
                         "login_required",
@@ -1179,6 +1428,11 @@ class NativeWeiboCollector:
             return SearchWorkerResult(
                 "completed_with_results" if found else "completed_empty"
             )
+        except PlatformAccessBlockedError as error:
+            return SearchWorkerResult(
+                "platform_blocked_or_rate_limited",
+                platform_access_diagnostic=error.diagnostic,
+            )
         except BrowserBudgetExceeded as error:
             return SearchWorkerResult("timed_out", execution_limit=error.limit)
         except TimeoutError:
@@ -1189,6 +1443,7 @@ class NativeWeiboCollector:
     async def manual_page(self, *, request_id, platform, action):
         if platform not in self.supported_platforms:
             return ManualPageWorkerResult("browser_unavailable")
+        existing = False
         try:
             if action == "close":
                 await self.browser.close_page()
@@ -1209,6 +1464,14 @@ class NativeWeiboCollector:
             )
         except BrowserUnavailable:
             return ManualPageWorkerResult("browser_unavailable")
+        except IndexError:
+            # A rendered browser can be foregrounded even when a compatibility
+            # bridge has no synthetic snapshot for the requested context. Do
+            # not turn that already-visible manual action into a failed report;
+            # the user can still complete the challenge in the browser.
+            return ManualPageWorkerResult(
+                "opened_existing" if existing else "opened_homepage"
+            )
 
     async def open_browser(self, *, request_id, platform=None):
         """Open the owned browser without starting an authentication check."""
@@ -1280,7 +1543,7 @@ class NativeWeiboCollector:
                         not callable(wait_update)
                         or result.outcome == "connected"
                         or result.reason == "manual_challenge"
-                        or status >= 400
+                        or (type(status) is int and status >= 400)
                     ):
                         return result
                     # An SSR login button can disappear once the existing
@@ -1336,12 +1599,31 @@ class NativeWeiboCollector:
             return OpenResultWorkerResult("browser_unavailable")
 
     async def enrich(self, **kwargs):
+        snapshot = kwargs.pop("platform_access_snapshot", None)
+        on_access_waiting = kwargs.pop("on_access_waiting", None)
         if kwargs.get("platform") == "wb":
+            configure = getattr(self.enricher, "configure_access_snapshot", None)
+            if callable(configure):
+                configure(snapshot, on_waiting=on_access_waiting)
             return await self.enricher.enrich(**kwargs)
-        return await self._enrich_text(**kwargs)
+        return await self._enrich_text(
+            platform_access_snapshot=snapshot,
+            on_access_waiting=on_access_waiting,
+            **kwargs,
+        )
 
     async def _enrich_text(
-        self, *, request_id, platform, content_id, content_url, term, budget, **_kwargs
+        self,
+        *,
+        request_id,
+        platform,
+        content_id,
+        content_url,
+        term,
+        budget,
+        platform_access_snapshot=None,
+        on_access_waiting=None,
+        **_kwargs,
     ):
         from longtian_api.services.enrichment_models import (
             EnrichedContent,
@@ -1353,6 +1635,12 @@ class NativeWeiboCollector:
             if not is_valid_search_content_url(platform, content_id, content_url):
                 return EnrichmentWorkerResult("content_unavailable")
             await self.browser.start()
+            await self._before_access(
+                platform,
+                platform_access_snapshot,
+                stage="detail",
+                on_waiting=on_access_waiting,
+            )
             await self.browser.navigate(content_url)
             wait_update = getattr(self.browser, "wait_detail_update", None)
             render_deadline = monotonic() + 12
@@ -1373,10 +1661,8 @@ class NativeWeiboCollector:
                         continue
                     raise
                 root = document(raw)
-                barrier_outcome = (
-                    _generic_detail_barrier(url, root, status)
-                    if root is not None
-                    else None
+                barrier_outcome, manual_challenge_required = (
+                    _generic_detail_barrier_details(url, root, status)
                 )
                 # XHS commonly requires the access context carried by its
                 # rendered search card. Follow only the matching content ID;
@@ -1389,11 +1675,57 @@ class NativeWeiboCollector:
                     and callable(open_search)
                 ):
                     search_fallback = True
-                    if await open_search(_PLATFORM_SEARCH["xhs"](term), content_id):
+                    await self._before_access(
+                        platform,
+                        platform_access_snapshot,
+                        stage="detail",
+                        on_waiting=on_access_waiting,
+                    )
+                    open_kwargs = {}
+                    try:
+                        open_parameters = inspect.signature(open_search).parameters
+                    except (TypeError, ValueError):
+                        open_parameters = {}
+                    if "before_access" in open_parameters or any(
+                        parameter.kind is inspect.Parameter.VAR_KEYWORD
+                        for parameter in open_parameters.values()
+                    ):
+
+                        async def before_xhs_detail_navigation():
+                            nonlocal render_deadline
+                            render_deadline += await self._before_access(
+                                platform,
+                                platform_access_snapshot,
+                                stage="detail",
+                                on_waiting=on_access_waiting,
+                            )
+
+                        open_kwargs["before_access"] = (
+                            before_xhs_detail_navigation
+                        )
+                    if await open_search(
+                        _PLATFORM_SEARCH["xhs"](term), content_id, **open_kwargs
+                    ):
                         render_deadline = monotonic() + 12
                         continue
                 if barrier_outcome is not None:
-                    return EnrichmentWorkerResult(barrier_outcome)
+                    diagnostic = _generic_detail_diagnostic(
+                        platform, barrier_outcome, status
+                    )
+                    if barrier_outcome == "platform_blocked_or_rate_limited":
+                        await self._block_access(
+                            platform,
+                            status_code=(
+                                status
+                                if type(status) is int
+                                and 100 <= status <= 599
+                                else None
+                            ),
+                            manual_challenge_required=manual_challenge_required,
+                        )
+                    return EnrichmentWorkerResult(
+                        barrier_outcome, diagnostic=diagnostic
+                    )
                 title = _generic_detail_title(root) if root is not None else ""
                 body, body_truncated = (
                     _generic_detail_text(root, platform=platform, content_id=content_id)
@@ -1480,6 +1812,11 @@ class NativeWeiboCollector:
                 issues=issues,
             )
             return EnrichmentWorkerResult("completed", content=value)
+        except PlatformAccessBlockedError as error:
+            return EnrichmentWorkerResult(
+                "platform_blocked_or_rate_limited",
+                diagnostic=_platform_access_diagnostic(error),
+            )
         except BrowserBudgetExceeded:
             return EnrichmentWorkerResult("timed_out")
         except (BrowserUnavailable, TimeoutError):
@@ -1495,6 +1832,7 @@ class NativeWeiboCollector:
 
 def _classify_connection_page(platform, url, raw, status):
     """Classify one rendered platform home page without waiting for login."""
+    status_code = status if type(status) is int else 200
     root = document(raw)
     if root is None:
         return AuthWorkerResult("failed", "check_failed")
@@ -1509,7 +1847,7 @@ def _classify_connection_page(platform, url, raw, status):
         blocked = barrier(root, url, status)
         if blocked == "manual_challenge_required":
             return AuthWorkerResult("failed", "manual_challenge")
-        if status >= 400:
+        if status_code >= 400:
             return AuthWorkerResult("failed", "check_failed")
         if signed_in and blocked not in {
             "platform_blocked_or_rate_limited",
@@ -1522,7 +1860,7 @@ def _classify_connection_page(platform, url, raw, status):
     challenge_markers = ("验证码", "安全验证", "人机验证", "滑动验证", "请完成验证")
     if any(marker in f"{title} {body}" for marker in challenge_markers):
         return AuthWorkerResult("failed", "manual_challenge")
-    if status >= 400:
+    if status_code >= 400:
         return AuthWorkerResult("failed", "check_failed")
     signed_in = bool(
         root.xpath(_SIGNED_IN_XPATH)
@@ -1642,44 +1980,117 @@ def _generic_shell_title(value):
     }
 
 
-def _generic_detail_barrier(url, root, status):
-    """Classify access barriers before page chrome becomes source text."""
-    if status == 401:
-        return "login_required"
+def _platform_access_diagnostic(error):
+    value = getattr(error, "diagnostic", None)
+    if value is None:
+        return None
+    return AcquisitionDiagnostic(
+        stage="detail",
+        outcome="platform_blocked_or_rate_limited",
+        status_code=value.status_code,
+        basis=(
+            value.basis
+            if value.basis
+            in {"http_status", "browser_dom_evidence", "explicit_platform_evidence"}
+            else "browser_dom_evidence"
+        ),
+        target="selected_post",
+    )
+
+
+def _generic_detail_diagnostic(platform, outcome, status):
+    if outcome not in {
+        "access_denied",
+        "content_unavailable",
+        "login_required",
+        "manual_challenge_required",
+        "platform_blocked_or_rate_limited",
+        "structure_changed",
+    }:
+        return None
+    return AcquisitionDiagnostic(
+        stage="detail",
+        outcome=outcome,
+        status_code=(
+            status if type(status) is int and 100 <= status <= 599 else None
+        ),
+        basis=(
+            "http_status"
+            if type(status) is int and 400 <= status <= 599
+            else "browser_dom_evidence"
+        ),
+        target="selected_post",
+    )
+
+
+def _generic_detail_barrier_details(url, root, status):
+    """Classify detail barriers and preserve co-occurring challenge evidence."""
+    status_code = status if type(status) is int else 200
+    if status_code == 401:
+        return "login_required", False
+    if root is None:
+        if status_code == 429:
+            return "platform_blocked_or_rate_limited", False
+        if status_code == 403:
+            return "access_denied", False
+        if status_code >= 400:
+            return "content_unavailable", False
+        return None, False
     try:
         path = (urlsplit(url).path or "").lower()
     except ValueError:
         path = ""
-    if path == "/404" or path.startswith("/404/"):
-        return "content_unavailable"
-    if path == "/login" or path.startswith("/login/") or path.endswith("/login"):
-        return "login_required"
+    if status_code != 429 and (path == "/404" or path.startswith("/404/")):
+        return "content_unavailable", False
+    if status_code != 429 and (
+        path == "/login" or path.startswith("/login/") or path.endswith("/login")
+    ):
+        return "login_required", False
     has_post = bool(root.xpath(_generic_detail_container_query()))
     signal = _generic_signal_text(root, include_title=not has_post)
-    if status >= 400:
+    # Error pages without a trusted post container are safe to inspect as
+    # platform chrome. If a detail container exists, never treat its prose as
+    # barrier evidence even when the HTTP status is an error.
+    if status_code >= 400 and not has_post:
         signal = " ".join(
             (signal, _clean_generic_text(_visible_generic_text(root), 20_000))
         )
     # Bare 200 login/challenge shells may contain only a heading and text.
     # When no recognizable content container exists, the full document is a
     # safe fallback because there is no post body to misclassify.
-    if status < 400 and not has_post:
+    if status_code < 400 and not has_post:
         signal = " ".join(
             (signal, _clean_generic_text(_visible_generic_text(root), 20_000))
         )
-    if any(word in signal for word in ("验证码", "安全验证", "人机验证", "滑动验证")):
-        return "manual_challenge_required"
-    if status == 429 or any(
-        word in signal for word in ("访问频繁", "请求过于频繁", "稍后再试")
-    ):
-        return "platform_blocked_or_rate_limited"
+    challenge = any(
+        word in signal
+        for word in ("验证码", "安全验证", "人机验证", "滑动验证", "请完成验证")
+    )
+    rate_limited = status_code == 429 or any(
+        word in signal
+        for word in (
+            "访问频次过高",
+            "访问频繁",
+            "操作频繁",
+            "请求过于频繁",
+            "请求太频繁",
+        )
+    )
+    if rate_limited:
+        return "platform_blocked_or_rate_limited", challenge
+    if challenge:
+        return "manual_challenge_required", False
     if any(word in signal for word in ("请登录", "登录后查看", "登录后继续")):
-        return "login_required"
-    if status == 403:
-        return "access_denied"
-    if status >= 400:
-        return "content_unavailable"
-    return None
+        return "login_required", False
+    if status_code == 403:
+        return "access_denied", False
+    if status_code >= 400:
+        return "content_unavailable", False
+    return None, False
+
+
+def _generic_detail_barrier(url, root, status):
+    return _generic_detail_barrier_details(url, root, status)[0]
 
 
 def _normalize_generic_text(value):

@@ -9,6 +9,7 @@ from typing import Literal, cast
 
 from longtian_api.database import Database
 from longtian_api.repositories.collection_schedules import _platforms, _rule
+from longtian_api.repositories.platform_access import PlatformAccessRepository
 from longtian_api.repositories.search_runs import (
     SearchResultRecord,
     SearchRunOrdering,
@@ -18,6 +19,10 @@ from longtian_api.repositories.search_runs import (
     assemble_result,
 )
 from longtian_api.schemas.monitoring_rules import MonitoringRule
+from longtian_api.schemas.platform_access import (
+    PlatformAccessSnapshot,
+    default_platform_access_snapshot,
+)
 from longtian_api.schemas.search_batches import (
     CompletionBasis,
     PauseReason,
@@ -83,6 +88,7 @@ class SearchBatchRecord:
     started_at: str | None
     finished_at: str | None
     max_total_results: int | None = None
+    platform_access_snapshot: PlatformAccessSnapshot | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,6 +213,7 @@ class SearchBatchRepository:
         max_results_per_term: int,
         max_total_results: int | None = None,
         workflow_operation_key: str | None = None,
+        platform_access_snapshot: PlatformAccessSnapshot | None = None,
     ) -> SearchBatchRecord:
         with self._connection(write=True) as connection:
             return _insert_batch(
@@ -218,6 +225,10 @@ class SearchBatchRepository:
                 max_results_per_term=max_results_per_term,
                 max_total_results=max_total_results,
                 workflow_operation_key=workflow_operation_key,
+                platform_access_snapshot=platform_access_snapshot
+                or PlatformAccessRepository(self._database).snapshot_from_connection(
+                    connection
+                ),
             )
 
     def workflow_batch(self, operation_key: str) -> SearchBatchRecord | None:
@@ -247,6 +258,7 @@ class SearchBatchRepository:
         rule: MonitoringRule,
         *,
         timestamp: str,
+        platform_access_snapshot: PlatformAccessSnapshot | None = None,
     ) -> tuple[SearchBatchRecord, bool]:
         """Existing batch + terms + items + occurrence link commit atomically."""
         with self._connection(write=True) as connection:
@@ -287,6 +299,10 @@ class SearchBatchRepository:
                 platforms=platforms,
                 max_results_per_term=schedule["max_results_per_term"],
                 max_total_results=schedule["max_total_results"],
+                platform_access_snapshot=platform_access_snapshot
+                or PlatformAccessRepository(self._database).snapshot_from_connection(
+                    connection
+                ),
             )
             connection.execute(
                 """UPDATE collection_occurrences
@@ -351,8 +367,8 @@ class SearchBatchRepository:
                 """INSERT INTO search_runs (monitoring_rule_id, platform, rule_name,
                    max_results_per_term, status, created_at,
                    execution_start_term_position, search_protocol_version,
-                   max_total_results, ordering)
-                   VALUES (?, ?, ?, ?, 'queued', ?, ?, 2, ?, ?)""",
+                   max_total_results, ordering, platform_access_snapshot_json)
+                   VALUES (?, ?, ?, ?, 'queued', ?, ?, 2, ?, ?, ?)""",
                 (
                     batch["monitoring_rule_id"],
                     item["platform"],
@@ -361,8 +377,8 @@ class SearchBatchRepository:
                     timestamp,
                     checkpoint.next_position,
                     batch["max_total_results"],
-                    ordering
-                    or ("latest" if item["platform"] == "wb" else "platform"),
+                    ordering or ("latest" if item["platform"] == "wb" else "platform"),
+                    batch["platform_access_snapshot_json"],
                 ),
             )
             run_id = int(cursor.lastrowid)
@@ -400,6 +416,8 @@ class SearchBatchRepository:
         position: int,
         run_status: SearchRunStatus,
         expected_run_id: int | None = None,
+        *,
+        pause: bool | None = None,
     ) -> SearchBatchRecord:
         with self._connection(write=True) as connection:
             batch = _batch_row(connection, batch_id)
@@ -415,7 +433,11 @@ class SearchBatchRepository:
             ):
                 raise SearchBatchStateChangedError
             success = run_status in SUCCESS
-            pause = run_status in MANUAL_PAUSE
+            # ``None`` preserves the repository's historical direct-call
+            # behavior. Service orchestration supplies the explicit decision so
+            # ordinary item failures can be recorded without pausing the batch.
+            if pause is None:
+                pause = not success
             # Authentication and platform safety barriers require the user to
             # intervene before the same batch can continue. Other terminal
             # failures belong to this platform item only; they are recorded as
@@ -437,7 +459,13 @@ class SearchBatchRepository:
                 (
                     item_status,
                     _utc_timestamp() if not pause else None,
-                    "attempt_failed" if pause else None,
+                    (
+                        "platform_blocked_or_rate_limited"
+                        if run_status == "platform_blocked_or_rate_limited"
+                        else "attempt_failed"
+                    )
+                    if pause
+                    else None,
                     "attempt_success" if success else None,
                     batch_id,
                     position,
@@ -642,6 +670,17 @@ class SearchBatchRepository:
         with self._connection() as connection:
             return _read_batch(connection, batch_id)
 
+    def ensure_platform_access_snapshot(
+        self, batch_id: int, snapshot: PlatformAccessSnapshot
+    ) -> None:
+        with self._connection(write=True) as connection:
+            connection.execute(
+                """UPDATE search_batches
+                   SET platform_access_snapshot_json=?
+                   WHERE id=? AND platform_access_snapshot_json IS NULL""",
+                (snapshot.model_dump_json(), batch_id),
+            )
+
     def list(
         self, *, limit: int, before_id: int | None
     ) -> tuple[tuple[SearchBatchRecord, ...], int | None]:
@@ -747,14 +786,15 @@ def _insert_batch(
     max_results_per_term: int,
     max_total_results: int | None = None,
     workflow_operation_key: str | None = None,
+    platform_access_snapshot: PlatformAccessSnapshot | None = None,
 ) -> SearchBatchRecord:
     """One insertion owner shared by manual and occurrence-backed admission."""
     timestamp = _utc_timestamp()
     cursor = connection.execute(
         """INSERT INTO search_batches
           (monitoring_rule_id,rule_name,max_results_per_term,status,created_at,
-           workflow_operation_key,max_total_results)
-          VALUES (?,?,?,'queued',?,?,?)""",
+           workflow_operation_key,max_total_results,platform_access_snapshot_json)
+          VALUES (?,?,?,'queued',?,?,?,?)""",
         (
             monitoring_rule_id,
             rule_name,
@@ -762,6 +802,9 @@ def _insert_batch(
             timestamp,
             workflow_operation_key,
             max_total_results,
+            (
+                platform_access_snapshot or default_platform_access_snapshot()
+            ).model_dump_json(),
         ),
     )
     batch_id = int(cursor.lastrowid)
@@ -1028,7 +1071,17 @@ def _read_batch(connection: sqlite3.Connection, batch_id: int) -> SearchBatchRec
         created_at=row["created_at"],
         started_at=row["started_at"],
         finished_at=row["finished_at"],
+        platform_access_snapshot=_decode_snapshot(row["platform_access_snapshot_json"]),
     )
+
+
+def _decode_snapshot(value):
+    if not value:
+        return default_platform_access_snapshot(basis="legacy_unavailable")
+    try:
+        return PlatformAccessSnapshot.model_validate_json(value)
+    except (TypeError, ValueError):
+        return default_platform_access_snapshot(basis="legacy_unavailable")
 
 
 def _utc_timestamp() -> str:

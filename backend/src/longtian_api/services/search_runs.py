@@ -23,6 +23,7 @@ from longtian_api.repositories.search_runs import (
     SearchRunStatus,
 )
 from longtian_api.schemas.monitoring_rules import MonitoringRule
+from longtian_api.schemas.platform_access import default_platform_access_snapshot
 from longtian_api.schemas.search_runs import (
     SearchResult,
     SearchResultListResponse,
@@ -63,7 +64,8 @@ from longtian_api.services.monitoring_rules import (
     MonitoringRuleError,
     MonitoringRuleService,
 )
-from longtian_api.services.settled_tasks import database_call
+from longtian_api.services.platform_access import PlatformAccessBlockedError
+from longtian_api.services.settled_tasks import database_call, settle
 
 MAX_SEARCH_TERMS = 20
 
@@ -197,6 +199,7 @@ class SearchRunService:
         database_path: Path | None = None,
         search_timeout_seconds: float = 180.0,
         open_timeout_seconds: float = 45.0,
+        platform_access=None,
     ) -> None:
         configured_sources = sum(
             source is not None for source in (repository, database, database_path)
@@ -216,6 +219,7 @@ class SearchRunService:
             self._repository = repository
         self._search_timeout_seconds = search_timeout_seconds
         self._open_timeout_seconds = open_timeout_seconds
+        self._platform_access = platform_access
         self._lock = asyncio.Lock()
         self._active_run_id: int | None = None
         self._active_request_id: UUID | None = None
@@ -232,6 +236,10 @@ class SearchRunService:
 
     def initialize(self) -> None:
         self._repository.initialize()
+
+    def configure_platform_access(self, coordinator) -> None:
+        """Attach the application-wide access coordinator after composition."""
+        self._platform_access = coordinator
 
     @property
     def browser_session_available(self) -> bool:
@@ -284,10 +292,14 @@ class SearchRunService:
                     "max_results_per_term": payload.max_results_per_term,
                     "ordering": self.ordering_for_platform(payload.platform),
                 }
+                if self._platform_access is not None:
+                    create_kwargs["platform_access_snapshot"] = await database_call(
+                        self._platform_access.snapshot
+                    )
                 if payload.max_total_results is not None:
                     create_kwargs["max_total_results"] = payload.max_total_results
                 try:
-                    record = await asyncio.to_thread(
+                    record = await database_call(
                         self._repository.create_run, **create_kwargs
                     )
                 except TypeError:
@@ -295,14 +307,15 @@ class SearchRunService:
                     # and during a rolling local upgrade. Production storage
                     # accepts and persists the marker above.
                     create_kwargs.pop("ordering", None)
-                    record = await asyncio.to_thread(
+                    create_kwargs.pop("platform_access_snapshot", None)
+                    record = await database_call(
                         self._repository.create_run, **create_kwargs
                     )
             except SearchRunRepositoryUnavailableError:
-                await self._browser_operations.release(owner)
+                await settle(self._browser_operations.release(owner))
                 raise _storage_unavailable() from None
-            except Exception:
-                await self._browser_operations.release(owner)
+            except BaseException:
+                await settle(self._browser_operations.release(owner))
                 raise
 
             self._active_run_id = record.id
@@ -317,7 +330,7 @@ class SearchRunService:
         self, *, limit: int, before_id: int | None, standalone_only: bool = False
     ) -> SearchRunListResponse:
         try:
-            records, next_before_id = await asyncio.to_thread(
+            records, next_before_id = await database_call(
                 self._repository.list,
                 limit=limit,
                 before_id=before_id,
@@ -342,7 +355,7 @@ class SearchRunService:
         offset: int,
     ) -> SearchResultListResponse:
         try:
-            records, total = await asyncio.to_thread(
+            records, total = await database_call(
                 self._repository.list_results,
                 run_id=run_id,
                 kind=kind,
@@ -364,7 +377,7 @@ class SearchRunService:
         self, *, run_id: int, result_id: int
     ) -> SearchResultOpenResponse:
         try:
-            target = await asyncio.to_thread(
+            target = await database_call(
                 self._repository.get_result_open_target,
                 run_id=run_id,
                 result_id=result_id,
@@ -401,6 +414,13 @@ class SearchRunService:
 
         try:
             try:
+                if self._platform_access is not None:
+                    await self._platform_access.wait_for_turn(
+                        target.platform,
+                        stage="detail",
+                    )
+                # Pacing is outside the navigation timeout: a legal interval
+                # wait must not be reported as a failed browser open.
                 async with asyncio.timeout(self._open_timeout_seconds):
                     kwargs = {
                         "request_id": request_id,
@@ -417,11 +437,15 @@ class SearchRunService:
                             content_url=target_url,
                         )
                     result = await self._worker.open_result(**kwargs)
+            except PlatformAccessBlockedError:
+                return SearchResultOpenResponse(
+                    outcome="platform_blocked_or_rate_limited"
+                )
             except (AuthWorkerError, TimeoutError):
                 return SearchResultOpenResponse(outcome="internal_error")
             return SearchResultOpenResponse(outcome=result.outcome)
         finally:
-            await self._browser_operations.release(owner)
+            await settle(self._browser_operations.release(owner))
             async with self._lock:
                 if self._active_open_request_id == request_id:
                     self._active_open_task = None
@@ -499,7 +523,7 @@ class SearchRunService:
     async def load_rule(self, rule_id: int) -> MonitoringRule:
         """Load and validate the enabled rule shared by run orchestrators."""
         try:
-            enabled_rules = await asyncio.to_thread(self._monitoring_rules.list_enabled)
+            enabled_rules = await database_call(self._monitoring_rules.list_enabled)
         except MonitoringRuleError:
             raise _storage_unavailable() from None
         rule = next((item for item in enabled_rules if item.id == rule_id), None)
@@ -507,7 +531,7 @@ class SearchRunService:
             return rule
 
         try:
-            disabled_rules = await asyncio.to_thread(
+            disabled_rules = await database_call(
                 self._monitoring_rules.list_rules, enabled=False
             )
         except MonitoringRuleError:
@@ -526,7 +550,7 @@ class SearchRunService:
 
     async def _get_record(self, run_id: int) -> SearchRunRecord:
         try:
-            return await asyncio.to_thread(self._repository.get, run_id)
+            return await database_call(self._repository.get, run_id)
         except SearchRunNotFoundError:
             raise _not_found() from None
         except SearchRunRepositoryUnavailableError:
@@ -542,7 +566,7 @@ class SearchRunService:
         try:
             _, cancelled = await self._execute_record(record, request_id)
         finally:
-            await self._browser_operations.release(owner)
+            await settle(self._browser_operations.release(owner))
             async with self._lock:
                 if self._active_request_id == request_id:
                     self._active_run_id = None
@@ -571,8 +595,22 @@ class SearchRunService:
         failure_reason: SearchFailureReason | None = None
         execution_limit = None
         cancelled = False
+        access_diagnostic = None
+        notice_setter = getattr(self._repository, "set_access_notice", None)
         try:
             await database_call(self._repository.mark_running, record.id)
+            snapshot = record.platform_access_snapshot
+            if snapshot is not None and snapshot.basis == "legacy_unavailable":
+                snapshot = default_platform_access_snapshot(
+                    basis="upgrade_safe_default"
+                )
+                ensure_snapshot = getattr(
+                    self._repository, "ensure_platform_access_snapshot", None
+                )
+                if callable(ensure_snapshot):
+                    await database_call(
+                        ensure_snapshot, record.id, snapshot
+                    )
             start = record.execution_start_term_position
 
             async def on_progress(position: int, _count: int) -> None:
@@ -630,6 +668,21 @@ class SearchRunService:
                     ),
                 )
 
+            async def on_access_waiting(platform, seconds, stage):
+                setter = getattr(self._repository, "set_access_waiting", None)
+                if callable(setter):
+                    await database_call(
+                        setter,
+                        record.id,
+                        None
+                        if not seconds
+                        else {
+                            "platform": platform,
+                            "stage": stage,
+                            "seconds": round(float(seconds), 3),
+                        },
+                    )
+
             latest_options = {}
             if record.max_total_results is not None:
                 latest_options = {
@@ -648,24 +701,71 @@ class SearchRunService:
                         for position in range(start, len(record.terms))
                     )
                 }
-            async with asyncio.timeout(self._search_timeout_seconds):
-                result = await self._worker.search(
-                    request_id=request_id,
-                    platform=record.platform,
-                    terms=record.terms[start:],
-                    max_results_per_term=record.max_results_per_term,
-                    **latest_options,
-                    on_progress=on_progress,
-                    on_item=on_item,
-                    on_term_completed=on_term_completed,
+            search_kwargs = {
+                "request_id": request_id,
+                "platform": record.platform,
+                "terms": record.terms[start:],
+                "max_results_per_term": record.max_results_per_term,
+                **latest_options,
+                "on_progress": on_progress,
+                "on_item": on_item,
+                "on_term_completed": on_term_completed,
+                "platform_access_snapshot": snapshot,
+                "on_access_waiting": on_access_waiting,
+            }
+            try:
+                parameters = inspect.signature(self._worker.search).parameters
+            except (TypeError, ValueError):
+                parameters = {}
+            # A wrapper with ``**kwargs`` can still delegate to an older
+            # strict worker (the common test/integration adapter shape). Only
+            # pass additive arguments when the callable explicitly advertises
+            # them; native collectors do so, while legacy wrappers do not.
+            for optional in ("platform_access_snapshot", "on_access_waiting"):
+                if optional not in parameters:
+                    search_kwargs.pop(optional, None)
+            access_timeout = 0.0
+            if self._platform_access is not None and snapshot is not None:
+                access_timeout = snapshot.for_platform(record.platform) * max(
+                    1, int(getattr(self._worker, "max_pages", 40))
                 )
+            async with asyncio.timeout(self._search_timeout_seconds + access_timeout):
+                result = await self._worker.search(**search_kwargs)
             await _record_incomplete_terms(
                 self._repository, record.id, start, result.incomplete_terms
+            )
+            waiting_setter = getattr(self._repository, "set_access_waiting", None)
+            if callable(waiting_setter):
+                await database_call(waiting_setter, record.id, None)
+            diagnostic = getattr(result, "platform_access_diagnostic", None)
+            if (
+                result.outcome == "platform_blocked_or_rate_limited"
+                and self._platform_access is not None
+                and diagnostic is None
+            ):
+                blocker = getattr(self._platform_access, "block_async", None)
+                if blocker is None:
+                    blocker = self._platform_access.block
+                diagnostic = blocker(record.platform)
+                if inspect.isawaitable(diagnostic):
+                    diagnostic = await diagnostic
+            access_diagnostic = (
+                diagnostic
+                if result.outcome == "platform_blocked_or_rate_limited"
+                else None
             )
             projected = project_worker_outcome(result.outcome)
             terminal = projected.status
             failure_reason = projected.failure_reason
             execution_limit = result.execution_limit
+        except PlatformAccessBlockedError as error:
+            # Native collectors normally project a blocked access into their
+            # worker result. Compatibility collectors may surface the shared
+            # coordinator exception directly; preserve the same durable pause
+            # and safe diagnostic instead of misclassifying it as an internal
+            # search failure.
+            terminal = "platform_blocked_or_rate_limited"
+            access_diagnostic = error.diagnostic
         except TimeoutError:
             terminal = "timed_out"
         except asyncio.CancelledError:
@@ -676,6 +776,8 @@ class SearchRunService:
         except Exception:
             terminal = "internal_error"
         try:
+            if callable(notice_setter):
+                await database_call(notice_setter, record.id, access_diagnostic)
             if execution_limit is not None:
                 await database_call(
                     self._repository.finish,
@@ -760,6 +862,9 @@ def _to_summary(record: SearchRunRecord) -> SearchRunSummary:
             for diagnostic in record.incomplete_terms
         ),
         ordering=record.ordering,
+        platform_access_snapshot=record.platform_access_snapshot,
+        access_waiting=record.access_waiting,
+        access_notice=record.access_notice,
     )
 
 

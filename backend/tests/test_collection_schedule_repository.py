@@ -66,17 +66,17 @@ def test_real_v12_to_v13_preserves_every_old_column_and_reopens(tmp_path):
         "automation_requests",
         "report_generations",
         "content_materials",
-        "media_cache_owner",
-        "media_cache_policy",
-        "media_cache_entries",
-        "media_cache_bindings",
+        "platform_access_settings",
+        "platform_access_state",
         "search_run_term_diagnostics",
     }
+    new_tables = set(after) - set(before)
     assert all(
         after[table] == []
-        for table in set(after) - set(before) - {"media_cache_policy"}
+        for table in new_tables - {"platform_access_settings", "platform_access_state"}
     )
-    assert after["media_cache_policy"] == [(1, 30, 1024, 0)]
+    assert after["platform_access_settings"][0][1] == 1
+    assert len(after["platform_access_state"]) == 5
     with database.connect() as connection:
         assert (
             connection.execute("PRAGMA user_version").fetchone()[0]

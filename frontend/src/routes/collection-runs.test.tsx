@@ -225,7 +225,7 @@ describe('Weibo collection routes', () => {
     )
   })
 
-  it('starts a Weibo-only collection from the selected monitoring rule', async () => {
+  it('starts a selected platform collection from the monitoring rule', async () => {
     const user = userEvent.setup()
     const { router } = renderRoute()
     const limit = await screen.findByRole('spinbutton', {
@@ -241,6 +241,7 @@ describe('Weibo collection routes', () => {
     await waitFor(() =>
       expect(startSearchBatch).toHaveBeenCalledWith({
         monitoring_rule_id: 1,
+        platforms: ['wb'],
         max_results_per_term: 7,
       }),
     )
@@ -249,14 +250,11 @@ describe('Weibo collection routes', () => {
     )
   })
 
-  it('shows a truthful empty state without any platform selector', async () => {
+  it('shows a truthful empty state with the platform selector', async () => {
     renderRoute()
-    expect(
-      await screen.findByText('选择监控规则，开始第一次微博采集。'),
-    ).toBeVisible()
-    expect(screen.queryByRole('checkbox')).toBeNull()
-    expect(screen.getByText('采集平台：微博')).toBeVisible()
-    expect(screen.queryByText('抖音')).toBeNull()
+    expect(await screen.findByText('采集平台')).toBeVisible()
+    expect(screen.getByRole('checkbox', { name: '微博' })).toBeVisible()
+    expect(screen.getByRole('checkbox', { name: '抖音' })).toBeVisible()
   })
 
   it('keeps completed batch and standalone Weibo history readable', async () => {

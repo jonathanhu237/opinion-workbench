@@ -5,6 +5,20 @@ import { getApiBaseUrl } from '@/lib/api/client'
 
 export const safeCount = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER)
 export const safeId = safeCount.min(1)
+export const modelRetryNoticeSchema = z.strictObject({
+  stage: z.enum(['analysis', 'judgment', 'composition']),
+  retry_number: safeCount.min(1).max(100),
+  wait_seconds: z.number().finite().min(0).max(60),
+  action: z.enum(['retrying', 'exhausted']),
+  provider_diagnostic: z
+    .strictObject({
+      provider_status_code: z.number().int().min(100).max(599).nullable(),
+      provider_code: z.string().min(1).max(100).nullable(),
+      retry_after_seconds: z.number().finite().min(0).max(86400).nullable(),
+    })
+    .nullable(),
+  observed_at: z.string().datetime({ offset: true }),
+})
 export function isValidAnalysisProse(value: string) {
   return (
     value.trim().length > 0 &&
@@ -59,6 +73,14 @@ export const ANALYSIS_ERROR_CONTRACTS = {
   content_analysis_unavailable: {
     status: 503,
     message: '初步分析服务暂时不可用，请稍后重试。',
+  },
+  platform_access_settings_unavailable: {
+    status: 503,
+    message: '平台访问间隔暂时无法读取或保存，请稍后重试。',
+  },
+  platform_access_settings_conflict: {
+    status: 409,
+    message: '平台访问间隔已被其他窗口更新，请刷新后重试。',
   },
 } as const
 type ProductCode = keyof typeof ANALYSIS_ERROR_CONTRACTS

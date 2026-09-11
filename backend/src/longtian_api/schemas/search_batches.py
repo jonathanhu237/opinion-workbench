@@ -5,6 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from longtian_api.schemas.platform_access import PlatformAccessSnapshot
 from longtian_api.schemas.search_runs import (
     SearchResult,
     SearchRunSummary,
@@ -45,10 +46,15 @@ SearchBatchErrorCode = Literal[
     "search_batch_recovery_unavailable",
     "search_batch_item_not_recoverable",
     "search_storage_unavailable",
+    "platform_cooldown_active",
 ]
 
 CheckpointBasis = Literal["explicit", "legacy_inferred", "mixed", "unknown"]
-PauseReason = Literal["attempt_failed", "process_interrupted"]
+PauseReason = Literal[
+    "attempt_failed",
+    "process_interrupted",
+    "platform_blocked_or_rate_limited",
+]
 CompletionBasis = Literal["attempt_success", "confirmed_terms"]
 ManualPageOutcome = Literal[
     "opened_existing",
@@ -145,6 +151,7 @@ class SearchBatchSummary(BaseModel):
     created_at: datetime
     started_at: datetime | None
     finished_at: datetime | None
+    platform_access_snapshot: PlatformAccessSnapshot | None = None
 
 
 class SearchBatchDetail(SearchBatchSummary):

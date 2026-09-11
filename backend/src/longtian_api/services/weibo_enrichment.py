@@ -1,9 +1,13 @@
 """Selected-post lookups owned by the project and bounded upstream acquisition."""
 
 import asyncio
+import inspect
 import json
+import re
 import time
 from collections import Counter
+from datetime import UTC, datetime, timedelta
+from email.utils import parsedate_to_datetime
 from urllib.parse import urljoin, urlsplit
 
 import httpx
@@ -21,6 +25,7 @@ from longtian_api.services.gallery_component import (
 )
 from longtian_api.services.media_inventory import media_inventory
 from longtian_api.services.native_browser_contracts import BrowserUnavailable
+from longtian_api.services.platform_access import PlatformAccessBlockedError
 from longtian_api.services.weibo_dom import document, text_of
 from longtian_api.services.weibo_media import allowed_media_url, transfer_media
 
@@ -32,6 +37,39 @@ class WeiboAccessError(Exception):
 
 
 MAX_REDIRECT_HOPS = 5
+
+
+def _payload_has_challenge(value):
+    """Inspect only platform error fields for a co-occurring challenge."""
+    if isinstance(value, bytes):
+        try:
+            value = json.loads(value[:64 * 1024])
+        except (ValueError, UnicodeError):
+            value = value[:64 * 1024].decode("utf-8", "ignore")
+    if isinstance(value, dict):
+        values = []
+        for key in (
+            "code",
+            "msg",
+            "message",
+            "error",
+            "reason",
+            "action",
+            "challenge",
+            "captcha",
+        ):
+            item = value.get(key)
+            if item is not None:
+                values.append(str(item))
+        if value.get("verify") is True or value.get("need_verify") is True:
+            return True
+        value = " ".join(values)
+    if not isinstance(value, str):
+        return False
+    return any(
+        marker in value
+        for marker in ("验证码", "安全验证", "人机验证", "滑动验证", "请完成验证")
+    )
 
 
 def _request_timeout(value, cap):
@@ -89,6 +127,34 @@ class WeiboEnricher:
         self._last_request = 0
         self._checkpoint = None
         self._manual_target_url = None
+        self.platform_access = None
+        self._access_snapshot = None
+        self._on_access_waiting = None
+
+    def configure_platform_access(self, coordinator):
+        self.platform_access = coordinator
+
+    def configure_access_snapshot(self, snapshot, *, on_waiting=None):
+        self._access_snapshot = snapshot
+        self._on_access_waiting = on_waiting
+
+    async def _active_platform_block(self, platform):
+        if self.platform_access is None:
+            return None
+        reader = getattr(self.platform_access, "active_block_async", None)
+        if reader is None:
+            reader = self.platform_access.active_block
+        value = reader(platform)
+        return await value if inspect.isawaitable(value) else value
+
+    async def _block_platform(self, platform, **kwargs):
+        if self.platform_access is None:
+            return None
+        blocker = getattr(self.platform_access, "block_async", None)
+        if blocker is None:
+            blocker = self.platform_access.block
+        value = blocker(platform, **kwargs)
+        return await value if inspect.isawaitable(value) else value
 
     def reset(self):
         self._checkpoint = None
@@ -99,7 +165,15 @@ class WeiboEnricher:
         """Validated selected-post context for an explicit manual recovery."""
         return self._manual_target_url
 
-    async def before_request(self):
+    async def before_request(self, stage="detail"):
+        if self.platform_access is not None:
+            await self.platform_access.wait_for_turn(
+                "wb",
+                self._access_snapshot,
+                stage=stage,
+                on_waiting=self._on_access_waiting,
+            )
+            return
         await asyncio.sleep(
             max(0, self.request_gap_seconds - (time.monotonic() - self._last_request))
         )
@@ -200,7 +274,7 @@ class WeiboEnricher:
                         if network_requests >= 64:
                             raise ComponentError("request_limit")
                         network_requests += 1
-                        await self.before_request()
+                        await self.before_request(request.stage)
                         async with client.stream(
                             request.method,
                             current_url,
@@ -231,6 +305,24 @@ class WeiboEnricher:
                                 raw.extend(chunk)
                             body = bytes(raw)
                             response_headers = dict(response.headers)
+                            if (
+                                response.status_code == 429
+                                and self.platform_access is not None
+                            ):
+                                await self._block_platform(
+                                    "wb",
+                                    stage=request.stage
+                                    if request.stage in {"search", "detail", "media"}
+                                    else "detail",
+                                    status_code=429,
+                                    retry_after_at=_retry_after_deadline(
+                                        response_headers.get("retry-after")
+                                    ),
+                                    basis="http_status",
+                                    manual_challenge_required=_payload_has_challenge(
+                                        body
+                                    ),
+                                )
                             if overflow and response.status_code < 400:
                                 body = b""
                                 response_headers["x-longtian-error"] = (
@@ -436,6 +528,16 @@ class WeiboEnricher:
                     pass
             self.reset()
             raise
+        except PlatformAccessBlockedError:
+            self._manual_target_url = content_url
+            if self.platform_access is not None and (
+                await self._active_platform_block("wb") is None
+            ):
+                await self._block_platform("wb", stage="detail")
+            return EnrichmentWorkerResult(
+                "platform_blocked_or_rate_limited",
+                diagnostic=_worker_diagnostic("platform_blocked_or_rate_limited"),
+            )
         except WeiboAccessError as error:
             if error.outcome in {
                 "login_required",
@@ -443,6 +545,11 @@ class WeiboEnricher:
                 "platform_blocked_or_rate_limited",
             }:
                 self._manual_target_url = content_url
+            if error.outcome == "platform_blocked_or_rate_limited" and (
+                self.platform_access is not None
+                and await self._active_platform_block("wb") is None
+            ):
+                await self._block_platform("wb", stage="detail")
             return EnrichmentWorkerResult(
                 error.outcome,
                 diagnostic=_worker_diagnostic(error.outcome),
@@ -474,6 +581,28 @@ class WeiboEnricher:
                 "platform_blocked_or_rate_limited",
             }:
                 self._manual_target_url = content_url
+            if outcome == "platform_blocked_or_rate_limited" and (
+                self.platform_access is not None
+                and await self._active_platform_block("wb") is None
+            ):
+                await self._block_platform(
+                    "wb",
+                    stage="detail",
+                    status_code=getattr(error, "status_code", None),
+                    basis=(
+                        getattr(error, "basis", None)
+                        if getattr(error, "basis", None)
+                        in {"http_status", "explicit_platform_evidence"}
+                        else (
+                            "http_status"
+                            if getattr(error, "status_code", None) in (403, 429)
+                            else "explicit_platform_evidence"
+                        )
+                    ),
+                    manual_challenge_required=_payload_has_challenge(
+                        detail_payload
+                    ),
+                )
             return EnrichmentWorkerResult(
                 outcome,
                 diagnostic=_component_diagnostic(error),
@@ -485,6 +614,31 @@ class WeiboEnricher:
                     "parser_failed", basis="upstream_exception"
                 ),
             )
+
+
+def _retry_after_deadline(value):
+    """Decode bounded delta-seconds and HTTP-date Retry-After values."""
+    if not isinstance(value, str):
+        return None
+    now = datetime.now(UTC)
+    raw = value.strip()
+    if re.fullmatch(r"[0-9]+", raw):
+        seconds = int(raw)
+        if seconds > 7 * 24 * 60 * 60:
+            return None
+        return now + timedelta(seconds=seconds)
+    try:
+        deadline = parsedate_to_datetime(raw)
+    except (TypeError, ValueError, OverflowError, IndexError):
+        return None
+    if deadline.tzinfo is None:
+        deadline = deadline.replace(tzinfo=UTC)
+    deadline = deadline.astimezone(UTC)
+    if deadline - now > timedelta(days=7):
+        return None
+    # A stale server date is an immediate retry boundary, not an unknown
+    # deadline. Returning ``now`` also keeps the persisted diagnostic honest.
+    return max(deadline, now)
 
 
 def _diagnostic(value):

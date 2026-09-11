@@ -70,7 +70,7 @@ def test_upgrade_existing_template_guards_and_preserve_frozen_history(
     database.initialize()
     database.initialize()  # idempotent restart
     with database.connect() as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 37
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 38
         assert [
             tuple(r)
             for r in connection.execute(

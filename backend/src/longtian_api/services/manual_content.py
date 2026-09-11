@@ -13,11 +13,24 @@ class ManualAcquisitionPause(Exception):
 
 
 class ManualContentSession:
-    def __init__(self, attempt, *, enrichment, database, on_pause):
+    def __init__(
+        self,
+        attempt,
+        *,
+        enrichment,
+        database,
+        on_pause,
+        access_snapshot=None,
+        on_access_waiting=None,
+        on_access_notice=None,
+    ):
         self.attempt = attempt
         self.enrichment = enrichment
         self.materials = ContentMaterialRepository(database)
         self.on_pause = on_pause
+        self.access_snapshot = access_snapshot
+        self.on_access_waiting = on_access_waiting
+        self.on_access_notice = on_access_notice
 
     @asynccontextmanager
     async def item(self, *, run_id, result_id, expected_source):
@@ -40,7 +53,13 @@ class ManualContentSession:
                     raise
                 if not self.enrichment.supports_platform(expected_source.platform):
                     raise ContentEnrichmentError("platform_not_supported") from None
-                session = await stack.enter_async_context(self.enrichment.operation())
+                session = await stack.enter_async_context(
+                    self.enrichment.operation(
+                        access_snapshot=self.access_snapshot,
+                        on_access_waiting=self.on_access_waiting,
+                        on_access_notice=self.on_access_notice,
+                    )
+                )
 
                 async def save_progress(content, _media=()):
                     await database_call(self.materials.save, result_id, content)

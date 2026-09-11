@@ -23,7 +23,7 @@ def payload(*, force=False, revision=1, request_id=None):
     )
 
 
-def test_full_pipeline_media_once_text_composition_and_canonical_reuse(tmp_path):
+def test_full_pipeline_text_only_composition_and_canonical_reuse(tmp_path):
     database, source, service, _, client, worker, coordinator = environment(
         tmp_path, count=3
     )
@@ -55,7 +55,8 @@ def test_full_pipeline_media_once_text_composition_and_canonical_reuse(tmp_path)
         assert result.usage.complete
         for stage, messages in client.calls[:3]:
             assert stage == "analysis"
-            assert messages[1]["content"][1]["type"] == "image_url"
+            assert isinstance(messages[1]["content"], str)
+            assert "image_url" not in messages[1]["content"]
         composition = client.calls[-1][1]
         assert isinstance(composition[1]["content"], str)
         body = json.loads(composition[1]["content"])

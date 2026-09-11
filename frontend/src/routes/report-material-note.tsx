@@ -127,7 +127,11 @@ export function CollectionGapNote({ report }: { report: ReportRun }) {
               : gap.status === 'cancelled'
                 ? '已取消'
                 : '采集失败'
-          return <li key={`${gap.position}-${gap.platform}`}>{platform}：{reason}</li>
+          return (
+            <li key={`${gap.position}-${gap.platform}`}>
+              {platform}：{reason}
+            </li>
+          )
         })}
       </ul>
     </div>

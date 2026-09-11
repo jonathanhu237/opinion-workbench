@@ -1,6 +1,7 @@
 """Local-only manual routes, strict public shapes and no automatic work."""
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -17,6 +18,10 @@ from longtian_api.services.ai_settings import AISettingsService
 from longtian_api.services.content_enrichment import ContentEnrichmentService
 from longtian_api.services.enrichment_staging import MediaSpool
 from longtian_api.services.monitoring_rules import MonitoringRuleService
+from longtian_api.services.platform_access import (
+    PlatformAccessCoordinator,
+    PlatformAccessService,
+)
 from longtian_api.services.platform_connections import PlatformConnectionService
 from longtian_api.services.summary_errors import SUMMARY_ERRORS
 
@@ -29,6 +34,22 @@ def api_fixture(tmp_path):
     media = MediaWorker()
 
     platform = PlatformConnectionService()
+    virtual_monotonic = [0.0]
+    virtual_wall = [datetime(2026, 1, 1, tzinfo=UTC)]
+
+    async def virtual_sleep(seconds):
+        virtual_monotonic[0] += seconds
+        virtual_wall[0] += timedelta(seconds=seconds)
+
+    def access_factory(db):
+        service = PlatformAccessService(db)
+        service.coordinator = PlatformAccessCoordinator(
+            service.repository,
+            clock=lambda: virtual_monotonic[0],
+            wall_clock=lambda: virtual_wall[0],
+            sleep=virtual_sleep,
+        )
+        return service
 
     def enrichment_factory(db, platform_service):
         model.coordinator = platform_service.browser_operations
@@ -44,6 +65,7 @@ def api_fixture(tmp_path):
         monitoring_rule_service_factory=lambda: MonitoringRuleService(
             database_path=database.path
         ),
+        platform_access_service_factory=access_factory,
         ai_settings_service_factory=lambda db: AISettingsService(db, client=model),
         content_enrichment_service_factory=enrichment_factory,
     )

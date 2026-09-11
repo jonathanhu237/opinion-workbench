@@ -221,6 +221,30 @@ function BatchRail({
                         {progress}
                       </p>
                     )}
+                    {run?.access_waiting && (
+                      <p
+                        className="mt-2 text-sm text-muted-foreground"
+                        role="status"
+                      >
+                        正在等待{platform.label}
+                        的访问间隔；合法等待不会被误报为超时，任务会在允许的访问开始时间继续。
+                      </p>
+                    )}
+                    {run?.access_notice && (
+                      <p
+                        className="mt-2 text-sm text-amber-700 dark:text-amber-300"
+                        role="alert"
+                      >
+                        已记录{platform.label}的访问限制
+                        {run.access_notice.status_code
+                          ? `（HTTP ${run.access_notice.status_code}）`
+                          : ''}
+                        。本次任务不会自动绕过限制，请确认平台状态后显式继续。
+                        {run.access_notice.manual_challenge_required
+                          ? ' 平台还要求完成安全验证。'
+                          : ''}
+                      </p>
+                    )}
                     <p className="mt-2 text-sm text-muted-foreground">
                       {batch.max_total_results != null
                         ? `已采集 ${item.total_count} / ${batch.max_total_results} 条（去重）`

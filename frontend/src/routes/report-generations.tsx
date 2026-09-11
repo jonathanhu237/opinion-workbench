@@ -306,6 +306,26 @@ function GenerationDetails({ value }: { value: ReportGeneration }) {
           </div>
         ))}
       </dl>
+      {value.analysis.model_retry_notice && (
+        <p
+          className="rounded-lg border border-warning/40 bg-warning/5 p-3 text-sm"
+          role="status"
+        >
+          {value.analysis.model_retry_notice.action === 'retrying'
+            ? `模型服务暂时限流，正在等待 ${value.analysis.model_retry_notice.wait_seconds.toFixed(1)} 秒后有限重试。`
+            : '模型服务持续限流，已达到本次自动重试上限；没有继续重复请求。'}
+        </p>
+      )}
+      {value.report?.model_retry_notice && (
+        <p
+          className="rounded-lg border border-warning/40 bg-warning/5 p-3 text-sm"
+          role="status"
+        >
+          {value.report.model_retry_notice.action === 'retrying'
+            ? `报告模型服务暂时限流，正在等待 ${value.report.model_retry_notice.wait_seconds.toFixed(1)} 秒后有限重试。`
+            : '报告模型服务持续限流，已达到本次自动重试上限；没有继续重复请求。'}
+        </p>
+      )}
       {value.status === 'summarising' && (
         <p className="text-sm">
           单条总结结束后，后台会继续生成本份报告，不需要再次点击。

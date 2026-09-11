@@ -1,7 +1,6 @@
 """Synthetic checked-media envelopes and non-executable, strictly parsed answers."""
 
 import asyncio
-import base64
 import hashlib
 import json
 from dataclasses import replace
@@ -198,7 +197,7 @@ def test_complete_text_supports_other_models_without_sending_source_urls():
     assert "真实性" in messages[0]["content"]
 
 
-def test_inline_all_actual_images_and_audio_bearing_video_exactly_once_in_order():
+def test_media_inventory_is_not_sent_to_text_only_analysis():
     assets = (
         ("image", "image/jpeg", b"synthetic-jpeg"),
         ("image", "image/png", b"synthetic-png"),
@@ -208,22 +207,14 @@ def test_inline_all_actual_images_and_audio_bearing_video_exactly_once_in_order(
     messages = build_analysis_messages(
         CONFIGURATION, enriched_item(assets=assets), CONTEXT
     )
-    parts = messages[1]["content"]
-    assert [part["type"] for part in parts] == [
-        "text",
-        "image_url",
-        "image_url",
-        "image_url",
-        "video_url",
-    ]
-    for part, (kind, mime, data) in zip(parts[1:], assets, strict=True):
-        url = part[f"{kind}_url"]["url"]
-        prefix = f"data:{mime};base64," if kind == "image" else "data:;base64,"
-        assert url.startswith(prefix)
-        assert base64.b64decode(url[len(prefix) :], validate=True) == data
-    assert "audio_url" not in json.dumps(
-        messages
-    ) and "data:video/mp4" not in json.dumps(messages)
+    content = messages[1]["content"]
+    assert isinstance(content, str)
+    payload = json.loads(content)
+    assert payload["source"]["body"] == "完整正文"
+    assert "image_url" not in content
+    assert "video_url" not in content
+    assert "audio_url" not in content
+    assert "synthetic-jpeg" not in content
     assert ANALYSIS_MAX_TOKENS == 2048 and SUMMARY_MAX_TOKENS == 4096
     assert MODEL_DEADLINE_SECONDS == 180
 
@@ -237,35 +228,35 @@ def test_inline_all_actual_images_and_audio_bearing_video_exactly_once_in_order(
         (CONFIGURATION.model, "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"),
     ],
 )
-def test_unreviewed_media_pair_is_rejected_without_degrading_to_text(model, url):
-    with pytest.raises(AIAnalysisError) as error:
-        build_analysis_messages(
-            replace(CONFIGURATION, model=model, base_url=url),
-            enriched_item(assets=(("video", "video/mp4", b"synthetic"),)),
-            CONTEXT,
-        )
-    assert (error.value.stage, error.value.code, error.value.usage) == (
-        "input",
-        "unsupported_model",
-        None,
+def test_media_inventory_is_ignored_without_degrading_text_only_analysis(model, url):
+    messages = build_analysis_messages(
+        replace(CONFIGURATION, model=model, base_url=url),
+        enriched_item(assets=(("video", "video/mp4", b"synthetic"),)),
+        CONTEXT,
     )
+    content = messages[1]["content"]
+    assert isinstance(content, str)
+    assert "完整正文" in content
+    assert "video_url" not in content and "synthetic" not in content
 
 
 @pytest.mark.parametrize(
-    "case",
+    "case,accepted",
     [
-        "outcome",
-        "coverage",
-        "media_missing",
-        "extra_media",
-        "bytes",
-        "mime",
-        "hash",
-        "fingerprint",
-        "active",
+        ("outcome", False),
+        ("coverage", False),
+        ("media_missing", True),
+        ("extra_media", True),
+        ("bytes", True),
+        ("mime", True),
+        ("hash", False),
+        ("fingerprint", False),
+        ("active", False),
     ],
 )
-def test_incomplete_or_mismatched_checked_input_never_becomes_a_request(case):
+def test_incomplete_or_mismatched_checked_input_never_becomes_an_unsafe_request(
+    case, accepted
+):
     item = enriched_item(assets=(("video", "video/mp4", b"synthetic"),))
     if case == "outcome":
         item = replace(item, outcome="timed_out")
@@ -285,18 +276,20 @@ def test_incomplete_or_mismatched_checked_input_never_becomes_a_request(case):
         item = replace(item, input_fingerprint="0" * 64)
     else:
         item = replace(item, source=replace(item.source, collection_active=True))
-    with pytest.raises(AIAnalysisError) as error:
-        build_analysis_messages(CONFIGURATION, item, CONTEXT)
-    assert error.value.code == "input_incomplete" and error.value.usage is None
+    if accepted:
+        messages = build_analysis_messages(CONFIGURATION, item, CONTEXT)
+        assert "image_url" not in json.dumps(messages)
+    else:
+        with pytest.raises(AIAnalysisError) as error:
+            build_analysis_messages(CONFIGURATION, item, CONTEXT)
+        assert error.value.code == "input_incomplete" and error.value.usage is None
 
 
-def test_total_raw_media_and_text_limits_are_not_silent_prefixes():
+def test_media_bytes_are_not_serialized_and_text_limits_remain_bounded():
     exact = enriched_item(assets=(("video", "video/mp4", b"x" * (6 * 1024 * 1024)),))
-    parts = build_analysis_messages(CONFIGURATION, exact, CONTEXT)[1]["content"]
-    assert (
-        len(base64.b64decode(parts[1]["video_url"]["url"].split(",", 1)[1]))
-        == 6 * 1024 * 1024
-    )
+    messages = build_analysis_messages(CONFIGURATION, exact, CONTEXT)
+    assert "video_url" not in json.dumps(messages)
+    assert "x" * 1000 not in json.dumps(messages)
     exact.content.assets[0].__dict__["byte_size"] += 1
     with pytest.raises(AIAnalysisError, match="input_incomplete"):
         build_analysis_messages(CONFIGURATION, exact, CONTEXT)
@@ -426,7 +419,7 @@ def test_summary_uses_only_saved_source_text_analysis_and_application_counts():
     assert payload["sources"] == [item.model_dump() for item in sources]
     assert payload["coverage"]["failed"] == 2 and payload["coverage"]["uncertain"] == 1
     assert "media" not in payload and "image_url" not in json.dumps(messages)
-    assert "不重新分析媒体" in messages[0]["content"]
+    assert "不重新分析图片、视频或音频" in messages[0]["content"]
     assert "不是事件数量" in messages[0]["content"]
 
 

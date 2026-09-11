@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Literal, Protocol
 from uuid import UUID
 
+from longtian_api.schemas.platform_access import PlatformAccessDiagnostic
 from longtian_api.search_platforms import SearchPlatform
 from longtian_api.services.enrichment_models import (
     AcquisitionDiagnostic,
@@ -155,6 +156,7 @@ class SearchWorkerResult:
     outcome: SearchOutcome
     execution_limit: ExecutionLimit | None = None
     incomplete_terms: tuple[SearchTermDiagnostic, ...] = ()
+    platform_access_diagnostic: PlatformAccessDiagnostic | None = None
 
 
 @dataclass(frozen=True, slots=True)

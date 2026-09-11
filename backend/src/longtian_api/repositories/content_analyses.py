@@ -1,5 +1,6 @@
 """Atomic uncapped admissions, immutable evidence and once-per-task settlement."""
 
+import json
 from typing import get_args
 
 from longtian_api.repositories.ai_summaries import fingerprint
@@ -14,8 +15,14 @@ from longtian_api.repositories.analysis_shared import (
     source_snapshot,
     timestamp,
 )
+from longtian_api.repositories.platform_access import PlatformAccessRepository
 from longtian_api.repositories.results import NEVER_STARTED_SQL
-from longtian_api.schemas.ai_summaries import SummaryFailure, SummarySource, TokenUsage
+from longtian_api.schemas.ai_summaries import (
+    ModelRetryNotice,
+    SummaryFailure,
+    SummarySource,
+    TokenUsage,
+)
 from longtian_api.schemas.analysis_evidence import AnalysisSource, SavedInput
 from longtian_api.schemas.content_analyses import (
     AnalysisAdmission,
@@ -30,11 +37,20 @@ from longtian_api.schemas.content_analyses import (
     Understanding,
     WorkflowAnalysisCreate,
 )
+from longtian_api.schemas.platform_access import (
+    PlatformAccessDiagnostic,
+    PlatformAccessSnapshot,
+    default_platform_access_snapshot,
+)
 from longtian_api.services.ai_analysis import MODEL_INPUT_VERSION
 from longtian_api.services.ai_client import MAX_USAGE_TOKENS
 from longtian_api.services.ai_errors import AIError
 from longtian_api.services.analysis_errors import AnalysisError
-from longtian_api.services.model_retry import combined_usage, usage_records
+from longtian_api.services.model_retry import (
+    append_rate_limit_history,
+    combined_usage,
+    usage_records,
+)
 from longtian_api.services.summary_errors import failure
 
 ACTIVE_ATTEMPTS = ("queued", "acquiring", "analysing")
@@ -45,6 +61,20 @@ WORKFLOW_RECOVERABLE_ATTEMPTS = (
     "cancelled",
     "interrupted",
 )
+
+
+def observed_usage(value):
+    """Normalize provider counters at the persistence boundary."""
+    if value is None:
+        return None
+    try:
+        if isinstance(value, TokenUsage):
+            value = value.model_dump(mode="json")
+        return TokenUsage.model_validate(value)
+    except (TypeError, ValueError):
+        # A malformed provider payload still represents an attempted request;
+        # callers must not lose the attempt or crash while writing its result.
+        return None
 
 
 def _resolve_prompt(connection, stage, choice, version_id, mode=None):
@@ -88,13 +118,22 @@ def observation_hash(source: SummarySource) -> str:
     )
 
 
+def analysis_intent_hash(payload: AnalysisCreate) -> str:
+    """Hash public analysis intent without its internal pacing projection."""
+    return fingerprint(payload.model_dump(exclude={"platform_access_snapshot"}))
+
+
 def workflow_intent_hash(payload: WorkflowAnalysisCreate, operation_key: str) -> str:
-    """Hash the private workflow intent separately from public API calls."""
+    """Hash replay identity without duplicating the already-frozen pacing data."""
+    # The automation snapshot is the source of truth for pacing. Excluding the
+    # nested copy from this hash keeps pre-v39 workflow request rows replayable
+    # when their historical run is materialized with a safe compatibility
+    # snapshot during recovery.
     return fingerprint(
         {
             "kind": "workflow",
             "operation_key": operation_key,
-            "payload": payload.model_dump(),
+            "payload": payload.model_dump(exclude={"platform_access_snapshot"}),
         }
     )
 
@@ -122,9 +161,10 @@ class ContentAnalysisRepository(AnalysisRepository):
         counts = dict.fromkeys(get_args(AttemptStatus), 0)
         counts["reused"] = 0
         attempted = accounted = prompt = completion = total_tokens = 0
+        count_overflow = False
         for item in connection.execute(
             """SELECT status,reused_from_attempt_id,attempted,usage_json,
-              retry_attempted,retry_usage_json FROM
+              error_json,retry_attempted,retry_usage_json,rate_limit_attempts_json FROM
               content_analysis_attempts WHERE job_id=? ORDER BY position""",
             (job_id,),
         ):
@@ -134,11 +174,29 @@ class ContentAnalysisRepository(AnalysisRepository):
                 attempted += record["attempted"]
                 if record["usage_json"] is not None:
                     usage = TokenUsage.model_validate_json(record["usage_json"])
-                    accounted += 1
+                    accounted += record.get("accounted", 1)
                     prompt += usage.prompt_tokens
                     completion += usage.completion_tokens
                     total_tokens += usage.total_tokens
-        unknown = (attempted > 0 and accounted == 0) or total_tokens > MAX_USAGE_TOKENS
+                else:
+                    # A compact overflow record can preserve the number of
+                    # accounted calls even when their summed token total no
+                    # longer fits the public safe integer bound.
+                    accounted += record.get("accounted", 0)
+                if attempted > MAX_USAGE_TOKENS or accounted > MAX_USAGE_TOKENS:
+                    count_overflow = True
+                    attempted = min(attempted, MAX_USAGE_TOKENS)
+                    accounted = min(accounted, MAX_USAGE_TOKENS)
+        # A rate-limited call may report usage while its eventual retry does
+        # not (or vice versa). Any unaccounted network attempt makes the
+        # aggregate incomplete, but known usage remains useful and must not be
+        # replaced with a confirmed zero. Only an overflow or an all-unknown
+        # aggregate hides the token fields.
+        overflow = total_tokens > MAX_USAGE_TOKENS
+        unknown = count_overflow or accounted != attempted or overflow
+        known_tokens = (
+            (accounted > 0 or attempted == 0) and not overflow and not count_overflow
+        )
         event = connection.execute(
             "SELECT id FROM analysis_completion_events WHERE job_id=?", (job_id,)
         ).fetchone()
@@ -163,6 +221,15 @@ class ContentAnalysisRepository(AnalysisRepository):
                 historical=row["status"] not in ("queued", "running"),
             ),
             force_refresh=bool(row["force_refresh"]),
+            summary_concurrency=int(row["summary_concurrency"]),
+            platform_access_snapshot=_decode_platform_snapshot(
+                row["platform_access_snapshot_json"]
+            ),
+            access_waiting=bool(row["access_wait_json"]),
+            access_notice=_decode_access_notice(row["access_notice_json"]),
+            model_retry_notice=_decode_model_retry_notice(
+                row["model_retry_notice_json"]
+            ),
             counts=AnalysisCounts(
                 total=sum(v for k, v in counts.items() if k != "reused"), **counts
             ),
@@ -170,9 +237,9 @@ class ContentAnalysisRepository(AnalysisRepository):
                 attempted_requests=attempted,
                 accounted_requests=accounted,
                 complete=not unknown and attempted == accounted,
-                prompt_tokens=None if unknown else prompt,
-                completion_tokens=None if unknown else completion,
-                total_tokens=None if unknown else total_tokens,
+                prompt_tokens=prompt if known_tokens else None,
+                completion_tokens=completion if known_tokens else None,
+                total_tokens=total_tokens if known_tokens else None,
             ),
             queue_reason=row["queue_reason"],
             completion_event_id=event[0] if event else None,
@@ -265,7 +332,7 @@ class ContentAnalysisRepository(AnalysisRepository):
         ).fetchone()
         if row is None:
             return None
-        if row["intent_hash"] != fingerprint(payload.model_dump()):
+        if row["intent_hash"] != analysis_intent_hash(payload):
             raise AnalysisError("content_analysis_request_conflict")
         return AnalysisAdmission(
             job=self._read(connection, row["job_id"]) if row["job_id"] else None,
@@ -332,6 +399,15 @@ class ContentAnalysisRepository(AnalysisRepository):
     def workflow_replay(self, payload: WorkflowAnalysisCreate, *, operation_key: str):
         with self.connection() as connection:
             return self._workflow_replay(connection, payload, operation_key)
+
+    def workflow_job(self, operation_key: str):
+        """Read the durably admitted workflow child by its stage key."""
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT id FROM content_analysis_jobs WHERE automatic_origin=?",
+                (operation_key,),
+            ).fetchone()
+            return self._read(connection, row[0]) if row is not None else None
 
     def create(self, payload: AnalysisCreate) -> AnalysisAdmission:
         with self.connection(write=True) as connection:
@@ -431,12 +507,13 @@ class ContentAnalysisRepository(AnalysisRepository):
                 request_id=payload.request_id,
                 force_refresh=payload.force_refresh,
                 active=active,
+                platform_access_snapshot=payload.platform_access_snapshot,
             )
             connection.execute(
                 "INSERT INTO content_analysis_requests VALUES (?,?,?,?,?)",
                 (
                     payload.request_id,
-                    fingerprint(payload.model_dump()),
+                    analysis_intent_hash(payload),
                     result.job.id if result.job else None,
                     result.admitted_count,
                     result.already_active_count,
@@ -538,6 +615,7 @@ class ContentAnalysisRepository(AnalysisRepository):
                 force_refresh=payload.force_refresh,
                 active=active,
                 selections=tuple(selections),
+                platform_access_snapshot=payload.platform_access_snapshot,
             )
             connection.execute(
                 "INSERT INTO content_analysis_requests VALUES (?,?,?,?,?)",
@@ -575,6 +653,8 @@ class ContentAnalysisRepository(AnalysisRepository):
         force_refresh=False,
         active=0,
         selections: tuple[tuple[int, int, bool], ...] | None = None,
+        summary_concurrency=1,
+        platform_access_snapshot: PlatformAccessSnapshot | None = None,
     ):
         if selections is None:
             selections = tuple(
@@ -589,11 +669,15 @@ class ContentAnalysisRepository(AnalysisRepository):
                 job=None, admitted_count=0, already_active_count=active
             )
         now = timestamp()
+        platform_access_snapshot = platform_access_snapshot or PlatformAccessRepository(
+            self.database
+        ).snapshot_from_connection(connection)
         job_id = connection.execute(
             """INSERT INTO content_analysis_jobs(request_id,trigger,automatic_origin,
           configuration_revision,base_url,model,initial_prompt_version_id,
           initial_prompt_mode,report_prompt_version_id,report_prompt_mode,
-          force_refresh,status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,'queued',?)""",
+          force_refresh,summary_concurrency,platform_access_snapshot_json,
+          status,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,'queued',?)""",
             (
                 request_id,
                 "automatic" if origin else "manual",
@@ -606,6 +690,8 @@ class ContentAnalysisRepository(AnalysisRepository):
                 report_prompt_version_id,
                 report_prompt_mode,
                 int(force_refresh),
+                summary_concurrency,
+                platform_access_snapshot.model_dump_json(),
                 now,
             ),
         ).lastrowid
@@ -811,18 +897,133 @@ class ContentAnalysisRepository(AnalysisRepository):
                 is not None
             )
 
-    def next_attempt(self, job_id) -> AnalysisAttempt | None:
+    def _reusable_candidate(self, connection, row, *, allow_preview=False):
+        """Return a reusable completed attempt for the queued source, if any."""
+        current_source, _ = source_snapshot(connection, row["content_id"])
+        if observation_hash(current_source) != row["observation_hash"]:
+            return None
+        cached = connection.execute(
+            """SELECT a.* FROM content_analysis_attempts a
+          JOIN content_analysis_claims cl ON cl.content_id=a.content_id
+          WHERE a.cache_key=? AND a.id<? AND a.status='completed'
+            AND a.reused_from_attempt_id IS NULL
+            AND a.analysis_input_version=?
+            AND a.input_fingerprint=cl.known_input_fingerprint ORDER BY a.id
+              DESC LIMIT 1""",
+            (row["cache_key"], row["id"], MODEL_INPUT_VERSION),
+        ).fetchone()
+        if cached is None:
+            return None
+        validated = self._attempt(cached)
+        # Normal analysis requires original-post text, including independent
+        # and automatic entry points. Preview reuse is an explicit opt-in for
+        # callers exercising legacy evidence, never the runtime default.
+        accepted_extractors = {f"{validated.source.platform}-enrichment-v1"}
+        if allow_preview:
+            accepted_extractors.add(f"{validated.source.platform}-search-preview-v1")
+        if (
+            validated.input is None
+            or not validated.input.analysis_eligible
+            or validated.input.extractor_version not in accepted_extractors
+        ):
+            return None
+        return cached
+
+    def next_attempt(
+        self, job_id, *, prefer_reusable=True, allow_preview=False
+    ) -> AnalysisAttempt | None:
         with self.connection() as connection:
-            row = connection.execute(
+            rows = connection.execute(
                 """SELECT * FROM content_analysis_attempts WHERE job_id=? AND
-                  status='queued' ORDER BY position LIMIT 1""",
+                  status='queued' ORDER BY position""",
                 (job_id,),
-            ).fetchone()
-            return self._attempt(row) if row else None
+            ).fetchall()
+            if not rows:
+                return None
+            fallback = rows[0]
+            if prefer_reusable:
+                # A URL-only item may block on browser acquisition. Prefer
+                # work that can complete entirely offline: reusable summaries
+                # first, then a previously saved, text-bearing detail input.
+                # All candidates are revalidated by the subsequent atomic
+                # reuse/save operation; malformed rows simply follow source
+                # order instead of becoming an execution-wide failure.
+                for row in rows:
+                    try:
+                        if (
+                            self._reusable_candidate(
+                                connection, row, allow_preview=allow_preview
+                            )
+                            is not None
+                        ):
+                            return self._attempt(row)
+                    except (TypeError, ValueError):
+                        continue
+                for row in rows:
+                    raw = row["input_json"]
+                    if not raw:
+                        continue
+                    try:
+                        source = AnalysisSource.model_validate_json(row["source_json"])
+                        saved = SavedInput.model_validate_json(raw)
+                    except (TypeError, ValueError):
+                        continue
+                    if (
+                        saved.extractor_version == f"{source.platform}-enrichment-v1"
+                        and saved.evidence_coverage.text_available
+                    ):
+                        return self._attempt(row)
+            return self._attempt(fallback)
+
+    def ensure_platform_access_snapshot(
+        self, job_id: int, snapshot: PlatformAccessSnapshot
+    ) -> None:
+        with self.connection(write=True) as connection:
+            connection.execute(
+                """UPDATE content_analysis_jobs
+                   SET platform_access_snapshot_json=?
+                   WHERE id=? AND platform_access_snapshot_json IS NULL""",
+                (snapshot.model_dump_json(), job_id),
+            )
+
+    def set_access_waiting(self, job_id, value) -> None:
+        with self.connection(write=True) as connection:
+            connection.execute(
+                "UPDATE content_analysis_jobs SET access_wait_json=? WHERE id=?",
+                (json.dumps(value, ensure_ascii=False) if value else None, job_id),
+            )
+
+    def set_access_notice(
+        self, job_id, diagnostic: PlatformAccessDiagnostic | None
+    ) -> None:
+        with self.connection(write=True) as connection:
+            connection.execute(
+                "UPDATE content_analysis_jobs SET access_notice_json=? WHERE id=?",
+                (diagnostic.model_dump_json() if diagnostic else None, job_id),
+            )
+
+    def record_model_rate_limit(self, attempt_id, usage, notice: ModelRetryNotice):
+        """Persist one bounded rate-limit response and its user notice."""
+        with self.connection(write=True) as connection:
+            row = self._active(connection, attempt_id)
+            history = append_rate_limit_history(row["rate_limit_attempts_json"], usage)
+            connection.execute(
+                """UPDATE content_analysis_attempts
+                   SET rate_limit_attempts_json=? WHERE id=?""",
+                (
+                    json.dumps(history, ensure_ascii=False, separators=(",", ":")),
+                    attempt_id,
+                ),
+            )
+            connection.execute(
+                """UPDATE content_analysis_jobs
+                   SET model_retry_notice_json=? WHERE id=?""",
+                (notice.model_dump_json(), row["job_id"]),
+            )
 
     def queue(self, job_id, reason) -> None:
         with self.connection(write=True) as connection:
-            if reason == "browser_operation_active":
+            if reason in {"browser_operation_active", "ai_operation_active"}:
                 connection.execute(
                     """UPDATE content_analysis_attempts SET status='queued'
                     WHERE job_id=? AND status='acquiring'""",
@@ -901,6 +1102,7 @@ class ContentAnalysisRepository(AnalysisRepository):
             )
 
     def mark_retry(self, attempt_id, usage):
+        usage = observed_usage(usage)
         with self.connection(write=True) as connection:
             row = self._active(connection, attempt_id)
             if row["status"] != "analysing" or row["retry_attempted"]:
@@ -914,6 +1116,7 @@ class ContentAnalysisRepository(AnalysisRepository):
     def finish_attempt(
         self, attempt_id, status, *, output=None, error=None, usage=None
     ):
+        usage = observed_usage(usage)
         if status in ACTIVE_ATTEMPTS:
             raise ValueError("terminal status required")
         with self.connection(write=True) as connection:
@@ -936,34 +1139,13 @@ class ContentAnalysisRepository(AnalysisRepository):
                 ),
             )
 
-    def reuse(self, attempt_id) -> bool:
+    def reuse(self, attempt_id, *, allow_preview=False) -> bool:
         with self.connection(write=True) as connection:
             row = self._active(connection, attempt_id)
-            current_source, _ = source_snapshot(connection, row["content_id"])
-            if observation_hash(current_source) != row["observation_hash"]:
-                return False
-            cached = connection.execute(
-                """SELECT a.* FROM content_analysis_attempts a
-              JOIN content_analysis_claims cl ON cl.content_id=a.content_id
-              WHERE a.cache_key=? AND a.id<? AND a.status='completed' AND
-                a.reused_from_attempt_id IS NULL
-                AND a.analysis_input_version=?
-                AND a.input_fingerprint=cl.known_input_fingerprint ORDER BY a.id
-                  DESC LIMIT 1""",
-                (row["cache_key"], attempt_id, MODEL_INPUT_VERSION),
-            ).fetchone()
+            cached = self._reusable_candidate(
+                connection, row, allow_preview=allow_preview
+            )
             if cached is None:
-                return False
-            validated = self._attempt(cached)
-            accepted_extractors = {
-                f"{validated.source.platform}-enrichment-v1",
-                f"{validated.source.platform}-search-preview-v1",
-            }
-            if (
-                validated.input is None
-                or not validated.input.analysis_eligible
-                or validated.input.extractor_version not in accepted_extractors
-            ):
                 return False
             connection.execute(
                 """UPDATE content_analysis_attempts SET
@@ -1011,7 +1193,8 @@ class ContentAnalysisRepository(AnalysisRepository):
             )
         connection.execute(
             """UPDATE content_analysis_jobs SET
-              status=?,finished_at=?,queue_reason=NULL WHERE id=?""",
+              status=?,finished_at=?,queue_reason=NULL,
+              access_wait_json=NULL WHERE id=?""",
             (status, now, job_id),
         )
         connection.execute(
@@ -1057,3 +1240,30 @@ class ContentAnalysisRepository(AnalysisRepository):
                     }
                 )
             return events
+
+
+def _decode_platform_snapshot(raw: str | None) -> PlatformAccessSnapshot:
+    if raw is None:
+        return default_platform_access_snapshot(basis="legacy_unavailable")
+    try:
+        return PlatformAccessSnapshot.model_validate_json(raw)
+    except (TypeError, ValueError):
+        return default_platform_access_snapshot(basis="legacy_unavailable")
+
+
+def _decode_access_notice(raw: str | None) -> PlatformAccessDiagnostic | None:
+    if raw is None:
+        return None
+    try:
+        return PlatformAccessDiagnostic.model_validate_json(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _decode_model_retry_notice(raw: str | None) -> ModelRetryNotice | None:
+    if raw is None:
+        return None
+    try:
+        return ModelRetryNotice.model_validate_json(raw)
+    except (TypeError, ValueError):
+        return None

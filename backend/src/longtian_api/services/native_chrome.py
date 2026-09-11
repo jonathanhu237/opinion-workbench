@@ -7,8 +7,10 @@ session state in memory; only coordination files are read from the profile.
 """
 
 import asyncio
+import inspect
 import os
 import re
+import shutil
 import socket
 import stat
 import sys
@@ -87,22 +89,39 @@ class ManagedChrome:
             raise
 
     def _prepare_profile(self):
-        if sys.platform != "darwin" or self.profile.parts[-3:] != (
-            "runtime",
-            "browser",
-            "managed-chrome",
-        ):
-            raise BrowserUnavailable()
-        for path in (self.profile, *self.profile.parents):
-            if path.is_symlink():
+        if sys.platform == "darwin":
+            if self.profile.parts[-3:] != (
+                "runtime",
+                "browser",
+                "managed-chrome",
+            ):
                 raise BrowserUnavailable()
+            # Preserve the macOS runtime boundary for every parent directory;
+            # checking only the leaf would allow a profile rooted through a
+            # symlinked runtime/browser directory.
+            for path in (self.profile, *self.profile.parents):
+                if path.is_symlink():
+                    raise BrowserUnavailable()
+        elif os.name == "nt":
+            # Never follow symlinks or Windows reparse points anywhere in the
+            # configured profile path.  The install directory is not an
+            # acceptable profile location because upgrades replace it.
+            for path in (self.profile, *self.profile.parents):
+                if _is_reparse_point(path):
+                    raise BrowserUnavailable()
+        else:
+            raise BrowserUnavailable()
         self.profile.mkdir(mode=0o700, parents=True, exist_ok=True)
         meta = self.profile.stat()
-        if (
-            not stat.S_ISDIR(meta.st_mode)
-            or meta.st_uid != os.getuid()
-            or meta.st_mode & 0o077
+        if not stat.S_ISDIR(meta.st_mode) or (
+            os.name == "nt" and _is_reparse_point(self.profile)
         ):
+            raise BrowserUnavailable()
+        if os.name == "nt":
+            self._prepare_windows_lease()
+            return
+
+        if meta.st_uid != os.getuid() or meta.st_mode & 0o077:
             raise BrowserUnavailable()
         import fcntl
 
@@ -126,6 +145,31 @@ class ManagedChrome:
         except BaseException:
             os.close(fd)
             raise
+        self._lease = fd
+
+    def _prepare_windows_lease(self):
+        """Hold one byte-range lock for this application's Chrome owner."""
+
+        import msvcrt
+
+        lock_path = self.profile / ".longtian-browser-owner.lock"
+        try:
+            if _is_reparse_point(lock_path):
+                raise BrowserUnavailable()
+            fd = os.open(lock_path, os.O_RDWR | os.O_CREAT)
+            info = os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or _is_reparse_point(lock_path):
+                raise BrowserUnavailable()
+            if info.st_size == 0:
+                os.write(fd, b"0")
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        except (OSError, ValueError):
+            try:
+                os.close(fd)
+            except (UnboundLocalError, OSError):
+                pass
+            raise BrowserUnavailable() from None
         self._lease = fd
 
     def _stale_chrome_lock(self):
@@ -186,20 +230,21 @@ class ManagedChrome:
             path.unlink()
 
     def _endpoint_record(self):
+        endpoint_path = self.profile / "DevToolsActivePort"
+        if os.name == "nt" and _is_reparse_point(endpoint_path):
+            raise BrowserUnavailable()
+        flags = os.O_RDONLY
+        if os.name != "nt":
+            flags |= os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
         try:
-            fd = os.open(
-                self.profile / "DevToolsActivePort",
-                os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
-            )
+            fd = os.open(endpoint_path, flags)
         except FileNotFoundError:
             return None
         try:
             meta = os.fstat(fd)
-            if (
-                not stat.S_ISREG(meta.st_mode)
-                or meta.st_uid != os.getuid()
-                or meta.st_size > 4096
-            ):
+            if not stat.S_ISREG(meta.st_mode) or meta.st_size > 4096:
+                raise BrowserUnavailable()
+            if os.name != "nt" and meta.st_uid != os.getuid():
                 raise BrowserUnavailable()
             value = os.read(fd, 4097).decode("ascii")
             matched = re.fullmatch(
@@ -220,7 +265,9 @@ class ManagedChrome:
         try:
             self._prepare_profile()
             previous = self._endpoint_record()
-            executable = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+            executable = find_chrome_executable()
+            if executable is None:
+                raise BrowserUnavailable()
             await self._launch_owned(
                 executable,
                 "--remote-debugging-address=127.0.0.1",
@@ -396,8 +443,13 @@ class ManagedChrome:
         except Exception:
             raise BrowserUnavailable() from None
 
-    async def prefer_latest_search(self, platform):
-        """Best-effort public search controls; reload default search on failure."""
+    async def prefer_latest_search(self, platform, before_access=None):
+        """Best-effort public search controls; reload default search on failure.
+
+        ``before_access`` is supplied by the native collector for the fallback
+        reload. DOM inspection and clicking the sort control are one already
+        admitted browser operation; a recovery navigation is a new one.
+        """
         if platform not in {"xhs", "dy"}:
             return False
         self._check()
@@ -440,6 +492,10 @@ class ManagedChrome:
                 return True
         except Exception:
             self._check()
+            if before_access is not None:
+                value = before_access()
+                if inspect.isawaitable(value):
+                    await value
             await self.navigate(original_url)
             return False
 
@@ -448,8 +504,15 @@ class ManagedChrome:
         await asyncio.sleep(0.25)
         self._check()
 
-    async def open_xhs_search_result(self, search_url, content_id):
-        """Follow the selected rendered card; keep access parameters in Chrome."""
+    async def open_xhs_search_result(
+        self, search_url, content_id, before_access=None
+    ):
+        """Follow the selected rendered card; keep access parameters in Chrome.
+
+        The caller paces the initial search navigation.  This callback paces
+        the optional sort fallback and the click that navigates to the detail
+        page, both of which can trigger another platform access.
+        """
         if (
             urlsplit(search_url).hostname != "www.xiaohongshu.com"
             or urlsplit(search_url).path != "/search_result"
@@ -466,10 +529,19 @@ class ManagedChrome:
                         # Discovery can use newest-first cards that are absent
                         # from the first comprehensive result window. Retry
                         # that public sort before declaring the note missing.
-                        await self.prefer_latest_search("xhs")
+                        if before_access is None:
+                            await self.prefer_latest_search("xhs")
+                        else:
+                            await self.prefer_latest_search(
+                                "xhs", before_access=before_access
+                            )
                     for attempt in range(attempts):
                         try:
                             await card.wait_for(state="visible", timeout=3000)
+                            if before_access is not None:
+                                value = before_access()
+                                if inspect.isawaitable(value):
+                                    await value
                             await card.click(timeout=3000)
                             return True
                         except Exception:
@@ -546,17 +618,20 @@ class ManagedChrome:
                     try:
                         await asyncio.wait_for(self._process.wait(), 5)
                     except TimeoutError:
-                        try:
-                            self._process.kill()
-                        except ProcessLookupError:
-                            pass
+                        if os.name == "nt":
+                            await _kill_windows_process_tree(self._process)
+                        else:
+                            try:
+                                self._process.kill()
+                            except ProcessLookupError:
+                                pass
                         await asyncio.wait_for(self._process.wait(), 5)
             finally:
                 self._playwright = self._browser = None
                 if self._process is None or self._process.returncode is not None:
                     self._process = None
                     if self._lease is not None:
-                        os.close(self._lease)
+                        _release_profile_lease(self._lease)
                         self._lease = None
 
 
@@ -572,3 +647,88 @@ def native_collector_factory(
         ),
         on_progress=on_progress,
     )
+
+
+def _is_reparse_point(path: Path) -> bool:
+    """Detect Windows symlinks/junctions without resolving user data."""
+
+    try:
+        if path.is_symlink():
+            return True
+        attributes = getattr(path.stat(follow_symlinks=False), "st_file_attributes", 0)
+        return bool(attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+
+
+def find_chrome_executable() -> str | None:
+    """Find Google Chrome without taking over the user's everyday profile."""
+
+    if os.name == "nt":
+        candidates = [
+            Path(os.environ[name]) / "Google" / "Chrome" / "Application" / "chrome.exe"
+            for name in ("LOCALAPPDATA", "PROGRAMFILES", "PROGRAMFILES(X86)")
+            if os.environ.get(name)
+        ]
+        candidates.extend(
+            [
+                Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe"),
+                Path(r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe"),
+            ]
+        )
+        for candidate in candidates:
+            if candidate.is_file() and not _is_reparse_point(candidate):
+                return str(candidate)
+        return shutil.which("chrome.exe") or shutil.which("chrome")
+    if sys.platform == "darwin":
+        candidate = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+        # Keep the historical launch path even when a test double or a
+        # development machine supplies the executable through its launcher.
+        return str(candidate)
+    return shutil.which("google-chrome") or shutil.which("chrome")
+
+
+def _release_profile_lease(fd: int) -> None:
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+    except (OSError, ValueError):
+        pass
+    finally:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+
+
+async def _kill_windows_process_tree(process) -> None:
+    """Stop Chrome's child renderer processes after a bounded graceful wait."""
+
+    pid = getattr(process, "pid", None)
+    if not pid:
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
+        return
+    try:
+        killer = await asyncio.create_subprocess_exec(
+            "taskkill",
+            "/PID",
+            str(pid),
+            "/T",
+            "/F",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await asyncio.wait_for(killer.wait(), 5)
+    except (OSError, ProcessLookupError, TimeoutError):
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass

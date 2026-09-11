@@ -1,21 +1,26 @@
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from longtian_api.api.router import api_router
+from longtian_api.application_paths import is_frozen_runtime
 from longtian_api.database import Database
 from longtian_api.repositories.search_runs import SearchRunRepository
 from longtian_api.services.ai_settings import AISettingsService
 from longtian_api.services.ai_summaries import SummaryService
 from longtian_api.services.analysis_settings import AnalysisSettingsService
+from longtian_api.services.application_lifecycle import ApplicationLifecycle
 from longtian_api.services.automation_workflows import AutomationWorkflowService
 from longtian_api.services.content_analyses import ContentAnalysisService
 from longtian_api.services.content_enrichment import ContentEnrichmentService
 from longtian_api.services.monitoring_rules import MonitoringRuleService
+from longtian_api.services.platform_access import PlatformAccessService
+from longtian_api.services.summary_preferences import SummaryPreferenceService
 from longtian_api.services.platform_connections import PlatformConnectionService
 from longtian_api.services.report_generations import ReportGenerationService
 from longtian_api.services.results import ResultsService
@@ -37,6 +42,8 @@ def create_app(
     monitoring_rule_service_factory: Callable[
         [], MonitoringRuleService
     ] = MonitoringRuleService,
+    platform_access_service_factory: Callable[[Database], PlatformAccessService]
+    | None = None,
     search_run_service_factory: SearchRunServiceFactory | None = None,
     ai_settings_service_factory: Callable[[Database], AISettingsService] | None = None,
     content_enrichment_service_factory: Callable[
@@ -61,15 +68,48 @@ def create_app(
         [Database, AISettingsService, ContentEnrichmentService], ContentAnalysisService
     ]
     | None = None,
+    static_dir: Path | None = None,
+    packaged: bool | None = None,
+    lifecycle_enabled: bool | None = None,
+    lifecycle_on_expired: Callable[[], object] | None = None,
+    automation_resume_on_startup: bool | None = None,
 ) -> FastAPI:
     """Create the product API and lifespan-owned local services."""
+
+    packaged_mode = is_frozen_runtime() if packaged is None else packaged
+    lifecycle_mode = packaged_mode if lifecycle_enabled is None else lifecycle_enabled
+    resume_automation = (
+        not packaged_mode
+        if automation_resume_on_startup is None
+        else automation_resume_on_startup
+    )
+    static_root = static_dir.absolute() if static_dir is not None else None
+
+    def build_platform_access(database: Database) -> PlatformAccessService:
+        if platform_access_service_factory is not None:
+            return platform_access_service_factory(database)
+        return PlatformAccessService(database)
 
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         platform_service = platform_connection_service_factory()
+        lifecycle_service = ApplicationLifecycle(
+            enabled=lifecycle_mode,
+            on_expired=lifecycle_on_expired,
+        )
+        application.state.application_lifecycle = lifecycle_service
         try:
             monitoring_rule_service = monitoring_rule_service_factory()
             await run_in_threadpool(monitoring_rule_service.initialize)
+            preference_database = monitoring_rule_service.database
+            application.state.summary_preference_service = (
+                SummaryPreferenceService(
+                    preference_database.path.parent / "preferences.json"
+                )
+                if preference_database is not None
+                else None
+            )
+            platform_access_service = None
             if search_run_service_factory is not None:
                 search_run_service = search_run_service_factory(
                     monitoring_rule_service,
@@ -82,11 +122,14 @@ def create_app(
                         "A custom monitoring repository requires an explicit "
                         "search-run service factory."
                     )
+                platform_access_service = build_platform_access(shared_database)
+                await run_in_threadpool(platform_access_service.initialize)
                 search_run_service = SearchRunService(
                     monitoring_rules=monitoring_rule_service,
                     worker=platform_service.worker,
                     browser_operations=platform_service.browser_operations,
                     database=shared_database,
+                    platform_access=platform_access_service.coordinator,
                 )
             await run_in_threadpool(search_run_service.initialize)
             batch_database = search_run_service.database
@@ -95,10 +138,24 @@ def create_app(
                     "A custom search-run repository requires an explicit "
                     "search-batch service integration."
                 )
+            if platform_access_service is None:
+                platform_access_service = build_platform_access(batch_database)
+                await run_in_threadpool(platform_access_service.initialize)
+            configure_access = getattr(
+                platform_service, "configure_platform_access", None
+            )
+            if callable(configure_access):
+                configure_access(platform_access_service.coordinator)
+            configure_search_access = getattr(
+                search_run_service, "configure_platform_access", None
+            )
+            if callable(configure_search_access):
+                configure_search_access(platform_access_service.coordinator)
             search_batch_service = SearchBatchService(
                 search_runs=search_run_service,
                 browser_operations=platform_service.browser_operations,
                 database=batch_database,
+                platform_access=platform_access_service.coordinator,
             )
             await run_in_threadpool(search_batch_service.initialize)
             ai_settings_service = (
@@ -114,8 +171,14 @@ def create_app(
                     repository=SearchRunRepository(batch_database),
                     worker=platform_service.worker,
                     browser_operations=platform_service.browser_operations,
+                    platform_access=platform_access_service.coordinator,
                 )
             )
+            configure_enrichment_access = getattr(
+                enrichment_service, "configure_platform_access", None
+            )
+            if callable(configure_enrichment_access):
+                configure_enrichment_access(platform_access_service.coordinator)
             summary_service = SummaryService(
                 database=batch_database,
                 ai_settings=ai_settings_service,
@@ -155,6 +218,7 @@ def create_app(
                 analyses=content_analysis_service,
                 reports=topic_report_service,
                 ai_settings=ai_settings_service,
+                platform_access=platform_access_service.coordinator,
             )
             await run_in_threadpool(report_generation_service.initialize)
             # Automatic progression belongs exclusively to the fixed workflow
@@ -173,6 +237,7 @@ def create_app(
                     analyses=content_analysis_service,
                     reports=topic_report_service,
                     ai_settings=ai_settings_service,
+                    platform_access=platform_access_service,
                     available=automation_workflow_available,
                 )
             )
@@ -187,6 +252,7 @@ def create_app(
                 automation_available=automation_workflow_available,
             )
             application.state.platform_connection_service = platform_service
+            application.state.platform_access_service = platform_access_service
             application.state.monitoring_rule_service = monitoring_rule_service
             application.state.search_run_service = search_run_service
             application.state.search_batch_service = search_batch_service
@@ -195,11 +261,14 @@ def create_app(
             application.state.ai_summary_service = summary_service
             application.state.automation_workflow_service = automation_workflow_service
             await search_batch_service.resume_after_startup()
-            await automation_workflow_service.start()
+            await automation_workflow_service.start(
+                resume_active_runs=resume_automation
+            )
             yield
         finally:
             # Stop timer admission first; drain every owner even after a failure.
             scope = locals()
+            await lifecycle_service.shutdown()
             await _shutdown_services(
                 [
                     scope.get("automation_workflow_service"),
@@ -211,6 +280,7 @@ def create_app(
                     scope.get("ai_settings_service"),
                     scope.get("search_batch_service"),
                     scope.get("search_run_service"),
+                    scope.get("platform_access_service"),
                     platform_service,
                 ]
             )
@@ -225,8 +295,38 @@ def create_app(
         _request_validation_error_handler,
     )
     application.state.ai_frontend_origins = ai_frontend_origins
+    application.state.packaged = packaged_mode
+    application.state.static_dir = static_root
     application.include_router(api_router)
+    if static_root is not None:
+        application.add_api_route(
+            "/{path:path}",
+            lambda path: _serve_frontend(static_root, path),
+            methods=["GET"],
+            include_in_schema=False,
+        )
     return application
+
+
+def _serve_frontend(static_root: Path, path: str):
+    """Serve Vite output and fall back to ``index.html`` for SPA routes."""
+
+    root = static_root.resolve()
+    candidate = (root / path).resolve()
+    if root not in candidate.parents and candidate != root:
+        raise HTTPException(status_code=404, detail="Not found")
+    if path == "" or not candidate.is_file():
+        # API and asset paths are real resources.  Returning the SPA shell for
+        # a typo here turns a useful 404 into an HTML/MIME failure in the
+        # browser and can hide a broken packaged install.
+        if path == "api" or path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="Not found")
+        if path == "assets" or path.startswith("assets/"):
+            raise HTTPException(status_code=404, detail="Not found")
+        candidate = root / "index.html"
+    if not candidate.is_file():
+        raise HTTPException(status_code=404, detail="Not found")
+    return FileResponse(candidate)
 
 
 async def _shutdown_services(services: list) -> None:

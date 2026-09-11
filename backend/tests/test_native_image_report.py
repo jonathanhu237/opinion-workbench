@@ -1,6 +1,5 @@
-"""Actual fixed image bytes cross the native acquisition and model boundaries."""
+"""Native text-only acquisition ignores media metadata and URLs."""
 
-import base64
 import json
 
 import httpx
@@ -8,7 +7,7 @@ import pytest
 from enrichment_fixtures import PNG
 from fastapi.testclient import TestClient
 from test_content_analysis_api import saved
-from test_native_text_report import native_environment, wait_status
+from test_native_text_report import native_environment
 from test_report_generations import generation_request
 from topic_report_fixtures import finish
 
@@ -22,7 +21,7 @@ from topic_report_fixtures import finish
         ("龙田现场，一图缺失", 2, 1),
     ],
 )
-def test_actual_images_reach_summary_and_report_with_honest_gaps(
+def test_native_report_saves_text_without_media_acquisition(
     tmp_path, caption, count, failed
 ):
     def response(request):
@@ -33,8 +32,8 @@ def test_actual_images_reach_summary_and_report_with_honest_gaps(
                     "ok": 1,
                     "id": 3600375418559878,
                     "idstr": "3600375418559878",
-                    "text_raw": caption,
-                    "text": caption,
+                    "text_raw": caption or "龙田正文",
+                    "text": caption or "龙田正文",
                     "created_at": "Thu Sep 03 10:00:00 +0800 2026",
                     "pic_ids": [str(i) for i in range(count)],
                     "pic_infos": {
@@ -45,10 +44,9 @@ def test_actual_images_reach_summary_and_report_with_honest_gaps(
                     },
                 },
             )
-        assert "cookie" not in request.headers
-        if request.url.path.endswith(f"/{failed}.png"):
-            return httpx.Response(404)
-        return httpx.Response(200, content=PNG, headers={"content-type": "image/png"})
+        raise AssertionError(
+            f"text-only acquisition made an unexpected request: {request}"
+        )
 
     app, _, model, requests = native_environment(tmp_path, response=response)
     with TestClient(app, base_url="http://127.0.0.1") as client:
@@ -59,66 +57,41 @@ def test_actual_images_reach_summary_and_report_with_honest_gaps(
         client.portal.call(finish, app.state.report_generation_service)
         value = client.get(f"/api/v1/report-generations/{result['id']}").json()
         assert value["status"] == "completed", value
-        attempts = client.get(
+        attempt = client.get(
             f"/api/v1/content-analysis-jobs/{value['analysis']['id']}/items"
-        ).json()["items"]
-        evidence = attempts[0]["input"]
-        ready = count - int(failed is not None)
-        assert [a["status"] for a in evidence["assets"]].count("ready") == ready
+        ).json()["items"][0]
+        evidence = attempt["input"]
+        assert evidence["status"] == "ready"
+        assert evidence["detected_modalities"] == ["text"]
+        assert evidence["assets"] == []
+        assert evidence["media_inventory_complete"] is True
         assert evidence["text"]["coverage"] == "complete"
-        assert evidence["status"] == ("partial" if failed is not None else "ready")
         initial = next(
             messages for stage, messages in model.calls if stage == "initial"
         )
-        parts = initial[1]["content"]
-        images = [p for p in parts if p["type"] == "image_url"]
-        assert len(images) == ready
-        assert all(
-            base64.b64decode(p["image_url"]["url"].split(",")[1]) == PNG for p in images
+        content = initial[1]["content"]
+        assert isinstance(content, str)
+        payload = json.loads(content)
+        assert (
+            payload["source"]["body"] == caption
+            or payload["source"]["body"] == "龙田正文"
         )
-        payload = json.loads(parts[0]["text"])
-        assert payload["evidence_coverage"]["image"]["ready"] == ready
-        sources = client.get(
-            f"/api/v1/topic-reports/{value['report']['id']}/sources"
-        ).json()["items"]
-        assert sources[0]["evidence_coverage"]["image"]["ready"] == ready
-        assert len(requests) == count + 1
+        assert "image_url" not in str(model.calls)
+        assert "video_url" not in str(model.calls)
+        assert len(requests) == 1
 
 
 @pytest.mark.parametrize(
-    "url,status,mime,data,issue,external_calls",
+    "url,status,mime,data",
     [
-        ("https://127.0.0.1/secret.png", 200, "image/png", PNG, "unsafe_media_url", 0),
-        (
-            "https://wx1.sinaimg.cn.evil.example/one.png",
-            200,
-            "image/png",
-            PNG,
-            "unsafe_media_url",
-            0,
-        ),
-        ("https://wx1.sinaimg.cn/one.png", 302, "image/png", PNG, "media_redirect", 1),
-        (
-            "https://wx1.sinaimg.cn/one.png",
-            200,
-            "image/png",
-            b"<html>not an image</html>",
-            "invalid_media",
-            1,
-        ),
-        (
-            "https://wx1.sinaimg.cn/one.png",
-            200,
-            "text/html",
-            PNG,
-            "unsupported_media_type",
-            1,
-        ),
+        ("https://127.0.0.1/secret.png", 200, "image/png", PNG),
+        ("https://wx1.sinaimg.cn.evil.example/one.png", 200, "image/png", PNG),
+        ("https://wx1.sinaimg.cn/one.png", 302, "image/png", PNG),
+        ("https://wx1.sinaimg.cn/one.png", 200, "image/png", b"not an image"),
+        ("https://wx1.sinaimg.cn/one.png", 200, "text/html", PNG),
     ],
 )
-def test_unsafe_or_invalid_image_keeps_body_but_never_fabricates_media(
-    tmp_path, url, status, mime, data, issue, external_calls
-):
+def test_media_urls_and_responses_are_not_requested(tmp_path, url, status, mime, data):
     def response(request):
         if request.url.host == "weibo.com":
             return httpx.Response(
@@ -151,21 +124,13 @@ def test_unsafe_or_invalid_image_keeps_body_but_never_fabricates_media(
         attempt = client.get(
             f"/api/v1/content-analysis-jobs/{value['analysis']['id']}/items"
         ).json()["items"][0]
-        assert attempt["input"]["assets"][0]["issue_code"] == issue
-        assert attempt["input"]["assets"][0]["status"] != "ready"
-        assert len(requests) == 1 + external_calls
-        message = next(
-            messages for stage, messages in model.calls if stage == "initial"
-        )[1]["content"]
-        assert isinstance(message, str)
-        assert json.loads(message)["source"]["body"] == "龙田正文仍然可用"
+        assert attempt["input"]["assets"] == []
+        assert attempt["input"]["text"]["body"] == "龙田正文仍然可用"
+        assert "image_url" not in str(model.calls)
+        assert len(requests) == 1
 
 
-def test_media_challenge_keeps_text_and_diagnoses_deferred_images_until_continue(
-    tmp_path,
-):
-    resolved = False
-
+def test_media_challenge_does_not_pause_text_only_report(tmp_path):
     def response(request):
         if request.url.host == "weibo.com":
             return httpx.Response(
@@ -178,16 +143,12 @@ def test_media_challenge_keeps_text_and_diagnoses_deferred_images_until_continue
                     "created_at": "Thu Sep 03 10:00:00 +0800 2026",
                     "pic_ids": ["one", "two", "three"],
                     "pic_infos": {
-                        name: {
-                            "largest": {"url": f"https://wx1.sinaimg.cn/{name}.png"}
-                        }
+                        name: {"largest": {"url": f"https://wx1.sinaimg.cn/{name}.png"}}
                         for name in ("one", "two", "three")
                     },
                 },
             )
-        if request.url.path == "/two.png" and not resolved:
-            return httpx.Response(403, content="安全验证".encode())
-        return httpx.Response(200, content=PNG, headers={"content-type": "image/png"})
+        return httpx.Response(403, content="安全验证".encode())
 
     app, _, model, requests = native_environment(tmp_path, response=response)
     with TestClient(app, base_url="http://127.0.0.1") as client:
@@ -195,52 +156,15 @@ def test_media_challenge_keeps_text_and_diagnoses_deferred_images_until_continue
         result = client.post(
             "/api/v1/report-generations", json=generation_request([1])
         ).json()
-        service = app.state.report_generation_service
-        paused = client.portal.call(
-            wait_status, service, result["id"], "paused_for_manual_action"
-        )
-        assert paused.pause_reason == "manual_challenge_required"
-        assert len(requests) == 3 and not model.calls
-        with service.repository.database.connect() as connection:
-            material = json.loads(
-                connection.execute(
-                    "SELECT content_json FROM content_materials"
-                ).fetchone()[0]
-            )
-            assert material["text"]["body"] == "龙田三张现场图"
-            assert material["assets"][0]["status"] == "ready"
-            assert [asset["issue_code"] for asset in material["assets"][1:]] == [
-                "asset_blocked",
-                "asset_blocked",
-            ]
-            assert [
-                issue["asset_position"]
-                for issue in material["issues"]
-                if issue.get("diagnostic", {}).get("outcome")
-                == "manual_challenge_required"
-            ] == [1, 2]
-        resolved = True
-        response = client.post(
-            f"/api/v1/report-generations/{result['id']}/continue",
-            json={"expected_revision": paused.control_revision},
-        )
-        assert response.status_code == 200
-        client.portal.call(finish, service)
-        assert (
-            client.get(f"/api/v1/report-generations/{result['id']}").json()["status"]
-            == "completed"
-        )
-        assert [request.url.path for request in requests] == [
-            "/ajax/statuses/show",
-            "/one.png",
-            "/two.png",
-            "/two.png",
-            "/three.png",
-        ]
+        client.portal.call(finish, app.state.report_generation_service)
+        value = client.get(f"/api/v1/report-generations/{result['id']}").json()
+        assert value["status"] == "completed"
         assert model.counts["initial"] == 1
+        assert len(requests) == 1
+        assert [request.url.path for request in requests] == ["/ajax/statuses/show"]
 
 
-def test_plain_media_403_is_a_missing_asset_and_does_not_pause_report(tmp_path):
+def test_plain_media_status_cannot_change_text_only_evidence(tmp_path):
     def response(request):
         if request.url.host == "weibo.com":
             return httpx.Response(
@@ -269,34 +193,16 @@ def test_plain_media_403_is_a_missing_asset_and_does_not_pause_report(tmp_path):
         value = client.get(f"/api/v1/report-generations/{result['id']}").json()
         assert value["status"] == "completed"
         attempt = client.get(
-            f"/api/v1/content-analysis-jobs/{result['analysis']['id']}/items"
+            f"/api/v1/content-analysis-jobs/{value['analysis']['id']}/items"
         ).json()["items"][0]
-        assert attempt["input"]["status"] == "partial"
-        assert attempt["input"]["assets"][0]["issue_code"] == "asset_blocked"
-        with app.state.report_generation_service.repository.database.connect() as db:
-            material = db.execute(
-                "SELECT content_json FROM content_materials WHERE content_id=?",
-                (1,),
-            ).fetchone()
-        issue = next(
-            issue
-            for issue in json.loads(material["content_json"])["issues"]
-            if issue.get("asset_position") == 0
-        )
-        assert issue["diagnostic"] == {
-            "stage": "media",
-            "outcome": "access_denied",
-            "status_code": 403,
-            "basis": "http_status",
-            "asset_position": 0,
-            "target": "media_asset",
-        }
+        assert attempt["input"]["status"] == "ready"
+        assert attempt["input"]["assets"] == []
         assert model.counts["initial"] == 1
         assert browser.shown == 0
-        assert len(requests) == 2
+        assert len(requests) == 1
 
 
-def test_failed_bytes_still_consume_the_selected_post_download_budget(tmp_path):
+def test_media_byte_budget_is_not_entered_for_text_only_reports(tmp_path):
     def response(request):
         if request.url.host == "weibo.com":
             return httpx.Response(
@@ -315,7 +221,9 @@ def test_failed_bytes_still_consume_the_selected_post_download_budget(tmp_path):
                 },
             )
         return httpx.Response(
-            200, content=b"x" * (6 * 1024 * 1024), headers={"content-type": "image/png"}
+            200,
+            content=b"x" * (6 * 1024 * 1024),
+            headers={"content-type": "image/png"},
         )
 
     app, _, _, requests = native_environment(tmp_path, response=response)
@@ -328,8 +236,5 @@ def test_failed_bytes_still_consume_the_selected_post_download_budget(tmp_path):
         attempt = client.get(
             f"/api/v1/content-analysis-jobs/{result['analysis']['id']}/items"
         ).json()["items"][0]
-        assert [a["issue_code"] for a in attempt["input"]["assets"]] == [
-            "invalid_media",
-            "media_limit",
-        ]
-        assert len(requests) == 2
+        assert attempt["input"]["assets"] == []
+        assert len(requests) == 1

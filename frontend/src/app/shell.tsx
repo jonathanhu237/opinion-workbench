@@ -200,6 +200,63 @@ export function AppShell() {
   )
 
   useEffect(() => {
+    // The packaged build is served by the local API process.  A WebSocket
+    // keeps the process aware of open pages even when a background tab's
+    // JavaScript timers are throttled; development's separate Vite/API
+    // processes intentionally keep their historical lifetime.
+    if (import.meta.env.VITE_LIFECYCLE_ENABLED !== '1') return
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const endpoint = `${protocol}//${window.location.host}/api/v1/lifecycle/ws`
+    let socket: WebSocket | null = null
+    let retryTimer: number | undefined
+    let retryDelay = 250
+    let stopped = false
+
+    const scheduleReconnect = () => {
+      if (stopped || retryTimer !== undefined) return
+      retryTimer = window.setTimeout(() => {
+        retryTimer = undefined
+        connect()
+      }, retryDelay)
+      retryDelay = Math.min(retryDelay * 2, 4000)
+    }
+
+    const connect = () => {
+      if (stopped) return
+      const candidate = new WebSocket(endpoint)
+      socket = candidate
+      candidate.onopen = () => {
+        retryDelay = 250
+        if (candidate.readyState === WebSocket.OPEN) {
+          candidate.send(JSON.stringify({ type: 'heartbeat' }))
+        }
+      }
+      candidate.onclose = () => {
+        if (socket === candidate) socket = null
+        scheduleReconnect()
+      }
+      candidate.onerror = () => {
+        // Browsers report the useful retry signal through close; closing here
+        // also handles implementations that leave an errored socket open.
+        candidate.close()
+      }
+    }
+
+    const heartbeat = window.setInterval(() => {
+      if (socket?.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: 'heartbeat' }))
+      }
+    }, 4000)
+    connect()
+    return () => {
+      stopped = true
+      window.clearInterval(heartbeat)
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer)
+      socket?.close()
+    }
+  }, [])
+
+  useEffect(() => {
     const controller = new AbortController()
     dispatch({ type: 'check' })
 

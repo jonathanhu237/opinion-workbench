@@ -1,4 +1,4 @@
-"""The active product boundary exposes and admits Weibo only."""
+"""The active product boundary exposes and admits all supported platforms."""
 
 from fastapi.testclient import TestClient
 from test_native_weibo_discovery import environment
@@ -6,38 +6,43 @@ from test_native_weibo_discovery import environment
 from longtian_api.schemas.automation_workflows import AutomationTaskCreateRequest
 from longtian_api.schemas.search_batches import SearchBatchCreate
 from longtian_api.schemas.search_runs import SearchRunCreate
+from longtian_api.search_platforms import SEARCH_PLATFORMS
 
 
-def test_platform_catalog_contains_only_weibo(tmp_path):
+def test_platform_catalog_contains_all_supported_platforms(tmp_path):
     app, browser = environment(tmp_path, [])
     with TestClient(app) as client:
         response = client.get("/api/v1/platform-connections")
 
     assert response.status_code == 200
     assert response.json()["platforms"]
-    assert [item["platform"] for item in response.json()["platforms"]] == ["wb"]
-    assert response.json()["platforms"][0]["availability"] == "enabled"
+    assert [item["platform"] for item in response.json()["platforms"]] == list(
+        SEARCH_PLATFORMS
+    )
+    assert all(
+        item["availability"] == "enabled" for item in response.json()["platforms"]
+    )
     assert browser.visits == []
 
 
-def test_unsupported_connection_is_not_admitted(tmp_path):
+def test_unknown_connection_is_not_admitted(tmp_path):
     app, browser = environment(tmp_path, [])
     with TestClient(app) as client:
-        response = client.post("/api/v1/platform-connections/xhs/attempts")
+        response = client.post("/api/v1/platform-connections/unknown/attempts")
 
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "platform_not_found"
     assert browser.visits == []
 
 
-def test_unsupported_search_payload_is_rejected_before_collection(tmp_path):
+def test_unknown_search_payload_is_rejected_before_collection(tmp_path):
     app, browser = environment(tmp_path, [])
     with TestClient(app) as client:
         single = client.post(
             "/api/v1/search-runs",
             json={
                 "monitoring_rule_id": 1,
-                "platform": "xhs",
+                "platform": "unknown",
                 "max_results_per_term": 1,
             },
         )
@@ -45,7 +50,7 @@ def test_unsupported_search_payload_is_rejected_before_collection(tmp_path):
             "/api/v1/search-batches",
             json={
                 "monitoring_rule_id": 1,
-                "platforms": ["wb", "xhs"],
+                "platforms": ["wb", "unknown"],
                 "max_results_per_term": 1,
             },
         )
@@ -69,5 +74,5 @@ def test_collection_and_workflow_create_payloads_default_to_weibo():
     )
 
     assert search.platform == "wb"
-    assert batch.platforms == ["wb"]
-    assert task.platforms == ["wb"]
+    assert batch.platforms == list(SEARCH_PLATFORMS)
+    assert task.platforms == list(SEARCH_PLATFORMS)

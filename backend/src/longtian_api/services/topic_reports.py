@@ -3,21 +3,30 @@
 import asyncio
 import json
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 
 from longtian_api.repositories.topic_reports import (
     TopicReportRepository,
     observed_usage,
 )
+from longtian_api.schemas.ai_summaries import ModelRetryNotice
 from longtian_api.schemas.topic_report_engine import CompletedOutput
 from longtian_api.schemas.topic_reports import ACTIVE_REPORTS
 from longtian_api.services.ai_analysis import AIAnalysisError
 from longtian_api.services.ai_client import AICompletion, decode_model_json
 from longtian_api.services.ai_errors import MANUAL_SYSTEMIC_AI_FAILURES, AIError
 from longtian_api.services.analysis_errors import AnalysisError
-from longtian_api.services.model_retry import RETRYABLE_OUTPUT_ERRORS
+from longtian_api.services.model_retry import (
+    RETRYABLE_OUTPUT_ERRORS,
+    ModelRateLimitEvent,
+    ModelRateLimitGate,
+)
 from longtian_api.services.settled_tasks import database_call, settle
-from longtian_api.services.summary_errors import FAILURE_MESSAGES, failure
+from longtian_api.services.summary_errors import (
+    FAILURE_MESSAGES,
+    failure,
+    provider_diagnostic,
+)
 from longtian_api.services.topic_report_engine import (
     check_request,
     engine_version,
@@ -252,7 +261,11 @@ class TopicReportService:
                 except AIError as error:
                     if error.code == "ai_operation_active":
                         await database_call(self.repository.queue, report.id)
-                        await asyncio.sleep(0.25)
+                        # The competing operation releases its lease as soon as
+                        # its durable completion returns. Yield one event-loop
+                        # turn rather than adding an arbitrary quarter-second
+                        # delay to every hand-off race.
+                        await asyncio.sleep(0)
                         continue
                     if (
                         report.selection.kind == "explicit"
@@ -321,6 +334,31 @@ class TopicReportService:
 
     async def _execute(self, report, configuration):
         context = self.repository.context(report)
+
+        async def on_model_retry(event: ModelRateLimitEvent):
+            details = event.context
+            if not isinstance(details, dict):
+                return
+            node_id = details.get("node_id")
+            stage = details.get("stage")
+            if not isinstance(node_id, int) or stage not in {"judgment", "composition"}:
+                return
+            notice = ModelRetryNotice(
+                stage=stage,
+                retry_number=event.retry_number,
+                wait_seconds=event.delay_seconds,
+                action="retrying" if event.will_retry else "exhausted",
+                provider_diagnostic=provider_diagnostic(event.error),
+                observed_at=datetime.now(UTC),
+            )
+            await database_call(
+                self.repository.record_model_rate_limit,
+                node_id,
+                event.usage,
+                notice,
+            )
+
+        model_rate_limit = ModelRateLimitGate(on_retry=on_model_retry)
         await database_call(self.repository.stage, report.id, "judging")
         offset = 0
         while not self._closed:
@@ -333,7 +371,13 @@ class TopicReportService:
                 try:
                     evidence = await database_call(self.repository.evidence, node["id"])
                     call = prepare_judgment(context, evidence[0])
-                    await self._execute_node(report, node["id"], call, configuration)
+                    await self._execute_node(
+                        report,
+                        node["id"],
+                        call,
+                        configuration,
+                        model_rate_limit=model_rate_limit,
+                    )
                 except AIAnalysisError as error:
                     await database_call(
                         self.repository.finish_node,
@@ -377,7 +421,14 @@ class TopicReportService:
             )
             offset += plan.consumed_count
             position += 1
-        await self._execute_level(report, context, configuration, kind="leaf", level=0)
+        await self._execute_level(
+            report,
+            context,
+            configuration,
+            kind="leaf",
+            level=0,
+            model_rate_limit=model_rate_limit,
+        )
         progress = await database_call(self.repository.read, report.id)
         if progress.nodes.composition.failed:
             await database_call(
@@ -423,7 +474,12 @@ class TopicReportService:
             if len(next_level) >= len(current):
                 raise AIAnalysisError("input", "request_too_large")
             await self._execute_level(
-                report, context, configuration, kind="overview", level=level
+                report,
+                context,
+                configuration,
+                kind="overview",
+                level=level,
+                model_rate_limit=model_rate_limit,
             )
             progress = await database_call(self.repository.read, report.id)
             if progress.nodes.composition.failed:
@@ -443,7 +499,9 @@ class TopicReportService:
             self.repository.finish, report.id, "completed", root_id=current[0]
         )
 
-    async def _execute_level(self, report, context, configuration, *, kind, level):
+    async def _execute_level(
+        self, report, context, configuration, *, kind, level, model_rate_limit
+    ):
         offset = 0
         while True:
             nodes = await database_call(
@@ -453,7 +511,13 @@ class TopicReportService:
                 return
             for node in nodes:
                 call = await self._fresh_call(context, node)
-                await self._execute_node(report, node["id"], call, configuration)
+                await self._execute_node(
+                    report,
+                    node["id"],
+                    call,
+                    configuration,
+                    model_rate_limit=model_rate_limit,
+                )
             offset += len(nodes)
 
     async def _fresh_call(self, context, node):
@@ -484,7 +548,9 @@ class TopicReportService:
             raise AIAnalysisError("input", "input_incomplete")
         return plan.call
 
-    async def _execute_node(self, report, node_id, call, configuration):
+    async def _execute_node(
+        self, report, node_id, call, configuration, *, model_rate_limit=None
+    ):
         usage = None
         try:
             proof = check_request(call, configuration)
@@ -533,12 +599,30 @@ class TopicReportService:
             ]
             for attempt_number in range(2):
                 usage = None
-                completion = await self._ai.complete(
-                    configuration,
-                    messages=messages,
-                    max_tokens=call.max_tokens,
-                    deadline=call.deadline_seconds,
-                )
+                complete = self._ai.complete
+                if model_rate_limit is not None:
+                    completion = await model_rate_limit.complete(
+                        complete,
+                        configuration,
+                        messages=messages,
+                        max_tokens=call.max_tokens,
+                        deadline=call.deadline_seconds,
+                        retry_context={
+                            "node_id": node_id,
+                            "stage": (
+                                "judgment"
+                                if call.kind == "judgment"
+                                else "composition"
+                            ),
+                        },
+                    )
+                else:
+                    completion = await complete(
+                        configuration,
+                        messages=messages,
+                        max_tokens=call.max_tokens,
+                        deadline=call.deadline_seconds,
+                    )
                 usage = observed_usage(completion.usage)
                 try:
                     output = parse_completion(
@@ -592,20 +676,40 @@ class TopicReportService:
                 "Report provider rejected: %s", error.code
             )
             code = error.code if error.code in FAILURE_MESSAGES else "internal_error"
+            rate_limit_seen = any(
+                event.context == {"node_id": node_id, "stage": (
+                    "judgment" if call.kind == "judgment" else "composition"
+                )}
+                for event in (
+                    model_rate_limit.history if model_rate_limit is not None else ()
+                )
+            )
+            final_usage = (
+                None
+                if error.transient_rate_limit and rate_limit_seen
+                else observed_usage(getattr(error, "usage", None)) or usage
+            )
             await database_call(
                 self.repository.finish_node,
                 node_id,
                 error=failure(
-                    "analysis" if call.kind == "judgment" else "composition", code
+                    "analysis" if call.kind == "judgment" else "composition",
+                    code,
+                    provider_diagnostic=provider_diagnostic(error),
                 ),
-                usage=usage,
+                usage=final_usage,
             )
             if (
                 report.selection.kind == "explicit"
                 and error.code in MANUAL_SYSTEMIC_AI_FAILURES
+                and not error.transient_rate_limit
             ):
                 if self.on_manual_configuration_failure is not None:
                     await self.on_manual_configuration_failure(
                         report.configuration_revision, error
                     )
+                # Standalone topic-report callers do not install the manual
+                # generation callback, but a systemic provider failure must
+                # still stop the report rather than look like an item-local
+                # composition failure.
                 raise

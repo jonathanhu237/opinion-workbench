@@ -1,5 +1,6 @@
 """Strict public HTTP contract, read-only inspection and explicit saved intent."""
 
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
@@ -16,18 +17,44 @@ from longtian_api.services.analysis_errors import ERRORS
 from longtian_api.services.content_enrichment import ContentEnrichmentService
 from longtian_api.services.enrichment_staging import MediaSpool
 from longtian_api.services.monitoring_rules import MonitoringRuleService
+from longtian_api.services.platform_access import (
+    PlatformAccessCoordinator,
+    PlatformAccessService,
+)
 from longtian_api.services.platform_connections import PlatformConnectionService
 
 
 def api_fixture(tmp_path, count=2, **app_options):
     # A/B contract fixture keeps the prior partial-rollout gate explicit. C
-    # integration opts into its complete fake pipeline separately.
+    # integration opts into its complete fake pipeline separately. Advance a
+    # virtual local clock for serial platform pacing so a 101-item fixture
+    # remains deterministic without sleeping for several minutes.
     app_options = {
         "analysis_automation_available": False,
         "collection_automation_available": False,
         "topic_reports_available": False,
         **app_options,
     }
+    supplied_access_factory = app_options.pop("platform_access_service_factory", None)
+    virtual_monotonic = [0.0]
+    virtual_wall = [datetime(2026, 1, 1, tzinfo=UTC)]
+
+    async def virtual_sleep(seconds):
+        virtual_monotonic[0] += seconds
+        virtual_wall[0] += timedelta(seconds=seconds)
+
+    def access_factory(database):
+        if supplied_access_factory is not None:
+            return supplied_access_factory(database)
+        service = PlatformAccessService(database)
+        service.coordinator = PlatformAccessCoordinator(
+            service.repository,
+            clock=lambda: virtual_monotonic[0],
+            wall_clock=lambda: virtual_wall[0],
+            sleep=virtual_sleep,
+        )
+        return service
+
     database = Database(tmp_path / "api.sqlite3")
     database.initialize()
     seed_run(database, count)
@@ -49,6 +76,7 @@ def api_fixture(tmp_path, count=2, **app_options):
         monitoring_rule_service_factory=lambda: MonitoringRuleService(
             database_path=database.path
         ),
+        platform_access_service_factory=access_factory,
         ai_settings_service_factory=lambda db: AISettingsService(db, client=model),
         content_enrichment_service_factory=enrichment_factory,
         ai_frontend_origins=("http://127.0.0.1:46081",),

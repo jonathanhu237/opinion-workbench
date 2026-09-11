@@ -6,7 +6,7 @@ from pydantic import Field, field_validator, model_validator
 
 from longtian_api.schemas.ai_summaries import StrictModel
 from longtian_api.schemas.analysis_settings import Count, PositiveId, PromptChoice
-from longtian_api.schemas.content_analyses import AnalysisJob
+from longtian_api.schemas.content_analyses import AnalysisJob, SummaryConcurrency
 from longtian_api.schemas.topic_reports import (
     ExplicitSelection,
     ReportRun,
@@ -43,7 +43,15 @@ class GenerationCreate(RequestIntent):
     configuration_revision: PositiveId
     initial_prompt: PromptChoice
     report_prompt: PromptChoice
+    summary_concurrency: SummaryConcurrency = 8
     selection: GenerationSelection
+
+    @field_validator("summary_concurrency", mode="before")
+    @classmethod
+    def strict_summary_concurrency(cls, value):
+        if type(value) is not int or value not in (1, 2, 4, 8, 16):
+            raise ValueError("invalid summary concurrency")
+        return value
 
     @field_validator("name")
     @classmethod

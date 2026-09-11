@@ -143,7 +143,9 @@ def test_selection_preview_freezes_concrete_membership_without_creating_work(tmp
         assert not model.calls and not media.calls
 
 
-def test_selection_preview_counts_legacy_completed_without_latest_attempt(tmp_path):
+def test_selection_preview_treats_legacy_completed_without_latest_attempt_as_pending(
+    tmp_path,
+):
     app, database, model, media = api_environment(tmp_path, count=1)
     with database.connect() as connection:
         connection.execute(
@@ -161,8 +163,8 @@ def test_selection_preview_counts_legacy_completed_without_latest_attempt(tmp_pa
         assert response.status_code == 200, response.text
         assert response.json()["counts"] == {
             "total": 1,
-            "pending": 0,
-            "already_summarized": 1,
+            "pending": 1,
+            "already_summarized": 0,
             "failed": 0,
             "active": 0,
         }

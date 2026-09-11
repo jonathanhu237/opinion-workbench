@@ -105,6 +105,17 @@ const acquisitionDiagnosticSchema = z.strictObject({
   target: z.enum(['selected_post', 'media_asset', 'search_page']),
 })
 
+const providerDiagnosticSchema = z.strictObject({
+  provider_status_code: z.number().int().min(100).max(599).nullable(),
+  provider_code: z
+    .string()
+    .min(1)
+    .max(100)
+    .regex(/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,99}$/u)
+    .nullable(),
+  retry_after_seconds: z.number().min(0).max(86400).nullable(),
+})
+
 const failureSchema = z
   .strictObject({
     stage: z.enum([
@@ -122,6 +133,7 @@ const failureSchema = z
     ),
     message: z.string().max(1000),
     diagnostic: acquisitionDiagnosticSchema.nullable().optional(),
+    provider_diagnostic: providerDiagnosticSchema.nullable().optional(),
     validation_issues: z
       .array(z.string().max(200))
       .max(8)

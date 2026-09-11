@@ -26,6 +26,7 @@ from longtian_api.repositories.search_batches import (
 from longtian_api.repositories.search_runs import SearchRunRecord, SearchRunStatus
 from longtian_api.schemas.collection_schedules import OccurrenceReason
 from longtian_api.schemas.monitoring_rules import MonitoringRule
+from longtian_api.schemas.platform_access import default_platform_access_snapshot
 from longtian_api.schemas.search_batches import (
     ManualPageOutcome,
     SearchBatchAttempt,
@@ -52,6 +53,7 @@ from longtian_api.services.browser_operations import (
     BrowserOperationCoordinator,
     BrowserOperationOwner,
 )
+from longtian_api.services.platform_access import PlatformCooldownActiveError
 from longtian_api.services.search_runs import (
     MAX_SEARCH_TERMS,
     SearchRunError,
@@ -74,6 +76,7 @@ class SearchBatchRepositoryProtocol(Protocol):
         max_results_per_term: int,
         max_total_results: int | None = None,
         workflow_operation_key: str | None = None,
+        platform_access_snapshot=None,
     ) -> SearchBatchRecord: ...
 
     def workflow_batch(self, operation_key: str) -> SearchBatchRecord | None: ...
@@ -95,6 +98,8 @@ class SearchBatchRepositoryProtocol(Protocol):
         position: int,
         run_status: SearchRunStatus,
         expected_run_id: int | None = None,
+        *,
+        pause: bool | None = None,
     ) -> SearchBatchRecord: ...
 
     def finalize(self, batch_id: int) -> SearchBatchRecord: ...
@@ -134,7 +139,12 @@ class SearchBatchRepositoryProtocol(Protocol):
     def scheduled_batch(self, dispatch_token: str) -> SearchBatchRecord | None: ...
 
     def create_scheduled_batch(
-        self, dispatch_token: str, rule: MonitoringRule, *, timestamp: str
+        self,
+        dispatch_token: str,
+        rule: MonitoringRule,
+        *,
+        timestamp: str,
+        platform_access_snapshot=None,
     ) -> tuple[SearchBatchRecord, bool]: ...
 
 
@@ -167,6 +177,7 @@ class SearchBatchService:
         repository: SearchBatchRepositoryProtocol | None = None,
         database: Database | None = None,
         database_path: Path | None = None,
+        platform_access=None,
     ) -> None:
         configured_sources = sum(
             source is not None for source in (repository, database, database_path)
@@ -177,6 +188,7 @@ class SearchBatchService:
             )
         self._search_runs = search_runs
         self._browser_operations = browser_operations
+        self._platform_access = platform_access
         self._repository = repository or SearchBatchRepository(
             database or Database(database_path)
         )
@@ -200,6 +212,7 @@ class SearchBatchService:
         max_results_per_term: int,
         max_total_results: int | None = None,
         operation_key: str,
+        platform_access_snapshot=None,
     ) -> SearchBatchDetail:
         """Admit one workflow collection using its frozen snapshot.
 
@@ -217,6 +230,7 @@ class SearchBatchService:
                 max_results_per_term=max_results_per_term,
                 max_total_results=max_total_results,
                 operation_key=operation_key,
+                platform_access_snapshot=platform_access_snapshot,
             )
         )
 
@@ -230,6 +244,7 @@ class SearchBatchService:
         max_results_per_term: int,
         max_total_results: int | None = None,
         operation_key: str,
+        platform_access_snapshot=None,
     ) -> SearchBatchDetail:
         existing_lookup = getattr(self._repository, "workflow_batch", None)
         if existing_lookup is not None:
@@ -268,6 +283,15 @@ class SearchBatchService:
                             else {}
                         ),
                         workflow_operation_key=operation_key,
+                        platform_access_snapshot=(
+                            platform_access_snapshot
+                            if platform_access_snapshot is not None
+                            else (
+                                await database_call(self._platform_access.snapshot)
+                                if self._platform_access is not None
+                                else None
+                            )
+                        ),
                     )
                 except TypeError:
                     # Test doubles implementing the pre-workflow protocol can
@@ -287,7 +311,7 @@ class SearchBatchService:
                         ),
                     )
             except BaseException:
-                await self._browser_operations.release(owner)
+                await settle(self._browser_operations.release(owner))
                 raise
             self._active_batch_id = record.id
             self._active_owner = owner
@@ -300,7 +324,7 @@ class SearchBatchService:
     async def resume_after_startup(self) -> None:
         """Restore the single durable active or manually paused batch."""
         try:
-            record = await asyncio.to_thread(self._repository.active_or_paused)
+            record = await database_call(self._repository.active_or_paused)
         except SearchBatchRepositoryUnavailableError:
             return
         if record is None:
@@ -316,10 +340,18 @@ class SearchBatchService:
             # Initialization already reconciled unfinished work to a pause.
             # Startup/GET never schedule browser work.
 
-    async def start_batch(self, payload: SearchBatchCreate) -> SearchBatchDetail:
-        return await settle(self._start_batch(payload))
+    async def start_batch(
+        self, payload: SearchBatchCreate, *, platform_access_snapshot=None
+    ) -> SearchBatchDetail:
+        return await settle(
+            self._start_batch(
+                payload, platform_access_snapshot=platform_access_snapshot
+            )
+        )
 
-    async def _start_batch(self, payload: SearchBatchCreate) -> SearchBatchDetail:
+    async def _start_batch(
+        self, payload: SearchBatchCreate, *, platform_access_snapshot=None
+    ) -> SearchBatchDetail:
         self._require_platforms(payload.platforms)
         rule = await self._load_rule(payload.monitoring_rule_id)
         requested = set(payload.platforms)
@@ -333,24 +365,38 @@ class SearchBatchService:
             if not await self._browser_operations.try_claim(owner):
                 raise _browser_operation_active()
             try:
-                record = await database_call(
-                    self._repository.create_batch,
-                    monitoring_rule_id=rule.id,
-                    rule_name=rule.name,
-                    terms=tuple(rule.terms),
-                    platforms=platforms,
-                    max_results_per_term=payload.max_results_per_term,
+                create_kwargs = {
+                    "monitoring_rule_id": rule.id,
+                    "rule_name": rule.name,
+                    "terms": tuple(rule.terms),
+                    "platforms": platforms,
+                    "max_results_per_term": payload.max_results_per_term,
                     **(
                         {"max_total_results": payload.max_total_results}
                         if payload.max_total_results is not None
                         else {}
                     ),
-                )
+                }
+                if platform_access_snapshot is not None:
+                    create_kwargs["platform_access_snapshot"] = platform_access_snapshot
+                elif self._platform_access is not None:
+                    create_kwargs["platform_access_snapshot"] = await database_call(
+                        self._platform_access.snapshot
+                    )
+                try:
+                    record = await database_call(
+                        self._repository.create_batch, **create_kwargs
+                    )
+                except TypeError:
+                    create_kwargs.pop("platform_access_snapshot", None)
+                    record = await database_call(
+                        self._repository.create_batch, **create_kwargs
+                    )
             except SearchBatchRepositoryUnavailableError:
-                await self._browser_operations.release(owner)
+                await settle(self._browser_operations.release(owner))
                 raise _storage_unavailable() from None
             except BaseException:
-                await self._browser_operations.release(owner)
+                await settle(self._browser_operations.release(owner))
                 raise
             self._active_batch_id = record.id
             self._active_owner = owner
@@ -437,23 +483,39 @@ class SearchBatchService:
             try:
                 if not self._search_runs.browser_session_available:
                     raise ScheduledAdmissionError("browser_unavailable")
-                record, created = await database_call(
-                    self._repository.create_scheduled_batch,
-                    claim.dispatch_token,
-                    rule,
-                    timestamp=timestamp,
-                )
+                scheduled_kwargs = {"timestamp": timestamp}
+                if self._platform_access is not None:
+                    scheduled_kwargs["platform_access_snapshot"] = (
+                        await database_call(self._platform_access.snapshot)
+                    )
+                try:
+                    record, created = await database_call(
+                        self._repository.create_scheduled_batch,
+                        claim.dispatch_token,
+                        rule,
+                        **scheduled_kwargs,
+                    )
+                except TypeError:
+                    # Compatibility workers can omit the additive snapshot
+                    # argument; the production repository persists it atomically.
+                    scheduled_kwargs.pop("platform_access_snapshot", None)
+                    record, created = await database_call(
+                        self._repository.create_scheduled_batch,
+                        claim.dispatch_token,
+                        rule,
+                        **scheduled_kwargs,
+                    )
             except ScheduledDispatchChangedError:
-                await self._browser_operations.release(owner)
+                await settle(self._browser_operations.release(owner))
                 raise ScheduledAdmissionError("schedule_changed") from None
             except SearchBatchRepositoryUnavailableError:
-                await self._browser_operations.release(owner)
+                await settle(self._browser_operations.release(owner))
                 raise _storage_unavailable() from None
             except BaseException:
-                await self._browser_operations.release(owner)
+                await settle(self._browser_operations.release(owner))
                 raise
             if not created:
-                await self._browser_operations.release(owner)
+                await settle(self._browser_operations.release(owner))
                 return _to_detail(record)
             self._active_batch_id = record.id
             self._active_owner = owner
@@ -464,7 +526,7 @@ class SearchBatchService:
         self, *, limit: int, before_id: int | None
     ) -> SearchBatchListResponse:
         try:
-            records, next_before_id = await asyncio.to_thread(
+            records, next_before_id = await database_call(
                 self._repository.list, limit=limit, before_id=before_id
             )
         except SearchBatchRepositoryUnavailableError:
@@ -481,7 +543,7 @@ class SearchBatchService:
         self, batch_id: int, position: int
     ) -> SearchBatchAttemptListResponse:
         try:
-            records = await asyncio.to_thread(
+            records = await database_call(
                 self._repository.list_attempts, batch_id, position
             )
         except SearchBatchNotFoundError:
@@ -566,6 +628,15 @@ class SearchBatchService:
             manual = self._manual_task
             platform = record.items[payload.item_position].platform
         try:
+            if not skip and self._platform_access is not None:
+                try:
+                    await self._platform_access.authorize_resume(platform)
+                except PlatformCooldownActiveError:
+                    raise SearchBatchError(
+                        status_code=409,
+                        code="platform_cooldown_active",
+                        message="平台仍在冷却期内，请稍后再次显式继续。",
+                    ) from None
             await _cancel_and_drain(manual)
             await self._search_runs.manual_page(platform, "close")
             async with self._lock:
@@ -577,6 +648,16 @@ class SearchBatchService:
                 )
                 record = await self._call(method, batch_id, **payload.model_dump())
                 self._current_task = self._create_runner(batch_id, self._active_owner)
+                permit = getattr(
+                    self._platform_access, "permit_explicit_resume", None
+                )
+                if not skip and callable(permit):
+                    # The recovery has passed every durable/control guard and
+                    # the new runner is now the sole owner of this retry. Its
+                    # first controlled request may consume the one-shot
+                    # allowance; later task starts retain the durable pacing
+                    # boundary.
+                    permit(platform)
             return _to_detail(record)
         finally:
             async with self._lock:
@@ -648,7 +729,7 @@ class SearchBatchService:
                     **payload.model_dump(),
                 )
             except BaseException:
-                await self._browser_operations.release(owner)
+                await settle(self._browser_operations.release(owner))
                 raise
             self._active_batch_id = batch_id
             self._active_owner = owner
@@ -733,6 +814,20 @@ class SearchBatchService:
         preserve_owner = False
         try:
             record = await self._get_record(batch_id)
+            if (
+                record.platform_access_snapshot is not None
+                and record.platform_access_snapshot.basis == "legacy_unavailable"
+            ):
+                materialized = default_platform_access_snapshot(
+                    basis="upgrade_safe_default"
+                )
+                ensure_snapshot = getattr(
+                    self._repository, "ensure_platform_access_snapshot", None
+                )
+                if callable(ensure_snapshot):
+                    await database_call(
+                        ensure_snapshot, batch_id, materialized
+                    )
             if record.status == "queued":
                 record = await database_call(self._repository.mark_running, batch_id)
             if record.status != "running":
@@ -740,7 +835,7 @@ class SearchBatchService:
             while True:
                 if self._shutdown_started or self._cancelling:
                     return
-                item = await asyncio.to_thread(
+                item = await database_call(
                     self._repository.next_queued_item, batch_id
                 )
                 if item is None:
@@ -781,6 +876,13 @@ class SearchBatchService:
                     item.position,
                     run.status,
                     expected_run_id=run.id,
+                    pause=run.status
+                    in {
+                        "login_required",
+                        "manual_challenge_required",
+                        "platform_blocked_or_rate_limited",
+                        "structure_changed",
+                    },
                 )
                 if batch.status == "paused_for_manual_action":
                     preserve_owner = True
@@ -822,7 +924,7 @@ class SearchBatchService:
                         pass
 
     async def _release_owner(self, owner: BrowserOperationOwner) -> None:
-        await self._browser_operations.release(owner)
+        await settle(self._browser_operations.release(owner))
         async with self._lock:
             if self._active_owner == owner:
                 self._active_owner = None
@@ -831,7 +933,7 @@ class SearchBatchService:
 
     async def _get_record(self, batch_id: int) -> SearchBatchRecord:
         try:
-            return await asyncio.to_thread(self._repository.get, batch_id)
+            return await database_call(self._repository.get, batch_id)
         except SearchBatchNotFoundError:
             raise _not_found() from None
         except SearchBatchRepositoryUnavailableError:
@@ -867,6 +969,9 @@ def _to_run_summary(record: SearchRunRecord) -> SearchRunSummary:
             for diagnostic in record.incomplete_terms
         ),
         ordering=record.ordering,
+        platform_access_snapshot=record.platform_access_snapshot,
+        access_waiting=record.access_waiting,
+        access_notice=record.access_notice,
     )
 
 
@@ -931,6 +1036,7 @@ def _to_summary(record: SearchBatchRecord) -> SearchBatchSummary:
         created_at=record.created_at,
         started_at=record.started_at,
         finished_at=record.finished_at,
+        platform_access_snapshot=record.platform_access_snapshot,
     )
 
 

@@ -19,6 +19,9 @@ AnalysisErrorCode = Literal[
     "invalid_result_interval",
     "analysis_storage_unavailable",
     "content_analysis_unavailable",
+    "platform_access_settings_unavailable",
+    "platform_access_settings_conflict",
+    "platform_access_cooldown_active",
 ]
 ERRORS = {
     "report_generation_not_found": (404, "未找到报告生成任务。"),
@@ -40,6 +43,18 @@ ERRORS = {
     "invalid_result_interval": (422, "首次采集时间范围不正确。"),
     "analysis_storage_unavailable": (503, "暂时无法读取或保存分析数据，请稍后重试。"),
     "content_analysis_unavailable": (503, "初步分析服务暂时不可用，请稍后重试。"),
+    "platform_access_settings_unavailable": (
+        503,
+        "平台访问间隔暂时无法读取或保存，请稍后重试。",
+    ),
+    "platform_access_settings_conflict": (
+        409,
+        "平台访问间隔已被其他窗口更新，请刷新后重试。",
+    ),
+    "platform_access_cooldown_active": (
+        409,
+        "平台仍在冷却期内，请稍后再次显式继续。",
+    ),
 }
 
 

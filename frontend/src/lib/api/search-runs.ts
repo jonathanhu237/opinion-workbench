@@ -1,6 +1,10 @@
 import { z } from 'zod'
 
 import { getApiBaseUrl } from '@/lib/api/client'
+import {
+  platformAccessDiagnosticSchema,
+  platformAccessSnapshotSchema,
+} from '@/lib/api/platform-access'
 
 export const SEARCH_RUNS_QUERY_KEY = ['search-runs'] as const
 export const SEARCH_PLATFORM_ORDER = [
@@ -74,6 +78,9 @@ const summaryShape = {
   finished_at: isoDateSchema.nullable(),
   incomplete_terms: z.array(searchTermDiagnosticSchema).max(20).optional(),
   ordering: z.enum(['latest', 'platform']).optional(),
+  platform_access_snapshot: platformAccessSnapshotSchema.nullable().optional(),
+  access_waiting: z.boolean().optional(),
+  access_notice: platformAccessDiagnosticSchema.nullable().optional(),
 } as const
 export const searchRunSummarySchema = z
   .strictObject(summaryShape)

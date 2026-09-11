@@ -1,6 +1,7 @@
 """Focused fake-only coverage for the fixed automatic workflow backend."""
 
 import asyncio
+import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -35,6 +36,10 @@ from longtian_api.schemas.content_analyses import (
     AnalysisCounts,
     AnalysisJob,
     AnalysisUsage,
+)
+from longtian_api.schemas.platform_access import (
+    PlatformAccessSnapshot,
+    PlatformIntervals,
 )
 from longtian_api.services.automation_workflow_errors import AutomationWorkflowError
 from longtian_api.services.automation_workflows import (
@@ -308,6 +313,46 @@ def test_occurrence_claim_and_run_snapshot_are_idempotent(tmp_path: Path):
     )
     assert created is True and replayed is False and replay.id == first.id
     assert repository.occurrence(claims[0].id).run_id == first.id
+
+
+def test_run_snapshot_round_trips_nested_platform_access_policy(tmp_path: Path):
+    _, _, repository = _repository(tmp_path)
+    now = datetime(2026, 8, 30, 0, 0, tzinfo=UTC)
+    task = repository.create_task(_task_payload(), now=now)
+    access_snapshot = PlatformAccessSnapshot(
+        interval_seconds=PlatformIntervals(
+            wb=17, dy=11, ks=7, xhs=5, toutiao=3
+        ),
+        basis="explicit",
+    )
+    snapshot = _snapshot(task, now).model_copy(
+        update={"platform_access_snapshot": access_snapshot}
+    )
+
+    run, created = repository.create_run(
+        task_id=task.id,
+        trigger="manual",
+        admission_key="manual:platform-snapshot",
+        request_id=None,
+        snapshot=snapshot,
+        now=now,
+    )
+
+    assert created is True
+    assert (
+        repository.get_run(run.id).snapshot.platform_access_snapshot
+        == access_snapshot
+    )
+    with repository.database.connect() as connection:
+        stored = json.loads(
+            connection.execute(
+                "SELECT snapshot_json FROM automation_runs WHERE id=?", (run.id,)
+            ).fetchone()[0]
+        )
+    assert stored["platform_access_snapshot"] == {
+        "interval_seconds": {"wb": 17, "dy": 11, "ks": 7, "xhs": 5, "toutiao": 3},
+        "basis": "explicit",
+    }
 
 
 def test_task_delete_is_revision_fenced_idempotent_and_preserves_history(

@@ -59,6 +59,7 @@ from longtian_api.schemas.automation_workflows import (
     AutomationTaskList,
     AutomationTaskReplace,
 )
+from longtian_api.schemas.platform_access import default_platform_access_snapshot
 from longtian_api.schemas.search_batches import SearchBatchCancel, SearchBatchCreate
 from longtian_api.schemas.topic_reports import ReportCancel
 from longtian_api.services.ai_errors import AIError
@@ -205,6 +206,7 @@ class AutomationWorkflowService:
         analyses=None,
         reports=None,
         ai_settings=None,
+        platform_access=None,
         repository=None,
         clock: Callable[[], datetime] | None = None,
         monotonic: Callable[[], float] = time.monotonic,
@@ -217,6 +219,7 @@ class AutomationWorkflowService:
         self._analyses = analyses
         self._reports = reports
         self._ai = ai_settings
+        self._platform_access = platform_access
         self._clock = clock or (lambda: datetime.now(UTC))
         self._monotonic = monotonic
         self.available = available
@@ -232,10 +235,21 @@ class AutomationWorkflowService:
     def initialize(self) -> None:
         self.repository.initialize()
 
-    async def start(self) -> None:
+    async def start(self, *, resume_active_runs: bool = True) -> None:
         now = _as_utc(self._clock())
         await database_call(self.repository.reconcile_startup, now)
-        resumable = await self._reconcile_active_runs()
+        if resume_active_runs:
+            resumable = await self._reconcile_active_runs()
+        else:
+            # A packaged application is intentionally page-owned.  Work that
+            # was still active when the last page disappeared is visible as an
+            # interrupted run after restart and must be explicitly retried by
+            # the user; it must never be replayed merely because the process
+            # started again.
+            active = await database_call(self.repository.active_runs)
+            for run in active:
+                await self._interrupt_recovered_run(run.id)
+            resumable = ()
         self._last_wall, self._last_monotonic = now, self._monotonic()
         if self.available and not self._closed and self._runner is None:
             self._runner = asyncio.create_task(self._timer(), name="automation-timer")
@@ -922,13 +936,21 @@ class AutomationWorkflowService:
         snapshot = run.snapshot
         if self._batches is None:
             raise AutomationWorkflowError("automation_unavailable")
+        access_snapshot = snapshot.platform_access_snapshot
+        if access_snapshot is None:
+            # Historical automation rows have no pacing field. Materialize a
+            # deterministic safe policy at their first resumed collection; do
+            # not silently use a later mutable application setting.
+            access_snapshot = default_platform_access_snapshot(
+                basis="upgrade_safe_default"
+            )
         child_id = attempt.child_id
         if child_id is not None:
             child = await self._read_recovery_child("collection", child_id)
         else:
             method = getattr(self._batches, "start_workflow_batch", None)
             if method is not None:
-                child = await method(
+                admission = method(
                     monitoring_rule_id=snapshot.monitoring_rule_id,
                     rule_name=snapshot.rule_name,
                     terms=tuple(snapshot.terms),
@@ -940,27 +962,34 @@ class AutomationWorkflowService:
                         else {}
                     ),
                     operation_key=attempt.operation_key,
+                    platform_access_snapshot=access_snapshot,
                 )
             else:
-                child = await self._batches.start_batch(
-                    SearchBatchCreate(
-                        monitoring_rule_id=snapshot.monitoring_rule_id,
-                        platforms=list(snapshot.platforms),
-                        max_results_per_term=snapshot.max_results_per_term,
-                        **(
-                            {"max_total_results": snapshot.max_total_results}
-                            if snapshot.max_total_results is not None
-                            else {}
-                        ),
-                    )
+                payload = SearchBatchCreate(
+                    monitoring_rule_id=snapshot.monitoring_rule_id,
+                    platforms=list(snapshot.platforms),
+                    max_results_per_term=snapshot.max_results_per_term,
+                    **(
+                        {"max_total_results": snapshot.max_total_results}
+                        if snapshot.max_total_results is not None
+                        else {}
+                    ),
                 )
-            child_id = _value(child, "id")
-            await database_call(
-                self.repository.set_stage_child,
+                start_batch = self._batches.start_batch
+                try:
+                    admission = start_batch(
+                        payload, platform_access_snapshot=access_snapshot
+                    )
+                except TypeError:
+                    # Compatibility fakes from before durable pacing can still
+                    # run; production SearchBatchService accepts the snapshot.
+                    admission = start_batch(payload)
+            child_id, child = await self._admit_durable_child(
                 run_id,
                 "collection",
-                child_kind="search_batch",
-                child_id=child_id,
+                attempt.operation_key,
+                admission,
+                shield_admission=False,
             )
         child = await self._wait_child(self._batches, "get_batch", child_id, child)
         status = _value(child, "status")
@@ -1005,6 +1034,105 @@ class AutomationWorkflowService:
             ),
         )
 
+    async def _admit_durable_child(
+        self,
+        run_id: int,
+        stage: AutomationStageName,
+        operation_key: str,
+        admission,
+        *,
+        shield_admission: bool = True,
+    ):
+        """Link a newly admitted child or cancel it on parent cancellation.
+
+        Child services durably commit before returning their projections. The
+        parent can therefore be cancelled in the small window between that
+        commit and ``set_stage_child``; shielding and operation-key replay
+        close that otherwise orphaning window.
+        """
+        task = (
+            asyncio.ensure_future(admission) if inspect.isawaitable(admission) else None
+        )
+        child = None
+        try:
+            if task is not None:
+                admitted = (
+                    await asyncio.shield(task) if shield_admission else await task
+                )
+            else:
+                admitted = admission
+            # Content-analysis admission returns an envelope whose durable
+            # child is nested under ``job``; collection and report admission
+            # return the child projection directly.
+            child = (
+                _value(admitted, "job", admitted)
+                if stage == "initial_analysis"
+                else admitted
+            )
+            child_id = _value(child, "id")
+            if child_id is None:
+                raise AutomationWorkflowError("automation_unavailable")
+            await database_call(
+                self.repository.set_stage_child,
+                run_id,
+                stage,
+                child_kind={
+                    "collection": "search_batch",
+                    "initial_analysis": "content_analysis_job",
+                    "topic_report": "topic_report",
+                }[stage],
+                child_id=child_id,
+            )
+            return child_id, child
+        except asyncio.CancelledError:
+            if child is None and task is not None:
+                try:
+                    admitted = await settle(task)
+                    child = (
+                        _value(admitted, "job", admitted)
+                        if stage == "initial_analysis"
+                        else admitted
+                    )
+                except BaseException:
+                    child = None
+            if child is None:
+                child = await self._lookup_admitted_child(stage, operation_key)
+            child_id = _value(child, "id")
+            if child_id is not None:
+                await self._cancel_child_id(stage, child_id)
+            raise
+        except AutomationRunChangedError:
+            latest = await database_call(self.repository.get_run, run_id)
+            child_id = _value(child, "id")
+            if latest.cancel_requested or latest.status == "cancelled":
+                if child_id is not None:
+                    await self._cancel_child_id(stage, child_id)
+                raise asyncio.CancelledError from None
+            raise
+
+    async def _lookup_admitted_child(
+        self, stage: AutomationStageName, operation_key: str
+    ):
+        owner = {
+            "collection": self._batches,
+            "initial_analysis": self._analyses,
+            "topic_report": self._reports,
+        }[stage]
+        repository = getattr(owner, "repository", None)
+        method_name = {
+            "collection": "workflow_batch",
+            "initial_analysis": "workflow_job",
+            "topic_report": "workflow_report",
+        }[stage]
+        method = getattr(repository, method_name, None) if method_name else None
+        if method is None:
+            return None
+        try:
+            value = await database_call(method, operation_key)
+        except Exception:
+            return None
+        return value
+
     async def _execute_analysis(
         self, run_id: int, attempt: AutomationStageAttemptRecord
     ):
@@ -1037,6 +1165,11 @@ class AutomationWorkflowService:
                     raise AutomationWorkflowError("ai_configuration_required")
                 initial_prompt = run.snapshot.initial_prompt
                 report_prompt = run.snapshot.report_prompt
+                access_snapshot = run.snapshot.platform_access_snapshot
+                if access_snapshot is None:
+                    access_snapshot = default_platform_access_snapshot(
+                        basis="upgrade_safe_default"
+                    )
                 payload = AnalysisCreate(
                     request_id=str(uuid4()),
                     configuration_revision=run.snapshot.ai_configuration_revision or 1,
@@ -1059,12 +1192,15 @@ class AutomationWorkflowService:
                         if report_prompt is not None and report_prompt.mode == "custom"
                         else None
                     ),
+                    platform_access_snapshot=access_snapshot,
                     force_refresh=False,
                     selection={"kind": "explicit", "result_ids": list(ids)},
                 )
                 admission = self._analyses.create(payload)
-            child_id, child = await self._admit_analysis_child(
+            child_id, child = await self._admit_durable_child(
                 run_id,
+                "initial_analysis",
+                attempt.operation_key,
                 admission,
             )
             if child_id is None:
@@ -1097,52 +1233,6 @@ class AutomationWorkflowService:
             ),
         )
 
-    async def _admit_analysis_child(self, run_id: int, admission):
-        """Link or cancel an admitted analysis child across parent cancellation.
-
-        Child admission is durable and cancellation-safe, so it may finish
-        after the parent task receives cancellation.  Shield it long enough to
-        recover the child ID, then either persist the link or cancel the child
-        directly.  This closes the orphan window between admission and link.
-        """
-
-        admission_task = asyncio.create_task(admission)
-        child = child_id = None
-        try:
-            admitted = await asyncio.shield(admission_task)
-            # ``workflow_admit`` returns an admission envelope while the
-            # generic child waiter consumes the lifecycle-owned job itself.
-            child = _value(admitted, "job", admitted)
-            child_id = _value(child, "id")
-            if child_id is None:
-                return None, child
-            await database_call(
-                self.repository.set_stage_child,
-                run_id,
-                "initial_analysis",
-                child_kind="content_analysis_job",
-                child_id=child_id,
-            )
-            return child_id, child
-        except asyncio.CancelledError:
-            if child is None:
-                try:
-                    admitted = await settle(admission_task)
-                except (asyncio.CancelledError, Exception):
-                    admitted = None
-                child = _value(admitted, "job", admitted)
-                child_id = _value(child, "id")
-            if child_id is not None:
-                await self._cancel_child_id("initial_analysis", child_id)
-            raise
-        except AutomationRunChangedError:
-            latest = await database_call(self.repository.get_run, run_id)
-            if latest.cancel_requested or latest.status == "cancelled":
-                if child_id is not None:
-                    await self._cancel_child_id("initial_analysis", child_id)
-                raise asyncio.CancelledError from None
-            raise
-
     async def _execute_report(self, run_id: int, attempt: AutomationStageAttemptRecord):
         if self._reports is None:
             raise AutomationWorkflowError("automation_unavailable")
@@ -1153,14 +1243,14 @@ class AutomationWorkflowService:
         if report_id is not None:
             child = await self._read_recovery_child("topic_report", report_id)
         elif child_id is not None and hasattr(self._reports, "workflow_admit"):
-            child = await self._reports.workflow_admit(
+            admission = self._reports.workflow_admit(
                 run_id=run_id,
                 analysis_job_id=child_id,
                 operation_key=attempt.operation_key,
                 snapshot=run.snapshot,
             )
         elif hasattr(self._reports, "workflow_admit"):
-            child = await self._reports.workflow_admit(
+            admission = self._reports.workflow_admit(
                 run_id=run_id,
                 analysis_job_id=None,
                 operation_key=attempt.operation_key,
@@ -1169,15 +1259,11 @@ class AutomationWorkflowService:
         else:
             raise AutomationWorkflowError("automation_unavailable")
         if report_id is None:
-            report_id = _value(child, "id")
-            if report_id is None:
-                raise AutomationWorkflowError("automation_unavailable")
-            await database_call(
-                self.repository.set_stage_child,
+            report_id, child = await self._admit_durable_child(
                 run_id,
                 "topic_report",
-                child_kind="topic_report",
-                child_id=report_id,
+                attempt.operation_key,
+                admission,
             )
         child = await self._wait_report(self._reports, report_id, child)
         status = _value(child, "status")
@@ -1375,6 +1461,15 @@ class AutomationWorkflowService:
                 )
             initial_prompt_version_id = initial_prompt.version_id
             report_prompt_version_id = report_prompt.version_id
+        platform_access_snapshot = None
+        snapshot_reader = getattr(self._platform_access, "snapshot", None)
+        if callable(snapshot_reader):
+            try:
+                platform_access_snapshot = await database_call(snapshot_reader)
+            except Exception:
+                raise AutomationWorkflowError(
+                    "automation_storage_unavailable"
+                ) from None
         report_instructions = report_prompt.instructions
         report_mirror = (
             report_instructions
@@ -1407,6 +1502,7 @@ class AutomationWorkflowService:
             initial_template_version=INITIAL_SCHEMA_VERSION,
             report_template_version=REPORT_SCHEMA_VERSION,
             admitted_at=now.isoformat(),
+            platform_access_snapshot=platform_access_snapshot,
         )
 
     def _rule(self, rule_id: int | None):

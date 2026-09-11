@@ -9,6 +9,7 @@ from longtian_api.services.content_enrichment import (
 )
 from longtian_api.services.enrichment_models import (
     EnrichedContent,
+    EnrichmentIssue,
     evidence_fingerprint,
 )
 from longtian_api.services.settled_tasks import database_call
@@ -66,10 +67,19 @@ class StoredContentSession:
                 content = None
         if content is None:
             raise ContentEnrichmentError("stored_content_unavailable")
+        # Validate the persisted material before projecting it.  The original
+        # fingerprint is the lookup/ownership fence for this attempt; the
+        # text-only projection below deliberately receives a new fingerprint
+        # and is saved by the caller before it can reach the model or report.
         if evidence_fingerprint(content) != self.attempt.input_fingerprint:
             raise ContentEnrichmentError("stored_content_unavailable")
-        # Keep historical media metadata readable, but never open or repair a
-        # local original after the media capability has been retired.
+        # Historical rows may still describe downloaded images or videos.  The
+        # retired media capability must not make those bytes/metadata appear as
+        # evidence in a new report, while the original material remains
+        # readable for old reports and migrations.  Project only at this new
+        # execution boundary and retain an explicit gap for the discarded
+        # inventory.
+        content = _text_only_projection(content)
         yield EnrichmentItem(
             source=expected_source,
             outcome="completed",
@@ -77,3 +87,35 @@ class StoredContentSession:
             input_fingerprint=evidence_fingerprint(content),
             media=(),
         )
+
+
+def _text_only_projection(content: EnrichedContent) -> EnrichedContent:
+    """Drop historical media evidence without mutating the stored material."""
+    media_present = bool(content.assets) or any(
+        modality in {"image", "video", "audio", "unknown"}
+        for modality in content.detected_modalities
+    )
+    if not media_present:
+        return content
+
+    issues = [
+        issue
+        for issue in content.issues
+        if issue.asset_position is None
+        and issue.code
+        in {"text_incomplete", "text_unavailable", "text_limit", "structure_changed"}
+    ]
+    if not any(issue.code == "asset_unavailable" for issue in issues):
+        issues.append(EnrichmentIssue(code="asset_unavailable", asset_position=None))
+    text_available = bool(content.text.title.strip() or content.text.body.strip())
+    status = "partial" if text_available else "unavailable"
+    return EnrichedContent.model_validate(
+        {
+            **content.model_dump(mode="python"),
+            "status": status,
+            "detected_modalities": ["text"],
+            "media_inventory_complete": True,
+            "assets": [],
+            "issues": [issue.model_dump(mode="python") for issue in issues],
+        }
+    )

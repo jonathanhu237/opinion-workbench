@@ -20,11 +20,16 @@ import {
   decodeAnalysis,
   jsonMutation,
   isValidAnalysisProse,
+  modelRetryNoticeSchema,
   safeCount,
   safeId,
   uniqueIds,
 } from '@/lib/api/analysis-shared'
 import { isoDateSchema } from '@/lib/api/search-runs'
+import {
+  platformAccessDiagnosticSchema,
+  platformAccessSnapshotSchema,
+} from '@/lib/api/platform-access'
 import { codePointLength } from '@/lib/monitoring-rule-composition'
 
 export const CONTENT_ANALYSES_QUERY_KEY = ['content-analyses'] as const
@@ -327,6 +332,29 @@ export const analysisJobSchema = z
       (value) => value.stage === 'report',
     ),
     force_refresh: z.boolean(),
+    summary_concurrency: z
+      .union([
+        z.literal(1),
+        z.literal(2),
+        z.literal(4),
+        z.literal(8),
+        z.literal(16),
+      ])
+      .optional()
+      .default(1),
+    platform_access_snapshot: platformAccessSnapshotSchema
+      .nullable()
+      .optional()
+      .default(null),
+    access_waiting: z.boolean().optional().default(false),
+    access_notice: platformAccessDiagnosticSchema
+      .nullable()
+      .optional()
+      .default(null),
+    model_retry_notice: modelRetryNoticeSchema
+      .nullable()
+      .optional()
+      .default(null),
     counts: countsSchema,
     usage: analysisUsageSchema,
     queue_reason: z
@@ -344,8 +372,7 @@ export const analysisJobSchema = z
         job.counts.queued + job.counts.acquiring + job.counts.analysing ===
           0) &&
       (job.status === 'completed') === (job.completion_event_id !== null) &&
-      (job.trigger === 'manual' ? job.request_id !== null : true) &&
-      job.usage.attempted_requests <= job.counts.total,
+      (job.trigger === 'manual' ? job.request_id !== null : true),
   )
 
 const admissionSchema = z

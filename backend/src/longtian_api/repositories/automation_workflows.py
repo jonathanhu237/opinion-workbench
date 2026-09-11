@@ -648,7 +648,7 @@ class AutomationWorkflowRepository:
         request_intent_hash: str | None = None,
     ) -> tuple[AutomationRunRecord, bool]:
         timestamp = _utc(now)
-        snapshot_json = snapshot.model_dump_json()
+        snapshot_json = _encode_snapshot(snapshot)
         with self._connection(write=True) as connection:
             existing = connection.execute(
                 "SELECT id FROM automation_runs WHERE admission_key=?", (admission_key,)
@@ -1362,6 +1362,22 @@ def _read_run(connection: sqlite3.Connection, run_id: int) -> AutomationRunRecor
     )
 
 
+def _encode_snapshot(snapshot: AutomationSnapshot) -> str:
+    """Encode the complete immutable run intent, including nested snapshots.
+
+    Automation runs keep their intent in one JSON column.  Keep this boundary
+    explicit rather than relying on callers to serialize nested Pydantic models
+    themselves; in particular, ``platform_access_snapshot`` must survive a
+    create/read round trip while a missing field remains a legacy ``None``.
+    """
+    return snapshot.model_dump_json()
+
+
+def _decode_snapshot(snapshot_json: str) -> AutomationSnapshot:
+    """Decode one stored run intent without applying mutable defaults."""
+    return AutomationSnapshot.model_validate_json(snapshot_json)
+
+
 def _read_snapshot(
     connection: sqlite3.Connection, snapshot_json: str
 ) -> AutomationSnapshot:
@@ -1375,7 +1391,7 @@ def _read_snapshot(
     shared row from its immutable version ID.
     """
 
-    snapshot = AutomationSnapshot.model_validate_json(snapshot_json)
+    snapshot = _decode_snapshot(snapshot_json)
     updates: dict[str, PromptSnapshot] = {}
     if (
         snapshot.initial_prompt is None

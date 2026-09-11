@@ -1,7 +1,7 @@
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { ArrowRight, LoaderCircle, Pause, Search } from 'lucide-react'
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Controller, useForm } from 'react-hook-form'
 import { Link, useNavigate } from 'react-router'
 import { z } from 'zod'
@@ -41,6 +41,15 @@ import { collectionLimitLabel } from '@/lib/collection-limit'
 import { useSearchBatches } from '@/hooks/use-search-batches'
 import { useSearchRuns } from '@/hooks/use-search-runs'
 import { usePlatformConnections } from '@/hooks/use-platform-connections'
+import {
+  intervalValues,
+  usePlatformAccessSettings,
+  useSavePlatformAccessSettings,
+} from '@/hooks/use-platform-access'
+import {
+  platformAccessErrorMessage,
+  PLATFORM_ACCESS_PLATFORMS,
+} from '@/lib/api/platform-access'
 import {
   isActiveSearchBatch,
   SEARCH_BATCHES_QUERY_KEY,
@@ -110,6 +119,138 @@ function runBadgeVariant(status: SearchRunStatus) {
     return 'outline' as const
   }
   return 'destructive' as const
+}
+
+function PlatformAccessSettingsCard({
+  platforms,
+}: {
+  platforms: readonly (typeof SEARCH_PLATFORM_ORDER)[number][]
+}) {
+  const settingsQuery = usePlatformAccessSettings()
+  const saveMutation = useSavePlatformAccessSettings()
+  const [values, setValues] = useState<Record<string, string>>(() =>
+    Object.fromEntries(
+      PLATFORM_ACCESS_PLATFORMS.map((platform) => [platform, '5']),
+    ),
+  )
+  const loadedRevision = useRef<number | null>(null)
+  useEffect(() => {
+    if (
+      !settingsQuery.data ||
+      loadedRevision.current === settingsQuery.data.revision
+    )
+      return
+    loadedRevision.current = settingsQuery.data.revision
+    setValues(
+      Object.fromEntries(
+        PLATFORM_ACCESS_PLATFORMS.map((platform) => [
+          platform,
+          String(settingsQuery.data.interval_seconds[platform]),
+        ]),
+      ),
+    )
+  }, [settingsQuery.data])
+  if (platforms.length === 0) return null
+  const invalid = PLATFORM_ACCESS_PLATFORMS.some((platform) => {
+    if (!platforms.includes(platform)) return false
+    const value = Number(values[platform])
+    return !Number.isInteger(value) || value < 1 || value > 300
+  })
+  const submit = () => {
+    if (!settingsQuery.data || invalid || saveMutation.isPending) return
+    const next = { ...intervalValues(settingsQuery.data.interval_seconds) }
+    for (const platform of PLATFORM_ACCESS_PLATFORMS) {
+      next[platform] = Number(values[platform])
+    }
+    saveMutation.mutate({
+      expected_revision: settingsQuery.data.revision,
+      interval_seconds: next,
+    })
+  }
+  return (
+    <Card>
+      <CardHeader className="border-b">
+        <CardTitle className="font-display text-xl">平台访问间隔</CardTitle>
+        <p className="text-sm text-muted-foreground">
+          约束搜索换词、翻页和报告原帖补全的访问开始时间；不控制单条总结并发。保存后仅影响新任务。
+        </p>
+      </CardHeader>
+      <CardContent className="pt-5">
+        {settingsQuery.isPending ? (
+          <p role="status" className="text-sm text-muted-foreground">
+            正在读取最近的平台访问配置…
+          </p>
+        ) : settingsQuery.isError ? (
+          <div role="alert" className="space-y-3 text-sm">
+            <p>{platformAccessErrorMessage(settingsQuery.error)}</p>
+            <Button variant="outline" onClick={() => settingsQuery.refetch()}>
+              重试读取
+            </Button>
+          </div>
+        ) : (
+          <>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+              {PLATFORM_ACCESS_PLATFORMS.filter((platform) =>
+                platforms.includes(platform),
+              ).map((platform) => (
+                <Field key={platform}>
+                  <FieldLabel htmlFor={`platform-access-${platform}`}>
+                    {searchPlatformPresenters[platform].label}
+                  </FieldLabel>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      id={`platform-access-${platform}`}
+                      type="number"
+                      inputMode="numeric"
+                      min={1}
+                      max={300}
+                      step={1}
+                      value={values[platform]}
+                      onChange={(event) =>
+                        setValues((current) => ({
+                          ...current,
+                          [platform]: event.target.value,
+                        }))
+                      }
+                      aria-invalid={invalid}
+                    />
+                    <span className="shrink-0 text-sm text-muted-foreground">
+                      秒
+                    </span>
+                  </div>
+                </Field>
+              ))}
+            </div>
+            <div className="mt-4 flex flex-wrap items-center gap-3">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={invalid || saveMutation.isPending}
+                onClick={submit}
+              >
+                {saveMutation.isPending ? '正在保存…' : '保存访问间隔'}
+              </Button>
+              {invalid && (
+                <p role="alert" className="text-sm text-destructive">
+                  请输入 1 至 300 秒的整数。
+                </p>
+              )}
+              {saveMutation.isSuccess && (
+                <p role="status" className="text-sm text-muted-foreground">
+                  已保存；进行中的任务仍使用启动时的配置。
+                </p>
+              )}
+              {saveMutation.isError && (
+                <p role="alert" className="text-sm text-destructive">
+                  {platformAccessErrorMessage(saveMutation.error)}
+                </p>
+              )}
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  )
 }
 
 function ActiveBatch({ batch }: { batch: SearchBatchSummary }) {
@@ -277,6 +418,8 @@ export function CollectionRuns() {
   const batchesQuery = useSearchBatches()
   const runsQuery = useSearchRuns()
   const platformsQuery = usePlatformConnections()
+  const configuredPlatforms =
+    platformsQuery.data?.platforms.map((platform) => platform.platform) ?? []
   const availablePlatforms =
     platformsQuery.data?.platforms
       .filter((platform) => platform.availability === 'enabled')
@@ -568,6 +711,8 @@ export function CollectionRuns() {
           </CardContent>
         </Card>
       </section>
+
+      <PlatformAccessSettingsCard platforms={configuredPlatforms} />
 
       {openBatch && <ActiveBatch batch={openBatch} />}
 

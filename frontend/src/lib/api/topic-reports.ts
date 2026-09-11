@@ -17,6 +17,7 @@ import {
   ANALYSIS_ERROR_CONTRACTS,
   isValidAnalysisProse,
   jsonMutation,
+  modelRetryNoticeSchema,
   safeCount,
   safeId,
   uniqueIds,
@@ -240,6 +241,10 @@ export const reportRunSchema = z
       .nullable(),
     queue_reason: z.literal('ai_operation_active').nullable(),
     recovery_reason: z.literal('backend_restart').nullable(),
+    model_retry_notice: modelRetryNoticeSchema
+      .nullable()
+      .optional()
+      .default(null),
     error: reportFailureSchema.nullable(),
     created_at: utcDate,
     started_at: utcDate.nullable(),

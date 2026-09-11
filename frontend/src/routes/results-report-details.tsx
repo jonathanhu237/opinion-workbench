@@ -141,6 +141,16 @@ export function ReportCoverage({ report }: { report: ReportRun }) {
           正在等待其他 AI 操作结束。
         </p>
       )}
+      {report.model_retry_notice && (
+        <p
+          className="rounded-lg border border-warning/40 bg-warning/5 p-3 text-sm"
+          role="status"
+        >
+          {report.model_retry_notice.action === 'retrying'
+            ? `模型服务暂时限流，正在等待 ${report.model_retry_notice.wait_seconds.toFixed(1)} 秒后有限重试。`
+            : '模型服务持续限流，已达到本次自动重试上限；没有继续重复请求。'}
+        </p>
+      )}
       {report.status === 'configuration_blocked' && (
         <p className="text-sm text-warning-foreground">
           当前模型设置不可用，系统没有切换其他服务。请检查设置后重试。
@@ -477,7 +487,7 @@ export function ReportDetails({
                         原文发布时间 {item.source.published_at_text || '未知'}
                       </p>
                       {item.source.snippet && (
-                        <p className="text-sm leading-6 text-muted-foreground wrap-anywhere whitespace-pre-wrap">
+                        <p className="text-sm leading-6 wrap-anywhere whitespace-pre-wrap text-muted-foreground">
                           已有文案：{item.source.snippet}
                         </p>
                       )}

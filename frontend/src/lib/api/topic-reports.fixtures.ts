@@ -95,6 +95,7 @@ export function reportFixture(values: Partial<ReportRun> = {}): ReportRun {
     empty_reason: null,
     queue_reason: null,
     recovery_reason: null,
+    model_retry_notice: null,
     error: null,
     created_at: analysisTimestamp,
     started_at: analysisTimestamp,

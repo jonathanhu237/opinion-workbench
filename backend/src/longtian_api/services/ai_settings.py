@@ -5,8 +5,6 @@ from contextlib import asynccontextmanager, contextmanager
 from threading import Event, Lock
 from typing import Protocol
 
-from starlette.concurrency import run_in_threadpool
-
 from longtian_api.database import Database
 from longtian_api.repositories.ai_settings import (
     AISettingsRecord,
@@ -30,6 +28,7 @@ from longtian_api.services.ai_credentials import (
     valid_api_key,
 )
 from longtian_api.services.ai_errors import AIError
+from longtian_api.services.settled_tasks import database_call
 
 
 class AIClientProtocol(Protocol):
@@ -160,7 +159,7 @@ class AISettingsService:
         finally:
             self._lock.release()
         try:
-            configuration = await run_in_threadpool(self._configuration, revision)
+            configuration = await database_call(self._configuration, revision)
             yield configuration
         finally:
             # Event has its own short thread-safe lock; a simultaneous GET doing

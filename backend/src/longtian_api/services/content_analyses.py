@@ -5,23 +5,27 @@ import hashlib
 import logging
 import time
 import traceback
+from contextlib import AsyncExitStack
+from datetime import UTC, datetime
 from typing import cast
 from uuid import UUID
 
 from longtian_api.repositories.content_analyses import ContentAnalysisRepository
 from longtian_api.repositories.search_runs import SearchResultSourceRecord
-from longtian_api.schemas.ai_summaries import FailureCode
+from longtian_api.schemas.ai_summaries import FailureCode, ModelRetryNotice
 from longtian_api.schemas.analysis_evidence import SavedInput
 from longtian_api.schemas.analysis_settings import PromptSnapshot
 from longtian_api.schemas.content_analyses import (
     AnalysisCreate,
     WorkflowAnalysisCreate,
 )
+from longtian_api.schemas.platform_access import default_platform_access_snapshot
 from longtian_api.services.ai_analysis import (
     ANALYSIS_MAX_TOKENS,
     MODEL_DEADLINE_SECONDS,
     AIAnalysisError,
 )
+from longtian_api.services.ai_client import AICompletion, AIUsage
 from longtian_api.services.ai_errors import MANUAL_SYSTEMIC_AI_FAILURES, AIError
 from longtian_api.services.analysis_errors import AnalysisError
 from longtian_api.services.content_enrichment import ContentEnrichmentError
@@ -33,9 +37,17 @@ from longtian_api.services.manual_content import (
     ManualAcquisitionPause,
     ManualContentSession,
 )
-from longtian_api.services.model_retry import RETRYABLE_OUTPUT_ERRORS
+from longtian_api.services.model_retry import (
+    RETRYABLE_OUTPUT_ERRORS,
+    ModelRateLimitEvent,
+    ModelRateLimitGate,
+)
 from longtian_api.services.settled_tasks import database_call, settle
-from longtian_api.services.summary_errors import FAILURE_MESSAGES, failure
+from longtian_api.services.summary_errors import (
+    FAILURE_MESSAGES,
+    failure,
+    provider_diagnostic,
+)
 
 
 class BrowserAcquisitionStopped(Exception):
@@ -57,6 +69,9 @@ class ContentAnalysisService:
         self.on_manual_configuration_failure = None
         self.on_manual_acquisition_pause = None
         self.on_manual_job_cancel = None
+        # Set before the queue runner is cancelled so consumers that have not
+        # entered a model call yet cannot cross the cancellation boundary.
+        self._active_stop_event: asyncio.Event | None = None
 
     def initialize(self):
         self.repository.initialize()  # Storage reconciliation only, never launch.
@@ -101,6 +116,11 @@ class ContentAnalysisService:
         # explicit choice so admission cannot infer the source as ``default``.
         initial_choice = _workflow_prompt_choice(initial_prompt)
         report_choice = _workflow_prompt_choice(report_prompt)
+        platform_access_snapshot = getattr(snapshot, "platform_access_snapshot", None)
+        if platform_access_snapshot is None:
+            platform_access_snapshot = default_platform_access_snapshot(
+                basis="upgrade_safe_default"
+            )
         payload = WorkflowAnalysisCreate(
             request_id=_operation_request_id(operation_key),
             configuration_revision=configuration_revision,
@@ -114,6 +134,7 @@ class ContentAnalysisService:
             ),
             initial_prompt=initial_choice,
             report_prompt=report_choice,
+            platform_access_snapshot=platform_access_snapshot,
             force_refresh=False,
             result_ids=list(result_ids),
         )
@@ -206,6 +227,8 @@ class ContentAnalysisService:
             if job.status not in ("queued", "running") and self._active_id != job_id:
                 return job
             if self._active_id == job_id and self._runner is not None:
+                if self._active_stop_event is not None:
+                    self._active_stop_event.set()
                 self._runner.cancel()
                 await settle(asyncio.gather(self._runner, return_exceptions=True))
             else:
@@ -218,6 +241,8 @@ class ContentAnalysisService:
         async with self._admission:
             self._closed = True
             if self._runner is not None and not self._runner.done():
+                if self._active_stop_event is not None:
+                    self._active_stop_event.set()
                 self._runner.cancel()
                 await settle(asyncio.gather(self._runner, return_exceptions=True))
             # Settle never-executed queued jobs too; do not leave stale active claims.
@@ -237,10 +262,28 @@ class ContentAnalysisService:
                             return
                 self._active_id = job.id
                 try:
-                    async with self._ai.operation(
-                        job.configuration_revision
-                    ) as configuration:
-                        await self._execute(job, configuration)
+                    if (
+                        job.platform_access_snapshot is not None
+                        and job.platform_access_snapshot.basis == "legacy_unavailable"
+                    ):
+                        materialized = default_platform_access_snapshot(
+                            basis="upgrade_safe_default"
+                        )
+                        ensure_snapshot = getattr(
+                            self.repository, "ensure_platform_access_snapshot", None
+                        )
+                        if callable(ensure_snapshot):
+                            await database_call(ensure_snapshot, job.id, materialized)
+                            job = await database_call(self.repository.read, job.id)
+                    # Validate the frozen provider revision before touching a
+                    # source, but do not hold the global AI lease around the
+                    # serial browser producer. A queued job must not hold the
+                    # lease while waiting for a platform interval or browser
+                    # ownership; ready model work from another task can then
+                    # make progress.
+                    async with self._ai.operation(job.configuration_revision):
+                        pass
+                    await self._execute(job, None)
                 except ManualAcquisitionPause:
                     # The parent excludes this job until an explicit Continue.
                     # Release the AI lease so stored-only work can proceed.
@@ -331,68 +374,298 @@ class ContentAnalysisService:
                         pass
                 return
             if manual_generation:
-                await database_call(self.repository.start, job.id)
-                await database_call(self.repository.begin, attempt.id)
-                await self._analyse(
-                    attempt,
-                    ManualContentSession(
-                        attempt,
-                        enrichment=self._enrichment,
-                        database=self.repository.database,
-                        on_pause=self.on_manual_acquisition_pause,
-                    ),
-                    configuration,
-                    job.initial_prompt,
-                    allow_preview=False,
-                    stop_on_systemic_error=True,
-                )
-                continue
+                return await self._execute_concurrent(job, configuration, manual=True)
             if not job.force_refresh and await database_call(
                 self.repository.reuse, attempt.id
             ):
                 await database_call(self.repository.start, job.id)
                 continue
-            # Acquire the browser before marking an item started. Busy ownership
-            # leaves the member queued, without a failed/paid attempt.
-            async with self._enrichment.operation() as session:
-                await database_call(self.repository.start, job.id)
-                await database_call(self.repository.begin, attempt.id)
-                await self._analyse(attempt, session, configuration, job.initial_prompt)
-            # Browser is released between individual records, before any future report.
-            await asyncio.sleep(0)
+            return await self._execute_concurrent(job, configuration)
 
-    async def _analyse(
-        self,
-        attempt,
-        session,
-        configuration,
-        prompt,
-        *,
-        # Search-card title/snippet is discovery evidence only.  It cannot
-        # stand in for the original post's complete text in the automatic
-        # text-understanding pipeline.  Keep the flag as an explicit escape
-        # hatch for callers that intentionally exercise preview analysis.
-        allow_preview=False,
-        stop_on_systemic_error=False,
-    ):
+    async def _execute_concurrent(self, job, configuration, *, manual=False):
+        """Enrich serially and fan out only the bounded model stage.
+
+        Browser admission is deliberately completed before consumers are
+        created.  A failed ``operation()`` entry therefore reaches the queue
+        supervisor directly instead of leaving consumers waiting on an empty
+        queue.  The producer and consumers remain one failure domain so a
+        later producer or worker failure also tears down every peer.
+        """
+        concurrency = int(getattr(job, "summary_concurrency", 1) or 1)
+        # The public setting belongs only to manual report generation.  Keep
+        # the shared executor's legacy/automatic entry points serial even if a
+        # historical or injected job happens to carry a larger value.
+        if not manual or concurrency not in (1, 2, 4, 8, 16):
+            concurrency = 1
+        ready: asyncio.Queue = asyncio.Queue(maxsize=concurrency)
+        stop_event = asyncio.Event()
+        self._active_stop_event = stop_event
+        rate_limited_attempts: set[int] = set()
+
+        async def on_access_waiting(platform, seconds, stage):
+            setter = getattr(self.repository, "set_access_waiting", None)
+            if callable(setter):
+                await database_call(
+                    setter,
+                    job.id,
+                    None
+                    if not seconds
+                    else {
+                        "platform": platform,
+                        "stage": stage,
+                        "seconds": round(float(seconds), 3),
+                    },
+                )
+
+        async def on_access_notice(platform, diagnostic):
+            setter = getattr(self.repository, "set_access_notice", None)
+            if callable(setter):
+                await database_call(setter, job.id, diagnostic)
+
+        async def on_model_retry(event: ModelRateLimitEvent):
+            details = event.context
+            if not isinstance(details, dict):
+                return
+            attempt_id = details.get("attempt_id")
+            if not isinstance(attempt_id, int):
+                return
+            setter = getattr(self.repository, "record_model_rate_limit", None)
+            if not callable(setter):
+                # Older injected repositories cannot persist per-network
+                # history. Do not suppress a validated usage value from the
+                # terminal attempt just because that optional projection is
+                # unavailable.
+                return
+            rate_limited_attempts.add(attempt_id)
+            notice = ModelRetryNotice(
+                stage="analysis",
+                retry_number=min(event.retry_number, 100),
+                wait_seconds=min(max(event.delay_seconds, 0.0), 60.0),
+                action="retrying" if event.will_retry else "exhausted",
+                provider_diagnostic=provider_diagnostic(event.error),
+                observed_at=datetime.now(UTC),
+            )
+            await database_call(setter, attempt_id, event.usage, notice)
+
+        model_rate_limit = ModelRateLimitGate(on_retry=on_model_retry)
+        model_lease = AsyncExitStack()
+        model_lease_lock = asyncio.Lock()
+        model_configuration = None
+        model_lease_closed = False
+
+        async def configuration_for_model():
+            nonlocal model_configuration
+            async with model_lease_lock:
+                if model_configuration is None:
+                    model_configuration = await model_lease.enter_async_context(
+                        self._ai.operation(job.configuration_revision)
+                    )
+                return model_configuration
+
+        async def close_model_lease():
+            nonlocal model_lease_closed
+            if not model_lease_closed:
+                model_lease_closed = True
+                await model_lease.aclose()
+
+        async def produce_loop(session=None) -> ManualAcquisitionPause | None:
+            pause: ManualAcquisitionPause | None = None
+            try:
+                while not self._closed and not stop_event.is_set():
+                    attempt = await database_call(
+                        self.repository.next_attempt,
+                        job.id,
+                        prefer_reusable=not job.force_refresh,
+                        allow_preview=False,
+                    )
+                    if attempt is None:
+                        break
+                    # Cache/reuse is decided before browser acquisition. The
+                    # repository prioritizes reusable summaries and saved
+                    # detail inputs so an earlier URL-only item cannot block a
+                    # later source that is already usable offline.
+                    if not job.force_refresh and await database_call(
+                        self.repository.reuse,
+                        attempt.id,
+                        allow_preview=False,
+                    ):
+                        await database_call(self.repository.start, job.id)
+                        continue
+                    await database_call(self.repository.start, job.id)
+                    await database_call(self.repository.begin, attempt.id)
+                    if manual:
+                        item_session = ManualContentSession(
+                            attempt,
+                            enrichment=self._enrichment,
+                            database=self.repository.database,
+                            on_pause=self.on_manual_acquisition_pause,
+                            access_snapshot=job.platform_access_snapshot,
+                            on_access_waiting=on_access_waiting,
+                            on_access_notice=on_access_notice,
+                        )
+                    else:
+                        item_session = session
+                    candidate = await self._prepare_attempt(
+                        attempt, item_session, allow_preview=False
+                    )
+                    if candidate is not None and not stop_event.is_set():
+                        await ready.put((attempt, candidate))
+                    await asyncio.sleep(0)
+            except ManualAcquisitionPause as error:
+                # The parent pause is already durable. Drain acquired peers
+                # before returning so their model work is not discarded.
+                pause = error
+            except asyncio.CancelledError:
+                raise
+            # Sentinels are emitted only for the normal/pause path. If the
+            # producer itself fails, the supervisor cancels consumers directly;
+            # this avoids a second blocking await while a queue is full.
+            for _ in range(concurrency):
+                await ready.put(None)
+            return pause
+
+        async def systemic_model_failure(revision, error):
+            # Fence producer admission before awaiting the durable cross-task
+            # configuration block. Peers already inside the provider call are
+            # settled by the supervisor; no later queued candidate may start.
+            stop_event.set()
+            if self.on_manual_configuration_failure is not None:
+                await self.on_manual_configuration_failure(
+                    revision,
+                    error,
+                )
+
+        async def consume():
+            while True:
+                value = await ready.get()
+                if value is None:
+                    return
+                attempt, candidate = value
+                if stop_event.is_set() or self._closed:
+                    continue
+                try:
+                    configuration = await configuration_for_model()
+                    # Configuration acquisition is awaitable. Re-check after
+                    # it so cancellation cannot turn a queued candidate into a
+                    # new paid request while another consumer is unwinding.
+                    if stop_event.is_set() or self._closed:
+                        continue
+                    await self._analyse_model(
+                        attempt,
+                        candidate,
+                        configuration,
+                        job.initial_prompt,
+                        stop_on_systemic_error=manual,
+                        model_rate_limit=model_rate_limit,
+                        retry_context={
+                            "attempt_id": attempt.id,
+                            "stage": "analysis",
+                        },
+                        rate_limited_attempts=rate_limited_attempts,
+                        on_systemic_error=systemic_model_failure,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except BaseException:
+                    # Let the supervisor observe the original exception and
+                    # tear down every peer, but stop new producer work first.
+                    stop_event.set()
+                    raise
+
+        async def run_pipeline(session=None):
+            producer = asyncio.create_task(
+                produce_loop(session), name=f"analysis-producer-{job.id}"
+            )
+            workers = [
+                asyncio.create_task(consume(), name=f"analysis-consumer-{job.id}-{i}")
+                for i in range(concurrency)
+            ]
+
+            async def join_workers():
+                return await asyncio.gather(*workers)
+
+            worker_join = asyncio.create_task(
+                join_workers(), name=f"analysis-consumers-{job.id}"
+            )
+            try:
+                # FIRST_EXCEPTION is the important ownership boundary: neither
+                # a failed producer nor a failed worker may leave the other side
+                # waiting forever for a sentinel.
+                done, _ = await asyncio.wait(
+                    (producer, worker_join), return_when=asyncio.FIRST_EXCEPTION
+                )
+                for task in done:
+                    if task.cancelled():
+                        raise asyncio.CancelledError
+                    error = task.exception()
+                    if error is not None:
+                        raise error
+                # FIRST_EXCEPTION also returns when the producer finishes
+                # normally.  Do not publish the parent completion or release
+                # the shared model lease until every consumer has drained its
+                # sentinel and all per-item writes have settled.
+                await asyncio.gather(producer, worker_join)
+                producer_result = producer.result()
+                if isinstance(producer_result, ManualAcquisitionPause):
+                    await close_model_lease()
+                    return
+                # Publish completion while the task's stable model lease is
+                # still held.  The callback is admission-only and may launch a
+                # report runner; that runner queues behind this lease and
+                # retries after the lease is released below.  Keeping this
+                # order preserves the existing callback contract without
+                # allowing any extra model request in this task.
+                await database_call(self.repository.finish, job.id, "completed")
+                if self.on_job_finished is not None:
+                    try:
+                        await self.on_job_finished(job.id)
+                    except Exception:
+                        # Completion is durable; downstream handoff can be
+                        # reconciled without replaying any model request.
+                        pass
+                # No consumer remains after worker_join has settled. Release
+                # before returning to the queue supervisor/report poller.
+                await close_model_lease()
+            except BaseException:
+                stop_event.set()
+                if not producer.done():
+                    producer.cancel()
+                if not worker_join.done():
+                    worker_join.cancel()
+                for worker in workers:
+                    if not worker.done():
+                        worker.cancel()
+                await settle(
+                    asyncio.gather(
+                        producer, worker_join, *workers, return_exceptions=True
+                    )
+                )
+                await settle(close_model_lease())
+                raise
+
+        # Enter the browser operation before launching the pipeline.  Manual
+        # report work enters per-item operations only when it has to acquire a
+        # missing source, so stored evidence can still drain without Chrome.
+        try:
+            async with AsyncExitStack() as stack:
+                session = None
+                if not manual:
+                    session = await stack.enter_async_context(
+                        self._enrichment.operation(
+                            access_snapshot=job.platform_access_snapshot,
+                            on_access_waiting=on_access_waiting,
+                            on_access_notice=on_access_notice,
+                        )
+                    )
+                await run_pipeline(session)
+        finally:
+            if self._active_stop_event is stop_event:
+                self._active_stop_event = None
+
+    async def _prepare_attempt(self, attempt, session, *, allow_preview):
+        """Acquire and durably save one immutable input while owning the browser."""
         source = attempt.source
-        expected = SearchResultSourceRecord(
-            run_id=source.source_run_id,
-            result_id=source.result_id,
-            platform=source.platform,
-            platform_content_id=source.platform_content_id,
-            content_type=source.content_type,
-            content_url=source.content_url,
-            title=source.title,
-            snippet=source.snippet,
-            matched_terms=tuple(source.matched_terms),
-            collection_active=False,
-            publisher_name=source.publisher_name,
-            published_at_text=source.published_at_text,
-            hashtags=tuple(source.hashtags),
-            interaction_stats=dict(source.interaction_stats),
-        )
-        usage = None
+        expected = _expected_source(source)
         try:
             async with session.item(
                 run_id=source.source_run_id,
@@ -416,10 +689,6 @@ class ContentAnalysisService:
                     and acquired.outcome != "access_denied"
                     and acquired.preview_analysis_eligible
                 ):
-                    # The stored search title/snippet is a safe, immutable
-                    # fallback when detail acquisition cannot produce a
-                    # document. It is explicitly labelled preview evidence
-                    # in the persisted input and model envelope.
                     candidate = acquired.as_preview()
                     saved_input = SavedInput.from_preview(
                         platform=source.platform,
@@ -466,77 +735,8 @@ class ContentAnalysisService:
                             diagnostic=acquired.diagnostic,
                         ),
                     )
-                    return
-                messages = await settle(
-                    asyncio.to_thread(
-                        build_understanding_messages, configuration, candidate, prompt
-                    )
-                )
-                await database_call(self.repository.mark_attempt, attempt.id)
-                for attempt_number in range(2):
-                    usage = None
-                    completion = await self._ai.complete(
-                        configuration,
-                        messages=messages,
-                        max_tokens=ANALYSIS_MAX_TOKENS,
-                        deadline=MODEL_DEADLINE_SECONDS,
-                    )
-                    usage = completion.usage
-                    try:
-                        output = parse_understanding(
-                            completion, api_key=configuration.api_key
-                        )
-                        break
-                    except AIAnalysisError as error:
-                        if attempt_number or error.code not in RETRYABLE_OUTPUT_ERRORS:
-                            raise
-                        await database_call(
-                            self.repository.mark_retry, attempt.id, usage
-                        )
-                await database_call(
-                    self.repository.finish_attempt,
-                    attempt.id,
-                    "completed",
-                    output=output,
-                    usage=usage,
-                )
-        except AIAnalysisError as error:
-            status = (
-                "unsupported"
-                if error.code == "unsupported_model"
-                else ("input_incomplete" if error.stage == "input" else "failed")
-            )
-            await database_call(
-                self.repository.finish_attempt,
-                attempt.id,
-                status,
-                error=failure(
-                    "input" if error.stage == "input" else "analysis",
-                    error.code,
-                    validation_issues=error.validation_issues,
-                ),
-                usage=error.usage or usage,
-            )
-        except AIError as error:
-            code = cast(
-                FailureCode,
-                error.code if error.code in FAILURE_MESSAGES else "internal_error",
-            )
-            await database_call(
-                self.repository.finish_attempt,
-                attempt.id,
-                "failed",
-                error=failure("analysis", code),
-                usage=usage,
-            )
-            if stop_on_systemic_error and error.code in MANUAL_SYSTEMIC_AI_FAILURES:
-                # Block peers before the provider lease is released, so a
-                # queued manual task cannot slip in another paid request.
-                if self.on_manual_configuration_failure is not None:
-                    await self.on_manual_configuration_failure(
-                        configuration.revision, error
-                    )
-                raise
+                    return None
+                return candidate
         except ContentEnrichmentError as error:
             if error.code in (
                 "worker_unsettled",
@@ -566,6 +766,172 @@ class ContentAnalysisService:
                 else "input_incomplete",
                 error=failure("acquisition", code),
             )
+            return None
+
+    async def _analyse(
+        self,
+        attempt,
+        session,
+        configuration,
+        prompt,
+        *,
+        allow_preview=False,
+        stop_on_systemic_error=False,
+    ):
+        candidate = await self._prepare_attempt(
+            attempt, session, allow_preview=allow_preview
+        )
+        if candidate is not None:
+            await self._analyse_model(
+                attempt,
+                candidate,
+                configuration,
+                prompt,
+                stop_on_systemic_error=stop_on_systemic_error,
+            )
+
+    async def _analyse_model(
+        self,
+        attempt,
+        candidate,
+        configuration,
+        prompt,
+        *,
+        stop_on_systemic_error=False,
+        model_rate_limit=None,
+        retry_context=None,
+        rate_limited_attempts=None,
+        on_systemic_error=None,
+    ):
+        usage = None
+        try:
+            messages = await settle(
+                asyncio.to_thread(
+                    build_understanding_messages, configuration, candidate, prompt
+                )
+            )
+            await database_call(self.repository.mark_attempt, attempt.id)
+            for attempt_number in range(2):
+                usage = None
+                complete = self._ai.complete
+                if model_rate_limit is not None:
+                    completion = await model_rate_limit.complete(
+                        complete,
+                        configuration,
+                        messages=messages,
+                        max_tokens=ANALYSIS_MAX_TOKENS,
+                        deadline=MODEL_DEADLINE_SECONDS,
+                        retry_context=retry_context,
+                    )
+                else:
+                    completion = await complete(
+                        configuration,
+                        messages=messages,
+                        max_tokens=ANALYSIS_MAX_TOKENS,
+                        deadline=MODEL_DEADLINE_SECONDS,
+                    )
+                usage = _observed_usage(getattr(completion, "usage", None))
+                # Parser and repository boundaries must see the same validated
+                # transport accounting. A malformed usage object is an unknown
+                # request, not an exception that can interrupt the whole job.
+                completion = AICompletion(completion.text, usage)
+                try:
+                    output = parse_understanding(
+                        completion, api_key=configuration.api_key
+                    )
+                    break
+                except AIAnalysisError as error:
+                    if attempt_number or error.code not in RETRYABLE_OUTPUT_ERRORS:
+                        raise
+                    await database_call(self.repository.mark_retry, attempt.id, usage)
+            await database_call(
+                self.repository.finish_attempt,
+                attempt.id,
+                "completed",
+                output=output,
+                usage=usage,
+            )
+        except AIAnalysisError as error:
+            status = (
+                "unsupported"
+                if error.code == "unsupported_model"
+                else ("input_incomplete" if error.stage == "input" else "failed")
+            )
+            await database_call(
+                self.repository.finish_attempt,
+                attempt.id,
+                status,
+                error=failure(
+                    "input" if error.stage == "input" else "analysis",
+                    error.code,
+                    validation_issues=error.validation_issues,
+                ),
+                usage=error.usage or usage,
+            )
+        except AIError as error:
+            code = cast(
+                FailureCode,
+                error.code if error.code in FAILURE_MESSAGES else "internal_error",
+            )
+            rate_limit_seen = (
+                rate_limited_attempts is not None
+                and attempt.id in rate_limited_attempts
+            )
+            final_usage = (
+                None
+                if error.transient_rate_limit and rate_limit_seen
+                else getattr(error, "usage", None) or usage
+            )
+            await database_call(
+                self.repository.finish_attempt,
+                attempt.id,
+                "failed",
+                error=failure(
+                    "analysis",
+                    code,
+                    provider_diagnostic=provider_diagnostic(error),
+                ),
+                usage=final_usage,
+            )
+            if (
+                stop_on_systemic_error
+                and error.code in MANUAL_SYSTEMIC_AI_FAILURES
+                and not error.transient_rate_limit
+            ):
+                callback = on_systemic_error or self.on_manual_configuration_failure
+                if callback is not None:
+                    await callback(configuration.revision, error)
+                raise
+
+
+def _observed_usage(value):
+    if value is None:
+        return None
+    try:
+        if isinstance(value, AIUsage):
+            value = value.model_dump(mode="json")
+        return AIUsage.model_validate(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _expected_source(source: SearchResultSourceRecord) -> SearchResultSourceRecord:
+    return SearchResultSourceRecord(
+        run_id=source.source_run_id,
+        result_id=source.result_id,
+        platform=source.platform,
+        platform_content_id=source.platform_content_id,
+        content_type=source.content_type,
+        content_url=source.content_url,
+        title=source.title,
+        snippet=source.snippet,
+        matched_terms=tuple(source.matched_terms),
+        collection_active=False,
+        publisher_name=source.publisher_name,
+        published_at_text=source.published_at_text,
+        hashtags=tuple(source.hashtags),
+        interaction_stats=dict(source.interaction_stats),
+    )
 
 
 def _workflow_prompt_choice(prompt: PromptSnapshot | None):

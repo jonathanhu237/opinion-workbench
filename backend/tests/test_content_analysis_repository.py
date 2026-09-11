@@ -45,7 +45,18 @@ def old_projection(database):
             columns = [
                 row[1]
                 for row in connection.execute(f'PRAGMA table_info("{table}")')
-                if row[1] != "max_total_results"
+                if row[1]
+                not in {
+                    "max_total_results",
+                    "rate_limit_attempts_json",
+                    "ordering",
+                    "platform_access_snapshot_json",
+                    "access_wait_json",
+                    "access_notice_json",
+                    "hashtags_json",
+                    "interaction_stats_json",
+                    "workflow_operation_key",
+                }
             ]
             if table == "search_runs":
                 columns = [

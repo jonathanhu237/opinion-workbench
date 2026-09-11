@@ -41,9 +41,16 @@ def _directory_flags() -> int:
 
 
 def _open_directory_path(path: Path) -> int:
-    """Walk trusted absolute configuration without following any symlink."""
+    """Walk trusted absolute configuration without following any symlink.
+
+    macOS exposes its temporary directory through the system ``/var`` alias,
+    which is a symlink to ``/private/var``.  Resolve only that OS-owned alias
+    before the descriptor walk; user-controlled ancestors still use
+    ``O_NOFOLLOW`` and therefore retain the fail-closed symlink boundary.
+    """
     if not path.is_absolute() or ".." in path.parts:
         raise MediaStagingError
+    path = _canonical_macos_var(path)
     descriptor = os.open(path.anchor, _directory_flags())
     try:
         for part in path.parts[1:]:
@@ -54,6 +61,25 @@ def _open_directory_path(path: Path) -> int:
     except BaseException:
         os.close(descriptor)
         raise
+
+
+def _canonical_macos_var(path: Path) -> Path:
+    """Accept macOS's stable ``/var`` spelling without trusting other links."""
+    if (
+        os.name != "posix"
+        or path.anchor != "/"
+        or len(path.parts) < 2
+        or path.parts[1] != "var"
+    ):
+        return path
+    alias = Path("/var")
+    try:
+        target = alias.resolve(strict=True)
+    except OSError:
+        return path
+    if alias.is_symlink() and target == Path("/private/var"):
+        return target.joinpath(*path.parts[2:])
+    return path
 
 
 def _private_directory(info: os.stat_result) -> None:

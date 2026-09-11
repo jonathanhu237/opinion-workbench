@@ -1,5 +1,6 @@
 """Atomic manual selection, frozen evidence, and durable child ownership."""
 
+import json
 from dataclasses import dataclass
 from uuid import uuid4
 
@@ -8,8 +9,9 @@ from longtian_api.repositories.analysis_settings import resolve_prompt_choice
 from longtian_api.repositories.analysis_shared import AnalysisRepository, timestamp
 from longtian_api.repositories.content_analyses import ContentAnalysisRepository
 from longtian_api.repositories.generation_selection import eligibility, select_library
+from longtian_api.repositories.platform_access import PlatformAccessRepository
 from longtian_api.schemas.ai_summaries import SummaryFailure
-from longtian_api.schemas.analysis_evidence import SavedInput
+from longtian_api.schemas.analysis_evidence import AnalysisSource, SavedInput
 from longtian_api.schemas.report_generations import (
     GenerationCreate,
     GenerationList,
@@ -267,6 +269,26 @@ class ReportGenerationRepository(AnalysisRepository):
             fingerprint(payload.model_dump()),
             fingerprint(payload.model_dump(exclude_none=True)),
         }
+        # v38 intents did not contain a concurrency field. Replaying one with
+        # the new default must still resolve to the original task rather than
+        # creating a second report; the persisted analysis snapshot remains the
+        # historical serial value. Inspect the stored intent as well as the
+        # current model-field set: a new client may parse a historical payload
+        # through its defaulting schema and send ``summary_concurrency=8`` even
+        # though the original request omitted the field.
+        try:
+            stored_intent = json.loads(row["intent_json"])
+        except (TypeError, ValueError, json.JSONDecodeError):
+            stored_intent = None
+        stored_concurrency_missing = not isinstance(stored_intent, dict) or (
+            "summary_concurrency" not in stored_intent
+        )
+        if "summary_concurrency" not in payload.model_fields_set or (
+            stored_concurrency_missing and payload.summary_concurrency == 8
+        ):
+            legacy = payload.model_dump()
+            legacy.pop("summary_concurrency", None)
+            hashes.add(fingerprint(legacy))
         if row["intent_hash"] not in hashes:
             raise AnalysisError("content_analysis_request_conflict")
         return self._generation(connection, row["id"])
@@ -402,6 +424,10 @@ class ReportGenerationRepository(AnalysisRepository):
                 request_id=payload.request_id,
                 active=sum(active for _, _, active in selections),
                 selections=tuple(selections),
+                summary_concurrency=payload.summary_concurrency,
+                platform_access_snapshot=PlatformAccessRepository(
+                    self.database
+                ).snapshot_from_connection(connection),
             )
             job_id = admission.job.id
             # Freeze reusable summaries and acquired inputs before another task can
@@ -448,7 +474,12 @@ class ReportGenerationRepository(AnalysisRepository):
         ).fetchone()
         if cached is not None:
             value = self._analyses._attempt(cached)
-            if value.input is not None and value.input.analysis_eligible:
+            if (
+                value.input is not None
+                and value.input.analysis_eligible
+                and value.input.extractor_version
+                == f"{value.source.platform}-enrichment-v1"
+            ):
                 connection.execute(
                     """UPDATE content_analysis_attempts SET status='completed',
                     input_json=?,input_fingerprint=?,output_json=?,reused_from_attempt_id=?,
@@ -485,11 +516,16 @@ class ReportGenerationRepository(AnalysisRepository):
                 ),
             ).fetchone()
         if material is not None:
+            source = AnalysisSource.model_validate_json(attempt["source_json"])
             saved = SavedInput.model_validate_json(material["input_json"])
-            # A new explicit report attempt may reacquire previously missing
-            # text. Freezing an unavailable document would make a transient
-            # loading/access failure permanent, even after the adapter is fixed.
-            if saved.text.coverage == "unavailable":
+            # Search-card previews are discovery evidence, not original-post
+            # text.  Only a current detail input can be frozen into a new
+            # report; a missing/unavailable detail remains open for acquisition.
+            if (
+                saved.text.coverage == "unavailable"
+                or saved.extractor_version != f"{source.platform}-enrichment-v1"
+                or not saved.evidence_coverage.text_available
+            ):
                 return
             connection.execute(
                 """UPDATE content_analysis_attempts SET input_json=?,

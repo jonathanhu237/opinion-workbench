@@ -1,7 +1,6 @@
-"""Synthetic MP4 bytes, real media probe, real application orchestration."""
+"""Native text-only reports ignore video metadata and media URLs."""
 
 import asyncio
-import base64
 import shutil
 import subprocess
 
@@ -10,7 +9,7 @@ import pytest
 from enrichment_fixtures import PNG
 from fastapi.testclient import TestClient
 from test_content_analysis_api import saved
-from test_native_text_report import native_environment, wait_status
+from test_native_text_report import native_environment
 from test_report_generations import generation_request
 from topic_report_fixtures import finish
 
@@ -55,12 +54,7 @@ def video_samples():
         )
         return subprocess.run(args, check=True, capture_output=True, timeout=15).stdout
 
-    return {
-        "valid": generate(),
-        "silent": generate(audio=False),
-        "long": generate(duration="31"),
-        "codec": generate(codec="mpeg4"),
-    }
+    return {"valid": generate()}
 
 
 def video_response(data, *, caption="龙田现场视频", image=False, status=200):
@@ -70,7 +64,7 @@ def video_response(data, *, caption="龙田现场视频", image=False, status=20
                 "ok": 1,
                 "id": 3600375418559878,
                 "idstr": "3600375418559878",
-                "text": caption,
+                "text": caption or "龙田现场视频",
                 "created_at": "Thu Sep 03 10:00:00 +0800 2026",
                 "pic_ids": [],
                 "page_info": {
@@ -100,12 +94,12 @@ def video_response(data, *, caption="龙田现场视频", image=False, status=20
 
 
 @pytest.mark.parametrize("caption,image", [("", False), ("龙田图文视频", True)])
-def test_real_video_bytes_reach_model_and_report(
+def test_video_metadata_never_reaches_text_only_report(
     tmp_path, video_samples, caption, image
 ):
-    data = video_samples["valid"]
     app, _, model, requests = native_environment(
-        tmp_path, response=video_response(data, caption=caption, image=image)
+        tmp_path,
+        response=video_response(video_samples["valid"], caption=caption, image=image),
     )
     with TestClient(app, base_url="http://127.0.0.1") as client:
         saved(client)
@@ -118,49 +112,30 @@ def test_real_video_bytes_reach_model_and_report(
         attempt = client.get(
             f"/api/v1/content-analysis-jobs/{value['analysis']['id']}/items"
         ).json()["items"][0]
-        asset = next(a for a in attempt["input"]["assets"] if a["kind"] == "video")
-        assert asset["status"] == "ready" and asset["audio_track"] == "present"
-        assert 0 < asset["duration_ms"] <= 30000 and asset["byte_size"] == len(data)
-        parts = next(messages for stage, messages in model.calls if stage == "initial")[
-            1
-        ]["content"]
-        videos = [part for part in parts if part["type"] == "video_url"]
-        assert len(videos) == 1
-        assert base64.b64decode(videos[0]["video_url"]["url"].split(",")[1]) == data
-        sources = client.get(
-            f"/api/v1/topic-reports/{result['report']['id']}/sources"
-        ).json()["items"]
-        assert sources[0]["evidence_coverage"]["video"]["ready"] == 1
-        assert len(requests) == 2 + image
-        cache = client.get(
-            f"/api/v1/content-analyses/{attempt['id']}/media-cache"
-        ).json()
-        assert all(item["state"] == "cached" for item in cache["items"])
-        original = client.get(
-            f"/api/v1/content-analyses/{attempt['id']}/media/{asset['position']}"
-        )
-        assert (
-            original.content == data and original.headers["content-type"] == "video/mp4"
-        )
-        assert client.get(f"/api/v1/report-generations/{value['id']}").json() == result
-        assert len(requests) == 2 + image
+        assert attempt["input"]["status"] == "ready"
+        assert attempt["input"]["assets"] == []
+        assert attempt["input"]["detected_modalities"] == ["text"]
+        content = next(
+            messages for stage, messages in model.calls if stage == "initial"
+        )[1]["content"]
+        assert isinstance(content, str)
+        assert "image_url" not in str(model.calls)
+        assert "video_url" not in str(model.calls)
+        assert len(requests) == 1
 
 
 @pytest.mark.parametrize(
-    "sample,issue",
-    [
-        ("silent", "audio_missing"),
-        ("long", "media_limit"),
-        ("codec", "unsupported_codec"),
-        ("broken", "invalid_media"),
-    ],
+    "sample",
+    ["silent", "long", "codec", "broken"],
 )
-def test_unusable_video_keeps_text_and_image_but_is_never_sent(
-    tmp_path, video_samples, sample, issue
+def test_unusable_video_bytes_are_not_requested_or_reported(
+    tmp_path, video_samples, sample
 ):
-    app, _, model, _ = native_environment(
-        tmp_path,
-        response=video_response(video_samples.get(sample, b"not mp4"), image=True),
+    # The old media qualification cases remain as input variations, but the
+    # production boundary intentionally does not inspect or download them.
+    data = video_samples["valid"] if sample != "broken" else b"not mp4"
+    app, _, model, requests = native_environment(
+        tmp_path, response=video_response(data, image=True)
     )
     with TestClient(app, base_url="http://127.0.0.1") as client:
         saved(client)
@@ -173,26 +148,35 @@ def test_unusable_video_keeps_text_and_image_but_is_never_sent(
         attempt = client.get(
             f"/api/v1/content-analysis-jobs/{value['analysis']['id']}/items"
         ).json()["items"][0]
-        assert attempt["input"]["assets"][1]["issue_code"] == issue
-        parts = next(messages for stage, messages in model.calls if stage == "initial")[
-            1
-        ]["content"]
-        assert sum(part["type"] == "image_url" for part in parts) == 1
-        assert not any(part["type"] == "video_url" for part in parts)
+        assert attempt["input"]["assets"] == []
+        assert "image_url" not in str(model.calls)
+        assert "video_url" not in str(model.calls)
+        assert len(requests) == 1
 
 
-def test_video_challenge_requires_continue_and_does_not_repeat_finished_image(
-    tmp_path, video_samples
-):
-    allowed = False
-
+def test_video_challenge_does_not_pause_text_only_report(tmp_path, video_samples):
     def response(request):
-        result = video_response(
-            video_samples["valid"], image=True, status=200 if allowed else 403
-        )(request)
-        if request.url.path.endswith(".mp4") and not allowed:
-            return httpx.Response(403, content="安全验证".encode())
-        return result
+        if request.url.host == "weibo.com":
+            return httpx.Response(
+                200,
+                json={
+                    "ok": 1,
+                    "id": 3600375418559878,
+                    "idstr": "3600375418559878",
+                    "text": "龙田现场视频",
+                    "created_at": "Thu Sep 03 10:00:00 +0800 2026",
+                    "pic_ids": ["one"],
+                    "pic_infos": {
+                        "one": {"largest": {"url": "https://wx1.sinaimg.cn/one.png"}}
+                    },
+                    "page_info": {
+                        "media_info": {
+                            "stream_url": "https://f.video.weibocdn.com/selected.mp4"
+                        }
+                    },
+                },
+            )
+        return httpx.Response(403, content="安全验证".encode())
 
     app, _, model, requests = native_environment(tmp_path, response=response)
     with TestClient(app, base_url="http://127.0.0.1") as client:
@@ -200,39 +184,20 @@ def test_video_challenge_requires_continue_and_does_not_repeat_finished_image(
         value = client.post(
             "/api/v1/report-generations", json=generation_request([1])
         ).json()
-        service = app.state.report_generation_service
-        paused = client.portal.call(
-            wait_status, service, value["id"], "paused_for_manual_action"
-        )
-        assert len(requests) == 3 and not model.calls
-        allowed = True
-        assert (
-            client.get(f"/api/v1/report-generations/{value['id']}").json()["status"]
-            == "paused_for_manual_action"
-        )
-        assert len(requests) == 3 and not model.calls
-        assert (
-            client.post(
-                f"/api/v1/report-generations/{value['id']}/continue",
-                json={"expected_revision": paused.control_revision},
-            ).status_code
-            == 200
-        )
-        client.portal.call(finish, service)
-        assert (
-            client.get(f"/api/v1/report-generations/{value['id']}").json()["status"]
-            == "completed"
-        )
-        assert len(requests) == 4 and model.counts["initial"] == 1
+        client.portal.call(finish, app.state.report_generation_service)
+        result = client.get(f"/api/v1/report-generations/{value['id']}").json()
+        assert result["status"] == "completed"
+        assert model.counts["initial"] == 1
+        assert len(requests) == 1
 
 
-def test_missing_probe_keeps_body_without_video_model_input(
+def test_missing_video_probe_does_not_change_text_only_input(
     tmp_path, video_samples, monkeypatch
 ):
     from longtian_api.services import video_probe
 
     monkeypatch.setattr(video_probe.shutil, "which", lambda name: None)
-    app, _, model, _ = native_environment(
+    app, _, model, requests = native_environment(
         tmp_path, response=video_response(video_samples["valid"])
     )
     with TestClient(app, base_url="http://127.0.0.1") as client:
@@ -244,13 +209,14 @@ def test_missing_probe_keeps_body_without_video_model_input(
         attempt = client.get(
             f"/api/v1/content-analysis-jobs/{value['analysis']['id']}/items"
         ).json()["items"][0]
-        assert attempt["input"]["assets"][0]["issue_code"] == "probe_unavailable"
+        assert attempt["input"]["assets"] == []
         assert isinstance(
             next(messages for stage, messages in model.calls if stage == "initial")[1][
                 "content"
             ],
             str,
         )
+        assert len(requests) == 1
 
 
 def test_cancel_waits_for_owned_probe_start_and_exit(video_samples):

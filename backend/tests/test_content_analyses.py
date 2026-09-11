@@ -1,4 +1,4 @@
-"""Independent saved evidence, actual-media boundaries and owned queue lifecycle."""
+"""Independent saved text evidence and owned queue lifecycle."""
 
 import asyncio
 import threading
@@ -24,7 +24,7 @@ from longtian_api.services.collector_contracts import EnrichmentWorkerResult
 from longtian_api.services.summary_errors import failure
 
 
-def test_independent_neutral_media_understanding_and_unique_settlement(tmp_path):
+def test_independent_neutral_text_understanding_and_unique_settlement(tmp_path):
     async def run():
         database, _, service, _, model, worker, coordinator = environment(
             tmp_path, count=10
@@ -54,7 +54,7 @@ def test_independent_neutral_media_understanding_and_unique_settlement(tmp_path)
         text = model.calls[0][1][0]["content"]
         assert job.initial_prompt.instructions in text
         assert "monitoring_scope" not in str(model.calls)
-        assert "image_url" in str(model.calls)
+        assert "image_url" not in str(model.calls)
         assert "blob_ref" not in items[0].model_dump_json()
         events = service.repository.completion_events()
         assert len(events) == 1 and len(events[0]["successful_attempt_ids"]) == 9
@@ -171,7 +171,7 @@ def test_prompt_choices_freeze_both_stages_and_isolate_cache_keys(tmp_path):
     asyncio.run(run())
 
 
-def test_search_preview_reuse_is_invalidated_by_richer_detail_evidence(tmp_path):
+def test_search_preview_is_not_analysed_or_reused_without_original_text(tmp_path):
     async def run():
         database, _, service, ai, model, worker, _ = environment(tmp_path, count=1)
         detail_enrich = worker.enrich
@@ -184,28 +184,28 @@ def test_search_preview_reuse_is_invalidated_by_richer_detail_evidence(tmp_path)
         first = await service.create(request(database))
         await finish(service)
         original = service.repository.items(first.job.id).items[0]
-        assert (
-            original.status == "completed"
-            and original.input.extractor_version == "wb-search-preview-v1"
-            and original.input.evidence_coverage.level == "search_preview"
-        )
-        assert len(worker.calls) == len(model.calls) == 1
+        assert original.status == "input_incomplete"
+        assert original.input is None
+        assert len(worker.calls) == 1
+        assert not model.calls
 
         reused = await service.create(
-            request(database, kind="reanalysis", result_ids=[1])
+            request(database, kind="retry", result_ids=[1])
         )
         await finish(service)
         reused_item = service.repository.items(reused.job.id).items[0]
-        assert reused_item.reused_from_attempt_id == original.id
-        assert reused_item.input_fingerprint == original.input_fingerprint
-        assert len(worker.calls) == len(model.calls) == 1
+        assert reused_item.status == "input_incomplete"
+        assert reused_item.reused_from_attempt_id is None
+        assert reused_item.input is None
+        assert len(worker.calls) == 2
+        assert not model.calls
 
         worker.enrich = detail_enrich
         worker.body = "后来保存的详情正文，与搜索摘要不同。"
         richer = await service.create(
             request(
                 database,
-                kind="reanalysis",
+                kind="retry",
                 result_ids=[1],
                 force_refresh=True,
             )
@@ -213,8 +213,10 @@ def test_search_preview_reuse_is_invalidated_by_richer_detail_evidence(tmp_path)
         await finish(service)
         richer_item = service.repository.items(richer.job.id).items[0]
         assert richer_item.reused_from_attempt_id is None
+        assert richer_item.status == "completed"
         assert richer_item.input_fingerprint != original.input_fingerprint
-        assert len(worker.calls) == len(model.calls) == 2
+        assert len(worker.calls) == 3
+        assert len(model.calls) == 1
         await service.shutdown()
         await ai.shutdown()
 

@@ -4,6 +4,12 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
+from longtian_api.application_paths import application_paths
+
+# The schema version remains 38 for compatibility with the packaged local
+# database contract.  The pacing additions are an idempotent additive schema
+# extension applied while that version is open; old v37 installs still report
+# the historical v38 upgrade boundary.
 CURRENT_DATABASE_VERSION = 38
 DEFAULT_RULE_NAME = "龙田街道及四个社区"
 DEFAULT_RULE_TERMS = (
@@ -20,8 +26,8 @@ class DatabaseVersionError(RuntimeError):
 
 
 def default_database_path() -> Path:
-    """Return the repository-local product database path."""
-    return Path(__file__).resolve().parents[3] / "runtime" / "longtian.sqlite3"
+    """Return the stable local product database path."""
+    return application_paths().database_path
 
 
 class Database:
@@ -172,6 +178,11 @@ class Database:
                         f"retry after resolving the filesystem error: {details}"
                     )
                 _migrate_to_version_38(connection)
+                version = 38
+            # Keep the historical user_version boundary stable for existing
+            # packaged databases while applying the additive pacing schema.
+            # The extension is idempotent and therefore safe on every open.
+            _migrate_to_version_39(connection)
         finally:
             connection.close()
 
@@ -404,6 +415,41 @@ def _migrate_to_version_38(connection: sqlite3.Connection) -> None:
         if connection.in_transaction:
             connection.rollback()
         raise
+
+
+def _migrate_to_version_39(connection: sqlite3.Connection) -> None:
+    from longtian_api.migrations.report_pacing_v39 import migrate
+
+    previous_foreign_keys = connection.execute("PRAGMA foreign_keys").fetchone()[0]
+    previous_legacy_alter_table = connection.execute(
+        "PRAGMA legacy_alter_table"
+    ).fetchone()[0]
+    try:
+        connection.execute("PRAGMA foreign_keys = OFF")
+        connection.execute("PRAGMA legacy_alter_table = ON")
+        connection.execute("BEGIN IMMEDIATE")
+        version = _read_user_version(connection)
+        if version >= 39:
+            connection.execute("COMMIT")
+            return
+        if version != 38:
+            raise DatabaseVersionError("Unsupported database migration source version.")
+        migrate(connection)
+        # Do not advance PRAGMA user_version: v38 is the compatibility boundary
+        # used by already shipped local databases. The new tables/columns are
+        # detected and safely re-applied on subsequent opens.
+        if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
+            raise sqlite3.DatabaseError("Foreign key check failed after v39 migration")
+        connection.execute("COMMIT")
+    except BaseException:
+        if connection.in_transaction:
+            connection.execute("ROLLBACK")
+        raise
+    finally:
+        connection.execute(f"PRAGMA foreign_keys = {int(previous_foreign_keys)}")
+        connection.execute(
+            f"PRAGMA legacy_alter_table = {int(previous_legacy_alter_table)}"
+        )
 
 
 def _migrate_to_version_36(connection: sqlite3.Connection) -> None:

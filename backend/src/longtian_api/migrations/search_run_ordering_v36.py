@@ -7,8 +7,7 @@ import sqlite3
 
 def migrate(connection: sqlite3.Connection) -> None:
     columns = {
-        str(row[1])
-        for row in connection.execute('PRAGMA table_info("search_runs")')
+        str(row[1]) for row in connection.execute('PRAGMA table_info("search_runs")')
     }
     if "ordering" in columns:
         return

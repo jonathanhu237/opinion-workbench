@@ -2,6 +2,7 @@
 
 import asyncio
 from collections import deque
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from urllib.parse import quote_plus, urlencode
 
@@ -18,6 +19,10 @@ from longtian_api.services.native_weibo import (
     NativeWeiboCollector,
     _classify_connection_page,
     _generic_detail_text,
+)
+from longtian_api.services.platform_access import (
+    PlatformAccessCoordinator,
+    PlatformAccessService,
 )
 from longtian_api.services.platform_connections import PlatformConnectionService
 from longtian_api.services.weibo_dom import barrier, document, read_search_page
@@ -209,6 +214,25 @@ class BrowserFixture:
         self.closed = True
 
 
+class _VirtualPacingClock:
+    """Advance durable pacing without making DOM fixtures sleep in real time."""
+
+    def __init__(self):
+        self.monotonic_value = 0.0
+        self.wall_value = datetime(2026, 1, 1, tzinfo=UTC)
+
+    def monotonic(self):
+        return self.monotonic_value
+
+    def wall(self):
+        return self.wall_value
+
+    async def sleep(self, seconds):
+        self.monotonic_value += max(0.0, seconds)
+        self.wall_value += timedelta(seconds=max(0.0, seconds))
+        await asyncio.sleep(0)
+
+
 def environment(tmp_path, pages, *, model=None, **runtime_options):
     # These fixtures explicitly cover the historical comprehensive-search DOM.
     # Latest-first default/per-term behavior is exercised in test_latest_collection.
@@ -218,8 +242,18 @@ def environment(tmp_path, pages, *, model=None, **runtime_options):
         browser=browser, delay_seconds=0, ready_polls=2, **runtime_options
     )
     service = PlatformConnectionService(collector_factory=lambda **kwargs: runtime)
+    pacing_clock = _VirtualPacingClock()
     app = create_app(
         platform_connection_service_factory=lambda: service,
+        platform_access_service_factory=lambda database: PlatformAccessService(
+            database,
+            coordinator=PlatformAccessCoordinator(
+                database=database,
+                clock=pacing_clock.monotonic,
+                wall_clock=pacing_clock.wall,
+                sleep=pacing_clock.sleep,
+            ),
+        ),
         monitoring_rule_service_factory=lambda: MonitoringRuleService(
             database_path=tmp_path / "db.sqlite3"
         ),

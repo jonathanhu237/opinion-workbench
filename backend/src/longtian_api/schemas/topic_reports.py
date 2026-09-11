@@ -9,6 +9,7 @@ from pydantic import Field, field_validator, model_validator
 
 from longtian_api.schemas.ai_summaries import (
     FailureCode,
+    ModelRetryNotice,
     StrictModel,
     SummaryFailure,
     TokenUsage,
@@ -307,6 +308,7 @@ class ReportRun(StrictModel):
     )
     queue_reason: Literal["ai_operation_active"] | None
     recovery_reason: Literal["backend_restart"] | None
+    model_retry_notice: ModelRetryNotice | None = None
     error: ReportFailure | None
     created_at: UtcTimestamp
     started_at: UtcTimestamp | None

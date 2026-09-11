@@ -1,0 +1,89 @@
+name: Portable release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+concurrency:
+  group: portable-release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  windows:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+        with:
+          version: 2025.10.10
+          cache: true
+      - shell: pwsh
+        run: .\windows\build.ps1
+      - shell: pwsh
+        run: |
+          $zip = "dist/windows/Longtian-Windows.zip"
+          Expand-Archive $zip "$env:RUNNER_TEMP/check" -Force
+          if (!(Test-Path "$env:RUNNER_TEMP/check/Longtian/Longtian.exe")) { throw 'missing Windows executable' }
+          if (!(Test-Path "$env:RUNNER_TEMP/check/Longtian/_internal/resources/static/index.html")) { throw 'missing static resources' }
+          python scripts/portable_smoke.py "$env:RUNNER_TEMP/check/Longtian/Longtian.exe" --cwd "$env:RUNNER_TEMP/check/Longtian"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-portable
+          if-no-files-found: error
+          path: |
+            dist/windows/Longtian-*-Windows-x64.zip
+            dist/windows/Longtian-*-Windows-x64.zip.sha256
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: jdx/mise-action@v2
+        with:
+          version: 2025.10.10
+          cache: true
+      - run: ./macos/build.sh
+      - run: |
+          unzip -q dist/macos/Longtian-*-macOS-arm64.zip -d "$RUNNER_TEMP/check"
+          test -x "$RUNNER_TEMP/check/Longtian/启动.command"
+          test -x "$RUNNER_TEMP/check/Longtian/Longtian"
+          test -f "$RUNNER_TEMP/check/Longtian/_internal/resources/static/index.html"
+          python3 scripts/portable_smoke.py "$RUNNER_TEMP/check/Longtian/启动.command" --cwd "$RUNNER_TEMP/check/Longtian"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-portable
+          if-no-files-found: error
+          path: |
+            dist/macos/Longtian-*-macOS-arm64.zip
+            dist/macos/Longtian-*-macOS-arm64.zip.sha256
+  draft:
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { path: assets }
+      - name: Validate draft-only same-commit release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: python3 scripts/validate_portable_release.py "$RELEASE_TAG" "$RELEASE_COMMIT"
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          draft: true
+          make_latest: false
+          body: |
+            Windows x64 / macOS Apple Silicon portable ZIPs.
+            Extract the complete folder, then open Longtian.exe or 启动.command.
+            Keep and back up data/ before upgrading. Chrome is required for collection.
+            Unsigned builds may require explicit OS approval. Do not share used data/.
+            Source: ${{ github.sha }}
+          fail_on_unmatched_files: true
+          files: |
+            assets/windows-portable/Longtian-*-Windows-x64.zip
+            assets/windows-portable/Longtian-*-Windows-x64.zip.sha256
+            assets/macos-portable/Longtian-macOS-arm64.zip
+            assets/macos-portable/Longtian-macOS-arm64.zip.sha256

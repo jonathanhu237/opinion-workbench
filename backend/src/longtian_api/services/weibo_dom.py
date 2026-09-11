@@ -128,6 +128,10 @@ class SearchPage:
     items: tuple[SearchWorkerItem, ...] = ()
     next_url: str | None = None
     view_all_url: str | None = None
+    # A rate-limit page may also ask for a human verification step. Keep the
+    # primary state rate-limited while carrying that second trusted signal to
+    # the durable platform diagnostic.
+    manual_challenge_required: bool = False
 
 
 def document(raw):
@@ -143,23 +147,30 @@ def document(raw):
 
 
 def barrier(root, url, status):
+    return barrier_details(root, url, status)[0]
+
+
+def barrier_details(root, url, status):
+    """Return the primary barrier and any co-occurring challenge evidence."""
     host = urlsplit(url).hostname or ""
-    if status == 429:
-        return "platform_blocked_or_rate_limited"
-    if status == 401 or host in ("passport.weibo.com", "passport.weibo.cn"):
-        return "login_required"
-    # A bare 403 is an access refusal, not proof that a verification widget is
-    # present.  Keep the neutral search-context outcome so callers do not ask
-    # the user to solve a CAPTCHA that the rendered page never showed.
-    if status == 403 and root is None:
-        return "search_context_unavailable"
-    if root is None:
-        return None
-    titles = " ".join(root.xpath("//title/text()"))
-    if host in ("security.weibo.com", "security.weibo.cn") or any(
-        word in titles for word in ("安全验证", "访问异常")
+    status_code = status if type(status) is int else None
+    if status_code != 429 and (
+        status_code == 401 or host in ("passport.weibo.com", "passport.weibo.cn")
     ):
-        return "manual_challenge_required"
+        return "login_required", False
+    # A bare 403 is an access refusal, not proof that a verification widget is
+    # present. Keep the neutral search-context outcome so callers do not ask
+    # the user to solve a CAPTCHA that the rendered page never showed.
+    if root is None:
+        if status_code == 429:
+            return "platform_blocked_or_rate_limited", False
+        if status_code == 403:
+            return "search_context_unavailable", False
+        return (None, False) if status_code is None or status_code < 400 else (
+            "search_context_unavailable",
+            False,
+        )
+    titles = " ".join(root.xpath("//title/text()"))
     # Inspect platform notice/login containers, never keywords in a user's post.
     notices = root.xpath(
         "//*[self::form or @role='dialog' or "
@@ -171,19 +182,43 @@ def barrier(root, url, status):
         + "]"
     )
     values = " ".join(text_of(node) for node in notices)
-    if any(word in values for word in ("访问频次过高", "操作频繁", "请求过于频繁")):
-        return "platform_blocked_or_rate_limited"
-    if any(
-        word in values for word in ("安全验证", "请完成验证", "拖动滑块", "访问异常")
-    ):
-        return "manual_challenge_required"
+    challenge = any(
+        word in f"{titles} {values}"
+        for word in (
+            "安全验证",
+            "请完成验证",
+            "拖动滑块",
+            "验证码",
+            "人机验证",
+            "滑动验证",
+            "访问异常",
+        )
+    )
+    rate_limited = status_code == 429 or any(
+        word in values
+        for word in (
+            "访问频次过高",
+            "访问频繁",
+            "操作频繁",
+            "请求过于频繁",
+            "请求太频繁",
+        )
+    )
+    # A security host/title is trusted challenge evidence. If a notice also
+    # contains a rate marker, preserve rate limiting as the primary outcome
+    # and carry the challenge bit alongside it.
+    challenge = challenge or host in ("security.weibo.com", "security.weibo.cn")
+    if rate_limited:
+        return "platform_blocked_or_rate_limited", challenge
+    if challenge:
+        return "manual_challenge_required", False
     if root.xpath("//input[@type='password']") or any(
         word in values for word in ("登录后查看", "请先登录", "扫码登录")
     ):
-        return "login_required"
-    if status == 403:
-        return "search_context_unavailable"
-    return None
+        return "login_required", False
+    if status_code == 403:
+        return "search_context_unavailable", False
+    return None, False
 
 
 def _search_link(value: str, base: str, term: str, *, view_all: bool) -> str | None:
@@ -306,9 +341,9 @@ def _empty_paged_results(root, url: str, term: str) -> SearchPage | None:
 
 def read_search_page(url, raw, status, term, *, latest=False):
     root = document(raw)
-    blocked = barrier(root, url, status)
+    blocked, challenge = barrier_details(root, url, status)
     if blocked:
-        return SearchPage(blocked)
+        return SearchPage(blocked, manual_challenge_required=challenge)
     parts = urlsplit(url)
     if (
         parts.hostname != "s.weibo.com"

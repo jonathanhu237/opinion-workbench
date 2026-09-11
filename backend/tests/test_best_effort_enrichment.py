@@ -62,7 +62,7 @@ def test_search_preview_is_analyzable_and_explicitly_partial():
     assert saved.evidence_coverage.level == "search_preview"
     assert saved.analysis_eligible
     assert payload["evidence_coverage"]["text_origin"] == "search_preview"
-    assert payload["evidence_coverage"]["video"]["unknown"] == 1
+    assert "video" not in payload["evidence_coverage"]
     assert payload["source"] == {
         "platform": "wb",
         "title": source().title,
@@ -109,7 +109,7 @@ def test_legacy_input_gets_coverage_and_summary_carries_the_manifest():
     assert payload["sources"][0]["evidence_coverage"]["level"] == "search_preview"
 
 
-def test_partial_detail_text_survives_one_failed_media_asset():
+def test_partial_detail_text_survives_without_media_analysis():
     content = EnrichedContent.model_validate(
         {
             "schema_version": 1,
@@ -172,7 +172,7 @@ def test_partial_detail_text_survives_one_failed_media_asset():
     assert payload["source"]["body"] == content.text.body
     coverage = payload["evidence_coverage"]
     assert coverage["level"] == "detail_text"
-    assert coverage["image"] == {"expected": 1, "ready": 0, "failed": 1, "unknown": 0}
+    assert "image" not in coverage
     assert "image_url" not in str(messages)
 
 

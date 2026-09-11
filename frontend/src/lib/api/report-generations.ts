@@ -14,6 +14,14 @@ import { analysisJobSchema } from '@/lib/api/content-analyses'
 import { isoDateSchema } from '@/lib/api/search-runs'
 import { reportRunSchema } from '@/lib/api/topic-reports'
 
+export const summaryConcurrencySchema = z.union([
+  z.literal(1),
+  z.literal(2),
+  z.literal(4),
+  z.literal(8),
+  z.literal(16),
+])
+
 export const GENERATIONS_QUERY_KEY = ['report-generations'] as const
 export const REPORT_RECORDS_QUERY_KEY = ['report-records'] as const
 const selection = z.strictObject({
@@ -51,6 +59,7 @@ export const generationCreateSchema = z.strictObject({
   configuration_revision: safeId,
   initial_prompt: promptChoiceSchema,
   report_prompt: promptChoiceSchema,
+  summary_concurrency: summaryConcurrencySchema.default(8),
   selection: selectionPolicy,
 })
 export const generationStatusSchema = z.enum([
@@ -119,7 +128,7 @@ export const generationSchema = z
           value.report.configuration_revision ===
             value.analysis.configuration_revision)),
   )
-export type GenerationCreate = z.infer<typeof generationCreateSchema>
+export type GenerationCreate = z.input<typeof generationCreateSchema>
 export type ReportGeneration = z.infer<typeof generationSchema>
 export type SelectionPreviewRequest = z.infer<typeof selectionPreviewRequest>
 export type SelectionPreview = z.infer<typeof selectionPreviewSchema>
@@ -165,14 +174,18 @@ export async function createReportGeneration(input: GenerationCreate) {
     generationSchema,
     await analysisRequest(
       '/report-generations',
-      jsonMutation('POST', valid.data),
+      jsonMutation('POST', input),
       202,
     ),
   )
   if (
-    value.request_id !== input.request_id ||
-    value.analysis.configuration_revision !== input.configuration_revision ||
-    JSON.stringify(value.selection_policy) !== JSON.stringify(input.selection)
+    value.request_id !== valid.data.request_id ||
+    value.analysis.configuration_revision !==
+      valid.data.configuration_revision ||
+    (input.summary_concurrency !== undefined &&
+      value.analysis.summary_concurrency !== valid.data.summary_concurrency) ||
+    JSON.stringify(value.selection_policy) !==
+      JSON.stringify(valid.data.selection)
   )
     throw new AnalysisApiError('invalid_response')
   return value

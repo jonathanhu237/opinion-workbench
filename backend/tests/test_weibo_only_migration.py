@@ -1,4 +1,4 @@
-"""Final database migration converges old local data on the Weibo product."""
+"""Final database migration preserves the supported five-platform catalog."""
 
 import sqlite3
 from pathlib import Path
@@ -209,7 +209,7 @@ def _seed_mixed_batch(database: Database) -> None:
         )
 
 
-def test_fresh_database_has_the_same_weibo_only_constraints(tmp_path: Path) -> None:
+def test_fresh_database_has_the_supported_platform_constraints(tmp_path: Path) -> None:
     database = Database(tmp_path / "fresh.sqlite3")
     database.initialize()
 
@@ -229,14 +229,14 @@ def test_fresh_database_has_the_same_weibo_only_constraints(tmp_path: Path) -> N
                 "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
                 (table,),
             ).fetchone()[0]
-            assert "CHECK (platform = 'wb')" in schema
-        with pytest.raises(sqlite3.IntegrityError, match="only Weibo"):
+            assert "CHECK (platform IN" in schema
+        with pytest.raises(sqlite3.IntegrityError):
             connection.execute(
                 """INSERT INTO search_contents(
                   platform, platform_content_id, content_type, title, snippet,
                   creator_hash, publisher_name, published_at_text, content_url,
                   first_seen_at, last_seen_at
-                ) VALUES ('xhs', 'fresh-invalid', 'post', 'bad', '', '', '', '刚刚',
+                ) VALUES ('invalid', 'fresh-invalid', 'post', 'bad', '', '', '', '刚刚',
                           'https://m.weibo.cn/detail/fresh-invalid', ?, ?)""",
                 ("2026-09-05T00:00:00+00:00", "2026-09-05T00:00:00+00:00"),
             )
@@ -296,7 +296,7 @@ def test_v26_removes_obsolete_graph_preserves_valid_data_and_is_idempotent(
                 "SELECT COUNT(*) FROM sqlite_master "
                 "WHERE type='trigger' AND name LIKE '%weibo_only%'"
             ).fetchone()[0]
-            == 12
+            == 0
         )
         for table in (
             "search_runs",
@@ -310,15 +310,15 @@ def test_v26_removes_obsolete_graph_preserves_valid_data_and_is_idempotent(
                 "SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
                 (table,),
             ).fetchone()[0]
-            assert "CHECK (platform = 'wb')" in schema
+            assert "CHECK (platform IN" in schema
 
-        with pytest.raises(sqlite3.IntegrityError, match="only Weibo"):
+        with pytest.raises(sqlite3.IntegrityError):
             connection.execute(
                 """INSERT INTO search_contents(
                   platform, platform_content_id, content_type, title, snippet,
                   creator_hash, publisher_name, published_at_text, content_url,
                   first_seen_at, last_seen_at
-                ) VALUES ('xhs', 'new', 'post', 'bad', '', '', '', '刚刚',
+                ) VALUES ('invalid', 'new', 'post', 'bad', '', '', '', '刚刚',
                           'https://m.weibo.cn/detail/new', ?, ?)""",
                 ("2026-09-05T00:00:00+00:00", "2026-09-05T00:00:00+00:00"),
             )

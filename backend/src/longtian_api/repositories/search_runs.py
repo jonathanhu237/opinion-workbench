@@ -9,6 +9,12 @@ from datetime import UTC, datetime
 from typing import Literal, cast
 
 from longtian_api.database import Database
+from longtian_api.repositories.platform_access import PlatformAccessRepository
+from longtian_api.schemas.platform_access import (
+    PlatformAccessDiagnostic,
+    PlatformAccessSnapshot,
+    default_platform_access_snapshot,
+)
 from longtian_api.search_failure_reasons import (
     SearchFailureReason,
     is_search_failure_reason,
@@ -109,6 +115,9 @@ class SearchRunRecord:
     incomplete_terms: tuple[CollectorSearchTermDiagnostic, ...] = ()
     max_total_results: int | None = None
     ordering: SearchRunOrdering = "platform"
+    platform_access_snapshot: PlatformAccessSnapshot | None = None
+    access_waiting: bool = False
+    access_notice: PlatformAccessDiagnostic | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,7 +227,8 @@ class SearchRunRepository:
             cursor = connection.execute(
                 """
                 UPDATE search_runs
-                SET status = 'internal_error', failure_reason = NULL, finished_at = ?
+                SET status = 'internal_error', failure_reason = NULL,
+                    finished_at = ?, access_wait_json = NULL
                 WHERE status IN ('queued', 'running')
                 """,
                 (timestamp,),
@@ -235,6 +245,7 @@ class SearchRunRepository:
         max_results_per_term: int,
         max_total_results: int | None = None,
         ordering: SearchRunOrdering | None = None,
+        platform_access_snapshot: PlatformAccessSnapshot | None = None,
     ) -> SearchRunRecord:
         with _translate_storage_errors(), self._write_connection() as connection:
             timestamp = _utc_timestamp()
@@ -244,8 +255,8 @@ class SearchRunRepository:
                   monitoring_rule_id, platform, rule_name, max_results_per_term,
                   status, current_term_position, created_at, started_at, finished_at,
                   execution_start_term_position, search_protocol_version,
-                  max_total_results, ordering
-                ) VALUES (?, ?, ?, ?, 'queued', NULL, ?, NULL, NULL, 0, 2, ?, ?)
+                  max_total_results, ordering, platform_access_snapshot_json
+                ) VALUES (?, ?, ?, ?, 'queued', NULL, ?, NULL, NULL, 0, 2, ?, ?, ?)
                 """,
                 (
                     monitoring_rule_id,
@@ -255,6 +266,10 @@ class SearchRunRepository:
                     timestamp,
                     max_total_results,
                     ordering or ("latest" if platform == "wb" else "platform"),
+                    _snapshot_json(
+                        platform_access_snapshot
+                        or PlatformAccessRepository(self._database).snapshot()
+                    ),
                 ),
             )
             run_id = cursor.lastrowid
@@ -292,6 +307,33 @@ class SearchRunRepository:
             if cursor.rowcount == 0:
                 _raise_missing_or_inactive(connection, run_id)
             return _read_run(connection, run_id)
+
+    def ensure_platform_access_snapshot(
+        self, run_id: int, snapshot: PlatformAccessSnapshot
+    ) -> None:
+        with _translate_storage_errors(), self._write_connection() as connection:
+            connection.execute(
+                """UPDATE search_runs
+                   SET platform_access_snapshot_json=?
+                   WHERE id=? AND platform_access_snapshot_json IS NULL""",
+                (snapshot.model_dump_json(), run_id),
+            )
+
+    def set_access_waiting(self, run_id: int, value) -> None:
+        with _translate_storage_errors(), self._write_connection() as connection:
+            connection.execute(
+                "UPDATE search_runs SET access_wait_json=? WHERE id=?",
+                (json.dumps(value, ensure_ascii=False) if value else None, run_id),
+            )
+
+    def set_access_notice(
+        self, run_id: int, diagnostic: PlatformAccessDiagnostic | None
+    ) -> None:
+        with _translate_storage_errors(), self._write_connection() as connection:
+            connection.execute(
+                "UPDATE search_runs SET access_notice_json=? WHERE id=?",
+                (diagnostic.model_dump_json() if diagnostic else None, run_id),
+            )
 
     def set_progress(self, run_id: int, term_position: int) -> None:
         with _translate_storage_errors(), self._write_connection() as connection:
@@ -637,7 +679,8 @@ class SearchRunRepository:
             cursor = connection.execute(
                 """
                 UPDATE search_runs
-                SET status = ?, failure_reason = ?, finished_at = ?, execution_limit = ?
+                SET status = ?, failure_reason = ?, finished_at = ?,
+                    execution_limit = ?, access_wait_json = NULL
                 WHERE id = ? AND status IN ('queued', 'running')
                 """,
                 (status, failure_reason, _utc_timestamp(), execution_limit, run_id),
@@ -937,6 +980,9 @@ def _read_run(
         execution_limit=cast(ExecutionLimit | None, row["execution_limit"]),
         incomplete_terms=incomplete_terms,
         ordering=cast(SearchRunOrdering, str(row["ordering"])),
+        platform_access_snapshot=_decode_snapshot(row["platform_access_snapshot_json"]),
+        access_waiting=bool(row["access_wait_json"]),
+        access_notice=_decode_access_notice(row["access_notice_json"]),
     )
 
 
@@ -1074,6 +1120,28 @@ def _translate_storage_errors() -> Iterator[None]:
         raise
     except (OSError, sqlite3.Error):
         raise SearchRunRepositoryUnavailableError from None
+
+
+def _decode_snapshot(value):
+    if not value:
+        return default_platform_access_snapshot(basis="legacy_unavailable")
+    try:
+        return PlatformAccessSnapshot.model_validate_json(value)
+    except (TypeError, ValueError):
+        return default_platform_access_snapshot(basis="legacy_unavailable")
+
+
+def _snapshot_json(value: PlatformAccessSnapshot) -> str:
+    return value.model_dump_json()
+
+
+def _decode_access_notice(value):
+    if not value:
+        return None
+    try:
+        return PlatformAccessDiagnostic.model_validate_json(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _utc_timestamp() -> str:

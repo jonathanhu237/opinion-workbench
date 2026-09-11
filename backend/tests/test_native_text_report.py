@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 from summary_fixtures import seed_run
 from test_content_analysis_api import saved
-from test_native_weibo_discovery import BrowserFixture
+from test_native_weibo_discovery import BrowserFixture, _VirtualPacingClock
 from test_report_generations import generation_request, save_body
 from topic_report_fixtures import TextPipelineClient, finish
 
@@ -17,6 +17,10 @@ from longtian_api.main import create_app
 from longtian_api.services.ai_settings import AISettingsService
 from longtian_api.services.monitoring_rules import MonitoringRuleService
 from longtian_api.services.native_weibo import NativeWeiboCollector
+from longtian_api.services.platform_access import (
+    PlatformAccessCoordinator,
+    PlatformAccessService,
+)
 from longtian_api.services.platform_connections import PlatformConnectionService
 from longtian_api.services.weibo_enrichment import WeiboEnricher
 
@@ -91,12 +95,22 @@ def native_environment(tmp_path, *, response):
 
     enricher = WeiboEnricher(browser=browser, transport=httpx.MockTransport(send))
     runtime = NativeWeiboCollector(browser=browser, enricher=enricher)
+    pacing_clock = _VirtualPacingClock()
     app = create_app(
         platform_connection_service_factory=lambda: PlatformConnectionService(
             collector_factory=lambda **kwargs: runtime
         ),
         monitoring_rule_service_factory=lambda: MonitoringRuleService(
             database_path=database.path
+        ),
+        platform_access_service_factory=lambda db: PlatformAccessService(
+            db,
+            coordinator=PlatformAccessCoordinator(
+                database=db,
+                clock=pacing_clock.monotonic,
+                wall_clock=pacing_clock.wall,
+                sleep=pacing_clock.sleep,
+            ),
         ),
         ai_settings_service_factory=lambda db: AISettingsService(db, client=model),
     )

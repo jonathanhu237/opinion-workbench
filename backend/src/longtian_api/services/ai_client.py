@@ -12,8 +12,10 @@ import logging
 import math
 import re
 import socket
+import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from email.utils import parsedate_to_datetime
 from typing import Annotated, Literal, Self
 from urllib.parse import urlsplit, urlunsplit
 
@@ -36,6 +38,8 @@ TEST_MAX_TOKENS = 32
 MAX_RESPONSE_TEXT_BYTES = 64 * 1024
 MAX_STREAM_BYTES = 1024 * 1024
 MAX_REQUEST_BYTES = 9_000_000
+MAX_PROVIDER_ERROR_BYTES = 64 * 1024
+MAX_RETRY_AFTER_SECONDS = 86_400
 MAX_USAGE_TOKENS = 2**53 - 1
 _HOST_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
 _BASE_PATH = re.compile(r"(?:/[A-Za-z0-9._~-]+)*\Z")
@@ -487,7 +491,7 @@ class AIClient:
                 verify=True,
                 trust_env=False,
                 retries=0,
-                limits=httpx.Limits(max_connections=1, max_keepalive_connections=0),
+                limits=httpx.Limits(max_connections=16, max_keepalive_connections=0),
             ),
             trust_env=False,
             follow_redirects=False,
@@ -610,7 +614,22 @@ class AIClient:
                     extensions={"sni_hostname": endpoint.host},
                     content=body,
                 ) as response:
-                    self._check_status(response.status_code)
+                    if response.status_code != 200:
+                        content_type = response.headers.get("content-type", "").split(
+                            ";", 1
+                        )[0].strip().lower()
+                        provider_code = (
+                            await _read_provider_code(response)
+                            if content_type == "application/json"
+                            else None
+                        )
+                        self._check_status(
+                            response.status_code,
+                            provider_code=provider_code,
+                            retry_after_seconds=parse_retry_after(
+                                response.headers.get("retry-after")
+                            ),
+                        )
                     if (
                         response.headers.get("content-type", "")
                         .split(";", 1)[0]
@@ -636,19 +655,77 @@ class AIClient:
             raise AIError("ai_invalid_response") from None
 
     @staticmethod
-    def _check_status(status: int) -> None:
+    def _check_status(
+        status: int,
+        *,
+        provider_code: str | None = None,
+        retry_after_seconds: float | None = None,
+    ) -> None:
         if status == 200:
             return
+        metadata = {
+            "provider_status_code": status,
+            "provider_code": provider_code,
+            "retry_after_seconds": retry_after_seconds,
+        }
         if status in (401, 403):
-            raise AIError("ai_authentication_failed")
+            raise AIError("ai_authentication_failed", **metadata)
         if status == 404:
-            raise AIError("ai_model_not_found")
+            raise AIError("ai_model_not_found", **metadata)
         if status == 429:
-            raise AIError("ai_rate_limited")
+            raise AIError("ai_rate_limited", **metadata)
         if status == 413:
-            raise AIError("ai_request_too_large")
+            raise AIError("ai_request_too_large", **metadata)
         if status in (400, 415, 422):
-            raise AIError("ai_unsupported_input")
+            raise AIError("ai_unsupported_input", **metadata)
         if status >= 500:
-            raise AIError("ai_provider_unavailable")
-        raise AIError("ai_invalid_response")
+            raise AIError("ai_provider_unavailable", **metadata)
+        raise AIError("ai_invalid_response", **metadata)
+
+
+def parse_retry_after(value: str | None, *, now: float | None = None) -> float | None:
+    """Parse only bounded RFC 7231 delta-seconds or HTTP dates."""
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    if not value or len(value) > 64:
+        return None
+    if re.fullmatch(r"[0-9]+", value):
+        seconds = int(value)
+    else:
+        try:
+            date = parsedate_to_datetime(value)
+            if date.tzinfo is None:
+                return None
+            seconds = date.timestamp() - (time.time() if now is None else now)
+        except (TypeError, ValueError, OverflowError, IndexError):
+            return None
+    if not math.isfinite(seconds) or seconds < 0 or seconds > MAX_RETRY_AFTER_SECONDS:
+        return None
+    return float(seconds)
+
+
+async def _read_provider_code(response: httpx.Response) -> str | None:
+    """Extract one short provider code without retaining provider messages."""
+    body = bytearray()
+    try:
+        async for chunk in response.aiter_raw():
+            body.extend(chunk)
+            if len(body) > MAX_PROVIDER_ERROR_BYTES:
+                return None
+        value = decode_model_json(body.decode("utf-8"))
+    except (httpx.HTTPError, UnicodeError, ValueError, TypeError, RecursionError):
+        return None
+    if not isinstance(value, dict):
+        return None
+    error = value.get("error")
+    candidates = []
+    if isinstance(error, dict):
+        candidates.extend((error.get("code"), error.get("type")))
+    candidates.append(value.get("code"))
+    for candidate in candidates:
+        if isinstance(candidate, str):
+            candidate = candidate.strip()
+            if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,99}", candidate):
+                return candidate.lower()
+    return None

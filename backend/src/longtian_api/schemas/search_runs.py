@@ -5,6 +5,10 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from longtian_api.schemas.platform_access import (
+    PlatformAccessDiagnostic,
+    PlatformAccessSnapshot,
+)
 from longtian_api.search_failure_reasons import SearchFailureReason
 from longtian_api.search_platforms import SearchPlatform, is_valid_search_content_url
 from longtian_api.services.native_browser_contracts import ExecutionLimit
@@ -95,6 +99,9 @@ class SearchRunSummary(BaseModel):
     finished_at: datetime | None
     incomplete_terms: tuple[SearchTermDiagnostic, ...] = ()
     ordering: SearchRunOrdering = "platform"
+    platform_access_snapshot: PlatformAccessSnapshot | None = None
+    access_waiting: bool = False
+    access_notice: PlatformAccessDiagnostic | None = None
 
     @model_validator(mode="after")
     def validate_failure_reason(self) -> "SearchRunSummary":

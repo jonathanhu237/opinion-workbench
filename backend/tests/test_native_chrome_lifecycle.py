@@ -6,13 +6,17 @@ import socket
 
 import pytest
 from fastapi.testclient import TestClient
-from test_native_weibo_discovery import CARD
+from test_native_weibo_discovery import CARD, _VirtualPacingClock
 from test_search_runs import _wait_for_terminal
 
 from longtian_api.main import create_app
 from longtian_api.services.monitoring_rules import MonitoringRuleService
 from longtian_api.services.native_chrome import ManagedChrome
 from longtian_api.services.native_weibo import NativeWeiboCollector
+from longtian_api.services.platform_access import (
+    PlatformAccessCoordinator,
+    PlatformAccessService,
+)
 from longtian_api.services.platform_connections import PlatformConnectionService
 
 
@@ -276,9 +280,19 @@ def test_collection_uses_normal_browser_loading_and_owns_only_dedicated_process(
         profile=profile, launcher=chrome.launch, playwright_factory=lambda: chrome
     )
     runtime = NativeWeiboCollector(browser=browser, delay_seconds=0)
+    pacing_clock = _VirtualPacingClock()
     app = create_app(
         platform_connection_service_factory=lambda: PlatformConnectionService(
             collector_factory=lambda **kwargs: runtime
+        ),
+        platform_access_service_factory=lambda database: PlatformAccessService(
+            database,
+            coordinator=PlatformAccessCoordinator(
+                database=database,
+                clock=pacing_clock.monotonic,
+                wall_clock=pacing_clock.wall,
+                sleep=pacing_clock.sleep,
+            ),
         ),
         monitoring_rule_service_factory=lambda: MonitoringRuleService(
             database_path=tmp_path / "db.sqlite3"

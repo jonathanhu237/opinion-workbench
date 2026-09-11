@@ -248,7 +248,12 @@ def _historical_report_projection(database):
                 tuple(
                     value
                     for name, value in dict(row).items()
-                    if name not in {"retry_attempted", "retry_usage_json"}
+                    if name
+                    not in {
+                        "retry_attempted",
+                        "retry_usage_json",
+                        "rate_limit_attempts_json",
+                    }
                 )
                 for row in connection.execute(f'SELECT * FROM "{table}" ORDER BY rowid')
             ]

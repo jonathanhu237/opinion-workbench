@@ -149,6 +149,11 @@ export function analysisJobFixture(
     initial_prompt: settings.initial_prompt,
     report_prompt: settings.report_prompt,
     force_refresh: false,
+    summary_concurrency: 1,
+    platform_access_snapshot: null,
+    access_waiting: false,
+    access_notice: null,
+    model_retry_notice: null,
     counts: {
       total: 101,
       queued: 101,

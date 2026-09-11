@@ -12,7 +12,15 @@ logger = logging.getLogger(__name__)
 
 MANAGED_MEDIA_ROOTS = ("original-media", "media")
 _HANDLE = re.compile(r"[0-9a-f]{32}(?:\.part)?\Z")
-_DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+# The retired cache was originally implemented with POSIX descriptor-relative
+# operations.  Keep those flags on POSIX, but make importing the migration
+# safe on Windows where ``O_DIRECTORY``/``O_NOFOLLOW`` and ``geteuid`` do not
+# exist.  Windows cleanup is deliberately conservative below: without the
+# same ownership proof we leave legacy files in place and still allow the
+# schema migration to retire their tables.
+_DIRECTORY_FLAGS = os.O_RDONLY
+for _flag_name in ("O_DIRECTORY", "O_NOFOLLOW"):
+    _DIRECTORY_FLAGS |= getattr(os, _flag_name, 0)
 _NON_RETRYABLE_FILESYSTEM_ERRORS = {EEXIST, ELOOP, ENOENT, ENOTDIR, ENOTEMPTY}
 
 
@@ -36,6 +44,28 @@ def purge_managed_media(runtime_root: Path, *, connection=None) -> dict[str, obj
         "retryable_errors": [],
         "complete": True,
     }
+    if os.name == "nt":
+        # NTFS ACLs and reparse-point identity cannot be established with the
+        # POSIX device/inode and mode checks used by the retired cache.  Do not
+        # guess at ownership during an upgrade; preserving an orphan is safer
+        # than deleting a user's file.  A fresh Windows data root has neither
+        # directory, so initialization remains a clean no-op.
+        for name in MANAGED_MEDIA_ROOTS:
+            path = runtime_root / name
+            try:
+                present = path.exists() or path.is_symlink()
+            except OSError as error:
+                _record_filesystem_error(result, name, error)
+                continue
+            if present:
+                _record_error(
+                    result,
+                    name,
+                    "Windows ownership verification unavailable; preserving files",
+                )
+        if result["errors"]:
+            result["complete"] = False
+        return result
     _purge_original_media(runtime_root / "original-media", connection, result)
     _purge_spool(runtime_root / "media", result)
     if result["errors"]:
@@ -98,8 +128,7 @@ def _record_filesystem_error(result, name: str, error: OSError) -> None:
         result,
         name,
         str(error),
-        retryable=getattr(error, "errno", None)
-        not in _NON_RETRYABLE_FILESYSTEM_ERRORS,
+        retryable=getattr(error, "errno", None) not in _NON_RETRYABLE_FILESYSTEM_ERRORS,
     )
 
 

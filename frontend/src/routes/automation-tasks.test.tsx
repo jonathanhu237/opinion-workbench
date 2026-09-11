@@ -172,15 +172,26 @@ beforeEach(() => {
 describe('automation task route', () => {
   it('saves an edited historical total limit as an independent per-term limit', async () => {
     const user = userEvent.setup()
-    const task = automationTask({ max_results_per_term: 10, max_total_results: 25 })
+    const task = automationTask({
+      max_results_per_term: 10,
+      max_total_results: 25,
+    })
     vi.mocked(replaceAutomationTask).mockResolvedValue(
       automationTask({ max_total_results: null }),
     )
     renderRoute(
-      [{
-        path: '/',
-        element: <AutomationTaskEditor task={task} onClose={vi.fn()} onSaved={vi.fn()} />,
-      }],
+      [
+        {
+          path: '/',
+          element: (
+            <AutomationTaskEditor
+              task={task}
+              onClose={vi.fn()}
+              onSaved={vi.fn()}
+            />
+          ),
+        },
+      ],
       '/',
     )
     expect(
@@ -208,16 +219,27 @@ describe('automation task route', () => {
       automationTask({ max_total_results: null }),
     )
     renderRoute(
-      [{
-        path: '/',
-        element: <AutomationTaskEditor task={null} onClose={vi.fn()} onSaved={vi.fn()} />,
-      }],
+      [
+        {
+          path: '/',
+          element: (
+            <AutomationTaskEditor
+              task={null}
+              onClose={vi.fn()}
+              onSaved={vi.fn()}
+            />
+          ),
+        },
+      ],
       '/',
     )
     expect(
       await screen.findByRole('spinbutton', { name: '每词最多采集' }),
     ).toHaveValue(10)
-    await user.type(screen.getByRole('textbox', { name: '任务名称' }), '独立额度')
+    await user.type(
+      screen.getByRole('textbox', { name: '任务名称' }),
+      '独立额度',
+    )
     await user.click(screen.getByRole('combobox', { name: '监控规则' }))
     await user.click(await screen.findByRole('option', { name: /公共事务/u }))
     await user.click(screen.getByRole('button', { name: '创建自动任务' }))

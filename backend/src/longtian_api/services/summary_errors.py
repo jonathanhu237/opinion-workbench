@@ -1,11 +1,12 @@
 """Constant-only public admission and durable summary failures."""
 
 from longtian_api.schemas.ai_summaries import (
+    AIProviderDiagnostic,
     FailureCode,
     FailureStage,
     SummaryFailure,
 )
-from longtian_api.services.ai_errors import AI_ERROR_CONTRACTS
+from longtian_api.services.ai_errors import AI_ERROR_CONTRACTS, AIError
 from longtian_api.services.enrichment_models import AcquisitionDiagnostic
 
 SUMMARY_ERRORS = {
@@ -76,11 +77,33 @@ class SummaryError(Exception):
         self.status_code, self.message = SUMMARY_ERRORS[code]
 
 
+def provider_diagnostic(error: AIError) -> AIProviderDiagnostic | None:
+    if not any(
+        value is not None
+        for value in (
+            error.provider_status_code,
+            error.provider_code,
+            error.retry_after_seconds,
+        )
+    ):
+        return None
+    return AIProviderDiagnostic(
+        provider_status_code=error.provider_status_code,
+        provider_code=error.provider_code,
+        retry_after_seconds=(
+            None
+            if error.retry_after_seconds is None
+            else float(error.retry_after_seconds)
+        ),
+    )
+
+
 def failure(
     stage: FailureStage,
     code: FailureCode,
     *,
     diagnostic: AcquisitionDiagnostic | None = None,
+    provider_diagnostic: AIProviderDiagnostic | None = None,
     validation_issues: list[str] | None = None,
 ) -> SummaryFailure:
     return SummaryFailure(
@@ -88,5 +111,6 @@ def failure(
         code=code,
         message=FAILURE_MESSAGES[code],
         diagnostic=diagnostic,
+        provider_diagnostic=provider_diagnostic,
         validation_issues=validation_issues,
     )

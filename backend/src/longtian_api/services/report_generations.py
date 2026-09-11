@@ -9,13 +9,17 @@ from longtian_api.schemas.report_generations import GenerationControl
 from longtian_api.schemas.topic_reports import ACTIVE_REPORTS
 from longtian_api.services.analysis_errors import AnalysisError
 from longtian_api.services.content_enrichment import ContentEnrichmentError
+from longtian_api.services.platform_access import PlatformCooldownActiveError
 from longtian_api.services.settled_tasks import database_call, settle
 
 
 class ReportGenerationService:
-    def __init__(self, database, *, analyses, reports, ai_settings):
+    def __init__(
+        self, database, *, analyses, reports, ai_settings, platform_access=None
+    ):
         self.repository = ReportGenerationRepository(database, reports.repository)
         self.analyses, self.reports, self.ai = analyses, reports, ai_settings
+        self.platform_access = platform_access
         self._admission = asyncio.Lock()
         self._runner = None
         self._active_id = None
@@ -123,11 +127,17 @@ class ReportGenerationService:
             if session is None:
                 raise AnalysisError("content_analysis_unavailable")
             try:
+                platform = self._paused_platforms.get(generation_id, "wb")
                 if show:
-                    await session.show_manual(
-                        self._paused_platforms.get(generation_id, "wb")
-                    )
+                    await session.show_manual(platform)
                     return value
+                if self.platform_access is not None:
+                    try:
+                        await self.platform_access.authorize_resume(platform)
+                    except PlatformCooldownActiveError:
+                        raise AnalysisError(
+                            "platform_access_cooldown_active"
+                        ) from None
                 await session.prepare_resume()
             except ContentEnrichmentError:
                 raise AnalysisError("content_analysis_unavailable") from None
@@ -138,6 +148,14 @@ class ReportGenerationService:
             self._paused_sessions.pop(generation_id, None)
             self._paused_platforms.pop(generation_id, None)
             await self.analyses.start_pending()
+            permit = getattr(
+                self.platform_access, "permit_explicit_resume", None
+            )
+            if callable(permit):
+                # Do not consume the allowance until the durable resume and
+                # analysis runner have both been admitted. A failed control
+                # operation therefore cannot leave a stale early-access token.
+                permit(platform)
             self._launch()
             return value
 

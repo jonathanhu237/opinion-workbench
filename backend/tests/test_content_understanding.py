@@ -1,4 +1,4 @@
-"""Neutral text/image/video envelopes, structured uncertainty and strict failure."""
+"""Neutral text-only envelopes, structured uncertainty and strict failure."""
 
 import json
 from dataclasses import replace
@@ -25,7 +25,7 @@ from longtian_api.services.content_understanding import (
         (("video", "video/mp4", b"checked-video-with-audio"),),
     ],
 )
-def test_same_neutral_contract_receives_actual_media_and_exact_prompt(tmp_path, assets):
+def test_same_neutral_contract_omits_media_and_keeps_exact_prompt(tmp_path, assets):
     database = Database(tmp_path / "prompt.sqlite3")
     database.initialize()
     prompt = AnalysisSettingsRepository(database).read().initial_prompt
@@ -36,8 +36,9 @@ def test_same_neutral_contract_receives_actual_media_and_exact_prompt(tmp_path, 
     serialized = json.dumps(messages)
     assert "monitoring_scope" not in serialized
     assert "SEARCH_SNIPPET_NOT_FULL_TEXT" not in serialized
+    assert isinstance(messages[1]["content"], str)
     for kind, _, _ in assets:
-        assert f"{kind}_url" in serialized
+        assert f"{kind}_url" not in serialized
     output = parse_understanding(
         AICompletion(json.dumps(UNDERSTANDING), USAGE), api_key=CONFIGURATION.api_key
     )
@@ -108,5 +109,6 @@ def test_credential_and_changed_byte_rejection(tmp_path):
     prompt = AnalysisSettingsRepository(database).read().initial_prompt
     item = enriched_item(assets=(("image", "image/png", b"verified"),))
     changed = replace(item, media=(replace(item.media[0], data=b"tampered"),))
-    with pytest.raises(AIAnalysisError, match="input_incomplete"):
-        build_understanding_messages(CONFIGURATION, changed, prompt)
+    messages = build_understanding_messages(CONFIGURATION, changed, prompt)
+    assert isinstance(messages[1]["content"], str)
+    assert "tampered" not in json.dumps(messages)

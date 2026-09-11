@@ -13,6 +13,10 @@ import {
   fetchGenerationEligibility,
   previewReportSelection,
 } from '@/lib/api/report-generations'
+import {
+  fetchSummaryPreference,
+  saveSummaryPreference,
+} from '@/lib/api/summary-preferences'
 import { ReportSelectionActions } from '@/routes/report-selection-actions'
 
 vi.mock('@/lib/api/report-generations', async (original) => ({
@@ -21,6 +25,13 @@ vi.mock('@/lib/api/report-generations', async (original) => ({
   fetchGenerationEligibility: vi.fn(),
   previewReportSelection: vi.fn(),
 }))
+
+vi.mock('@/lib/api/summary-preferences', () => ({
+  fetchSummaryPreference: vi.fn(),
+  saveSummaryPreference: vi.fn(),
+}))
+
+let preferenceStorage = new Map<string, string>()
 
 function show(ids: number[]) {
   const client = new QueryClient({
@@ -40,7 +51,18 @@ function show(ids: number[]) {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.mocked(fetchSummaryPreference).mockRejectedValue(
+    new Error('legacy preference unavailable'),
+  )
+  vi.mocked(saveSummaryPreference).mockResolvedValue({ summary_concurrency: 8 })
   sessionStorage.clear()
+  preferenceStorage = new Map()
+  vi.stubGlobal('localStorage', {
+    clear: () => preferenceStorage.clear(),
+    getItem: (key: string) => preferenceStorage.get(key) ?? null,
+    removeItem: (key: string) => preferenceStorage.delete(key),
+    setItem: (key: string, value: string) => preferenceStorage.set(key, value),
+  })
   vi.mocked(fetchGenerationEligibility).mockResolvedValue({
     pending: 28,
     failed: 1,
@@ -175,6 +197,98 @@ it('blocks submission until the selected preview can confirm retry counts', asyn
   await waitFor(() => expect(confirm).toBeEnabled())
   await user.click(confirm)
   await waitFor(() => expect(createReportGeneration).toHaveBeenCalledTimes(1))
+})
+
+it('defaults to eight and only remembers a concurrency after formal submission', async () => {
+  vi.mocked(createReportGeneration).mockResolvedValue({} as never)
+  const user = userEvent.setup()
+  const first = show([11])
+  await user.click(screen.getByRole('button', { name: '生成报告' }))
+  const trigger = await screen.findByRole('combobox', {
+    name: '单条总结并发数',
+  })
+  expect(trigger).toHaveTextContent('8')
+  await user.click(trigger)
+  await user.click(await screen.findByRole('option', { name: '4 条同时总结' }))
+  await user.click(screen.getByRole('button', { name: '确认生成报告' }))
+  await waitFor(() => expect(createReportGeneration).toHaveBeenCalled())
+  expect(
+    JSON.parse(
+      localStorage.getItem(
+        'longtian:report-generation:summary-concurrency:v1',
+      )!,
+    ),
+  ).toBe(4)
+  first.unmount()
+
+  show([11])
+  await user.click(screen.getByRole('button', { name: '生成报告' }))
+  expect(
+    await screen.findByRole('combobox', { name: '单条总结并发数' }),
+  ).toHaveTextContent('4')
+})
+
+it('does not remember a concurrency when report submission fails', async () => {
+  vi.mocked(createReportGeneration).mockRejectedValue(
+    new AnalysisApiError('service_unavailable'),
+  )
+  const user = userEvent.setup()
+  const first = show([11])
+  await user.click(screen.getByRole('button', { name: '生成报告' }))
+  const trigger = await screen.findByRole('combobox', {
+    name: '单条总结并发数',
+  })
+  await user.click(trigger)
+  await user.click(await screen.findByRole('option', { name: '2 条同时总结' }))
+  await user.click(screen.getByRole('button', { name: '确认生成报告' }))
+  await waitFor(() => expect(createReportGeneration).toHaveBeenCalled())
+  expect(
+    localStorage.getItem('longtian:report-generation:summary-concurrency:v1'),
+  ).toBeNull()
+  first.unmount()
+  sessionStorage.clear()
+
+  show([11])
+  await user.click(screen.getByRole('button', { name: '生成报告' }))
+  expect(
+    await screen.findByRole('combobox', { name: '单条总结并发数' }),
+  ).toHaveTextContent('8')
+})
+
+it('falls back to eight when the saved concurrency preference is corrupt', async () => {
+  localStorage.setItem(
+    'longtian:report-generation:summary-concurrency:v1',
+    'nope',
+  )
+  const user = userEvent.setup()
+  show([11])
+  await user.click(screen.getByRole('button', { name: '生成报告' }))
+  expect(
+    await screen.findByRole('combobox', { name: '单条总结并发数' }),
+  ).toHaveTextContent('8')
+})
+
+it('loads portable preference when the browser origin has no local value', async () => {
+  vi.mocked(fetchSummaryPreference).mockResolvedValue({
+    summary_concurrency: 16,
+  })
+  const user = userEvent.setup()
+  show([11])
+  await waitFor(() => expect(fetchSummaryPreference).toHaveBeenCalled())
+  await user.click(screen.getByRole('button', { name: '生成报告' }))
+  expect(
+    await screen.findByRole('combobox', { name: '单条总结并发数' }),
+  ).toHaveTextContent('16')
+})
+
+it('does not persist a portable preference just by opening the dialog', async () => {
+  vi.mocked(fetchSummaryPreference).mockResolvedValue({
+    summary_concurrency: 4,
+  })
+  const user = userEvent.setup()
+  show([11])
+  await user.click(screen.getByRole('button', { name: '生成报告' }))
+  expect(saveSummaryPreference).not.toHaveBeenCalled()
 })
 
 it('keeps the report action beside selection instead of fixing it to the viewport', () => {

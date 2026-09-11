@@ -76,14 +76,14 @@ def test_authentication_failure_stops_current_and_queued_manual_generations(tmp_
     model.block_stage = "initial"
     with TestClient(app, base_url="http://127.0.0.1") as client:
         saved(client)
-        first = client.post(
-            "/api/v1/report-generations", json=generation_request(list(range(1, 11)))
-        )
+        first_request = generation_request(list(range(1, 11)))
+        first_request["summary_concurrency"] = 1
+        first = client.post("/api/v1/report-generations", json=first_request)
         assert first.status_code == 202
         client.portal.call(asyncio.wait_for, model.entered.wait(), 2)
-        second = client.post(
-            "/api/v1/report-generations", json=generation_request(list(range(11, 21)))
-        )
+        second_request = generation_request(list(range(11, 21)))
+        second_request["summary_concurrency"] = 1
+        second = client.post("/api/v1/report-generations", json=second_request)
         assert second.status_code == 202
         client.portal.call(model.gate.set)
         client.portal.call(finish, app.state.report_generation_service)
@@ -139,7 +139,7 @@ def test_all_failed_analysis_does_not_create_empty_report(tmp_path):
         assert not model.counts["leaf"]
 
 
-def test_partial_text_with_failed_image_keeps_its_gap_through_the_report(tmp_path):
+def test_partial_text_with_failed_image_is_reported_as_text_only(tmp_path):
     app, database, model, media = api_environment(tmp_path, count=1)
     ContentMaterialRepository(database).save(
         1,
@@ -196,10 +196,10 @@ def test_partial_text_with_failed_image_keeps_its_gap_through_the_report(tmp_pat
         ).json()["items"]
         coverage = sources[0]["evidence_coverage"]
         assert coverage["level"] == "detail_text"
-        assert coverage["image"]["failed"] == 1 and coverage["image"]["ready"] == 0
-        assert "download_failed" in coverage["issues"]
-        assert any(
-            "download_failed" in json.dumps(messages) for _, messages in model.calls
+        assert coverage["image"]["failed"] == 0 and coverage["image"]["ready"] == 0
+        assert "download_failed" not in coverage["issues"]
+        assert all(
+            "download_failed" not in json.dumps(messages) for _, messages in model.calls
         )
         assert not media.calls
 
@@ -237,6 +237,7 @@ def test_report_auth_failure_stops_queued_manual_work_but_keeps_completed_summar
 
 def test_saved_media_metadata_without_bytes_is_not_presented_as_seen_media(tmp_path):
     app, _, model, media = api_environment(tmp_path, count=1)
+    media.media = True
     model.answers["initial"] = ["invalid"] * 2
     with TestClient(app, base_url="http://127.0.0.1") as client:
         saved(client)

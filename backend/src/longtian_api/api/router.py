@@ -8,7 +8,9 @@ from longtian_api.api.v1.automation_workflows import (
 )
 from longtian_api.api.v1.content_analyses import router as content_analyses_router
 from longtian_api.api.v1.health import router as health_router
+from longtian_api.api.v1.lifecycle import router as lifecycle_router
 from longtian_api.api.v1.monitoring_rules import router as monitoring_rules_router
+from longtian_api.api.v1.platform_access import router as platform_access_router
 from longtian_api.api.v1.platform_connections import (
     router as platform_connections_router,
 )
@@ -16,14 +18,18 @@ from longtian_api.api.v1.report_generations import router as report_generations_
 from longtian_api.api.v1.results import router as results_router
 from longtian_api.api.v1.search_batches import router as search_batches_router
 from longtian_api.api.v1.search_runs import router as search_runs_router
+from longtian_api.api.v1.summary_preferences import router as summary_preferences_router
 from longtian_api.api.v1.topic_reports import router as topic_reports_router
 from longtian_api.api.v1.workbench import router as workbench_router
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(health_router)
 api_router.include_router(platform_connections_router)
+api_router.include_router(platform_access_router)
 api_router.include_router(monitoring_rules_router)
+api_router.include_router(lifecycle_router)
 api_router.include_router(search_runs_router)
+api_router.include_router(summary_preferences_router)
 api_router.include_router(search_batches_router)
 api_router.include_router(ai_settings_router)
 api_router.include_router(ai_summaries_router)

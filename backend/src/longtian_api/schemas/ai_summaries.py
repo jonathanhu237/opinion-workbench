@@ -1,6 +1,6 @@
 """Strict, secret-free contracts for manually requested full-run summaries."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated, Literal, Self
 from uuid import UUID
 
@@ -89,6 +89,38 @@ class SummaryCancel(StrictModel):
     pass
 
 
+class AIProviderDiagnostic(StrictModel):
+    """Bounded provider metadata safe to expose without retaining messages."""
+
+    provider_status_code: int | None = Field(default=None, ge=100, le=599)
+    provider_code: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=100,
+        pattern=r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,99}",
+    )
+    retry_after_seconds: float | None = Field(default=None, ge=0, le=86_400)
+
+
+class ModelRetryNotice(StrictModel):
+    """A bounded, user-visible record of a model rate-limit response."""
+
+    stage: Literal["analysis", "judgment", "composition"]
+    retry_number: int = Field(ge=1, le=100)
+    wait_seconds: float = Field(ge=0, le=60)
+    action: Literal["retrying", "exhausted"]
+    provider_diagnostic: AIProviderDiagnostic | None = None
+    observed_at: datetime
+
+    @model_validator(mode="after")
+    def normalize_timestamp(self) -> Self:
+        if self.observed_at.tzinfo is None:
+            object.__setattr__(
+                self, "observed_at", self.observed_at.replace(tzinfo=UTC)
+            )
+        return self
+
+
 class SummaryFailure(StrictModel):
     stage: FailureStage
     code: FailureCode
@@ -97,6 +129,9 @@ class SummaryFailure(StrictModel):
         default=None, max_length=8, exclude_if=lambda value: value is None
     )
     diagnostic: AcquisitionDiagnostic | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    provider_diagnostic: AIProviderDiagnostic | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
 

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Literal, cast
 from uuid import UUID, uuid4
 
+from longtian_api.application_paths import application_paths
 from longtian_api.schemas.platform_connections import (
     PlatformBrowserResponse,
     PlatformConnection,
@@ -114,6 +115,12 @@ class PlatformConnectionService:
         """Return the coordinator shared with search-run admission."""
 
         return self._browser_operations
+
+    def configure_platform_access(self, coordinator) -> None:
+        """Inject the shared pacing state after the database service is built."""
+        configure = getattr(self._worker, "configure_platform_access", None)
+        if callable(configure):
+            configure(coordinator)
 
     async def list_connections(self) -> PlatformConnectionListResponse:
         """Return isolated snapshots in stable catalog order."""
@@ -439,7 +446,5 @@ def _initial_catalog() -> dict[PlatformId, PlatformConnection]:
 
 
 def _default_browser_profile_dir() -> Path:
-    """Return the fixed ignored profile root used by the product worker."""
-    return (
-        Path(__file__).resolve().parents[4] / "runtime" / "browser" / "managed-chrome"
-    )
+    """Return the application-owned profile, outside an install directory."""
+    return application_paths().browser_profile_dir

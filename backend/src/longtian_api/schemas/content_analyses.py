@@ -7,6 +7,7 @@ from uuid import UUID
 from pydantic import Field, field_validator, model_validator
 
 from longtian_api.schemas.ai_summaries import (
+    ModelRetryNotice,
     StrictModel,
     SummaryFailure,
     SummaryUsage,
@@ -19,6 +20,10 @@ from longtian_api.schemas.analysis_settings import (
     PromptChoice,
     PromptSnapshotMode,
     PromptVersion,
+)
+from longtian_api.schemas.platform_access import (
+    PlatformAccessDiagnostic,
+    PlatformAccessSnapshot,
 )
 
 AttemptStatus = Literal[
@@ -40,6 +45,7 @@ JobStatus = Literal[
     "interrupted",
     "configuration_blocked",
 ]
+SummaryConcurrency = Literal[1, 2, 4, 8, 16]
 
 
 def valid_prose(value: str) -> str:
@@ -108,6 +114,9 @@ class AnalysisCreate(StrictModel):
     report_prompt_mode: PromptSnapshotMode | None = None
     initial_prompt: PromptChoice | None = None
     report_prompt: PromptChoice | None = None
+    # Internal callers (not the public request model) may freeze the platform
+    # pacing used by this job at admission.
+    platform_access_snapshot: PlatformAccessSnapshot | None = None
     force_refresh: bool
     selection: Annotated[AllNeverStarted | SelectedResults, Field(discriminator="kind")]
 
@@ -149,6 +158,7 @@ class WorkflowAnalysisCreate(StrictModel):
     report_prompt_mode: PromptSnapshotMode | None = None
     initial_prompt: PromptChoice | None = None
     report_prompt: PromptChoice | None = None
+    platform_access_snapshot: PlatformAccessSnapshot | None = None
     force_refresh: bool
     result_ids: list[PositiveId] = Field(min_length=1)
 
@@ -247,6 +257,11 @@ class AnalysisJob(StrictModel):
     initial_prompt: PromptVersion
     report_prompt: PromptVersion
     force_refresh: bool
+    summary_concurrency: SummaryConcurrency = 1
+    platform_access_snapshot: PlatformAccessSnapshot | None = None
+    access_waiting: bool = False
+    access_notice: PlatformAccessDiagnostic | None = None
+    model_retry_notice: ModelRetryNotice | None = None
     counts: AnalysisCounts
     usage: AnalysisUsage
     queue_reason: Literal["ai_operation_active", "browser_operation_active"] | None

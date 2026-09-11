@@ -2,6 +2,11 @@
 /db_data/
 /logs/
 /runtime/
+/dist/
+/windows/build/
+/windows/dist/
+/macos/build/
+/macos/dist/
 
 # Frontend dependencies, output, caches, and local environment
 /frontend/node_modules/
