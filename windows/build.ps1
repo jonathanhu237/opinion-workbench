@@ -161,10 +161,15 @@ function Assert-CleanInputs {
             Write-Host "忽略构建机已有的运行时路径：$path" -ForegroundColor DarkYellow
         }
     }
+    $allowedTemplates = @(
+        (Join-Path $script:RepoRoot "frontend\.env.example"),
+        (Join-Path $script:RepoRoot "backend\.env.example")
+    )
     $sensitive = Get-ChildItem -Path $script:RepoRoot -Recurse -Force -File -ErrorAction SilentlyContinue |
         Where-Object {
             $_.FullName -notlike "$script:RepoRoot\.git\*" -and
-            ($_.Name -like "*.key" -or $_.Name -like "*.sqlite3" -or $_.Name -like ".env*")
+            ($_.Name -like "*.key" -or $_.Name -like "*.sqlite3" -or
+                ($_.Name -like ".env*" -and $allowedTemplates -notcontains $_.FullName))
         }
     if ($sensitive.Count -gt 0) {
         $names = ($sensitive | Select-Object -ExpandProperty FullName) -join ", "
