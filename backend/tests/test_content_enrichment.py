@@ -8,33 +8,34 @@ from uuid import uuid4
 
 import pytest
 from enrichment_fixtures import PNG, content_payload, image_asset, write_file
+from fixture_support import initialize_database
 
-from longtian_api.database import Database
-from longtian_api.repositories.search_batches import SearchBatchRepository
-from longtian_api.repositories.search_runs import (
+from opinion_workbench_api.database import Database
+from opinion_workbench_api.repositories.search_batches import SearchBatchRepository
+from opinion_workbench_api.repositories.search_runs import (
     SearchContentInput,
     SearchResultNotFoundError,
     SearchRunRepository,
 )
-from longtian_api.services.browser_operations import (
+from opinion_workbench_api.services.browser_operations import (
     BrowserOperationCoordinator,
     BrowserOperationOwner,
 )
-from longtian_api.services.collector_contracts import (
+from opinion_workbench_api.services.collector_contracts import (
     EnrichmentWorkerResult,
     EnrichmentWorkerUnsettledError,
 )
-from longtian_api.services.content_enrichment import (
+from opinion_workbench_api.services.content_enrichment import (
     ContentEnrichmentError,
     ContentEnrichmentService,
 )
-from longtian_api.services.enrichment_models import EnrichedContent
-from longtian_api.services.enrichment_staging import MediaSpool
+from opinion_workbench_api.services.enrichment_models import EnrichedContent
+from opinion_workbench_api.services.enrichment_staging import MediaSpool
 
 
 def stored_source(tmp_path: Path, *, platform="wb", identity="12345"):
     database = Database(tmp_path / "test.sqlite3")
-    database.initialize()
+    initialize_database(database)
     repository = SearchRunRepository(database)
     run = repository.create_run(
         monitoring_rule_id=1,

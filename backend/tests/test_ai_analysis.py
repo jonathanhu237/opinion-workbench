@@ -11,9 +11,9 @@ import httpx
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from longtian_api.repositories.search_runs import SearchResultSourceRecord
-from longtian_api.services import ai_analysis
-from longtian_api.services.ai_analysis import (
+from opinion_workbench_api.repositories.search_runs import SearchResultSourceRecord
+from opinion_workbench_api.services import ai_analysis
+from opinion_workbench_api.services.ai_analysis import (
     ANALYSIS_MAX_TOKENS,
     MODEL_DEADLINE_SECONDS,
     SUMMARY_MAX_TOKENS,
@@ -25,18 +25,18 @@ from longtian_api.services.ai_analysis import (
     parse_analysis,
     parse_summary,
 )
-from longtian_api.services.ai_client import (
+from opinion_workbench_api.services.ai_client import (
     AIClient,
     AICompletion,
     AIConfiguration,
     AIUsage,
 )
-from longtian_api.services.content_enrichment import EnrichmentItem
-from longtian_api.services.enrichment_models import (
+from opinion_workbench_api.services.content_enrichment import EnrichmentItem
+from opinion_workbench_api.services.enrichment_models import (
     EnrichedContent,
     evidence_fingerprint,
 )
-from longtian_api.services.enrichment_staging import ValidatedMedia
+from opinion_workbench_api.services.enrichment_staging import ValidatedMedia
 
 KEY = "private-summary-key-sentinel"
 CONFIGURATION = AIConfiguration(

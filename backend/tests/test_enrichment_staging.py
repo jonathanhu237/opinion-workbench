@@ -6,7 +6,7 @@ from uuid import uuid4
 import pytest
 from enrichment_fixtures import PNG, content_payload, image_asset, write_file
 
-from longtian_api.services.enrichment_models import (
+from opinion_workbench_api.services.enrichment_models import (
     MAX_MANIFEST_BYTES,
     EnrichmentBudget,
     EnrichmentValidationError,
@@ -14,7 +14,10 @@ from longtian_api.services.enrichment_models import (
     evidence_fingerprint,
     validate_content,
 )
-from longtian_api.services.enrichment_staging import MediaSpool, MediaStagingError
+from opinion_workbench_api.services.enrichment_staging import (
+    MediaSpool,
+    MediaStagingError,
+)
 
 
 def decoded(payload):

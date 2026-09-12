@@ -12,7 +12,7 @@ from topic_report_fixtures import (
     retry_request,
 )
 
-from longtian_api.repositories.search_runs import (
+from opinion_workbench_api.repositories.search_runs import (
     SearchContentInput,
     SearchRunRepository,
 )

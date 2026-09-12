@@ -6,8 +6,8 @@ from urllib.parse import parse_qs, urlencode, urlsplit
 import pytest
 from test_native_weibo_discovery import BrowserFixture
 
-from longtian_api.services.native_browser_contracts import BrowserUnavailable
-from longtian_api.services.native_weibo import (
+from opinion_workbench_api.services.native_browser_contracts import BrowserUnavailable
+from opinion_workbench_api.services.native_weibo import (
     _PLATFORM_SEARCH,
     NativeWeiboCollector,
     _generic_content_identity,

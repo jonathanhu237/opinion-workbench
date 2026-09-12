@@ -38,7 +38,7 @@ def page_lease(port: int) -> socket.socket:
 
 def check_worker(app: Path, env: dict[str, str], cwd: str) -> None:
     worker = app / (
-        "LongtianGalleryWorker.exe" if os.name == "nt" else "LongtianGalleryWorker"
+        "OpinionWorkbenchGalleryWorker.exe" if os.name == "nt" else "OpinionWorkbenchGalleryWorker"
     )
     startup = {
         "content_id": "3600375418559878",
@@ -58,7 +58,7 @@ def check_worker(app: Path, env: dict[str, str], cwd: str) -> None:
         "cookies": {},
     }
     result = subprocess.run(
-        [str(worker), "--longtian-gallery-worker"],
+        [str(worker), "--opinion-workbench-gallery-worker"],
         input=json.dumps(startup) + "\n" + json.dumps(response) + "\n",
         text=True,
         capture_output=True,
@@ -83,7 +83,7 @@ def smoke(program: Path, app: Path) -> None:
         raise RuntimeError(
             "smoke requires a fresh disposable extraction; data already exists"
         )
-    with tempfile.TemporaryDirectory(prefix="longtian-smoke-driver-") as temp:
+    with tempfile.TemporaryDirectory(prefix="opinion-workbench-smoke-driver-") as temp:
         log_path = Path(temp) / "process.log"
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", 0))
@@ -91,7 +91,7 @@ def smoke(program: Path, app: Path) -> None:
         env = {
             k: v
             for k, v in os.environ.items()
-            if not k.startswith(("LONGTIAN_", "PYTHON"))
+            if not k.startswith(("OPINION_WORKBENCH_", "PYTHON"))
         }
         # The driver can use Python; the child must not depend on developer PATH.
         env["PATH"] = (
@@ -111,7 +111,7 @@ def smoke(program: Path, app: Path) -> None:
             lease = None
             try:
                 deadline = time.monotonic() + 45
-                record = data / "server.json"
+                record = data / "opinion-workbench-server.json"
                 while not record.exists():
                     if proc.poll() is not None or time.monotonic() >= deadline:
                         raise RuntimeError("packaged launcher did not become ready")
@@ -124,7 +124,7 @@ def smoke(program: Path, app: Path) -> None:
                     with urllib.request.urlopen(base + endpoint, timeout=5) as response:
                         if response.status != 200:
                             raise RuntimeError("packaged HTTP check failed")
-                if not (data / "longtian.sqlite3").is_file():
+                if not (data / "opinion-workbench.sqlite3").is_file():
                     raise RuntimeError("portable database missing")
                 # Disconnect the last UI page, exercising the normal cross-OS
                 # shutdown contract instead of unsupported Windows SIGINT.

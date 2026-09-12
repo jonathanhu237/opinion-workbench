@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from fixture_support import initialize_database, initialize_repository
 from initial_analysis_fixtures import environment as initial_environment
 from initial_analysis_fixtures import finish as finish_analysis
 from initial_analysis_fixtures import request as analysis_request
@@ -15,15 +16,15 @@ from test_report_generations import generation_request, save_body
 from topic_report_fixtures import api_environment
 from topic_report_fixtures import finish as finish_report
 
-from longtian_api.database import Database
-from longtian_api.repositories.platform_access import PlatformAccessRepository
-from longtian_api.schemas.platform_access import (
+from opinion_workbench_api.database import Database
+from opinion_workbench_api.repositories.platform_access import PlatformAccessRepository
+from opinion_workbench_api.schemas.platform_access import (
     PlatformAccessDiagnostic,
     PlatformAccessSnapshot,
     PlatformIntervals,
 )
-from longtian_api.services.ai_errors import AIError
-from longtian_api.services.platform_access import (
+from opinion_workbench_api.services.ai_errors import AIError
+from opinion_workbench_api.services.platform_access import (
     PlatformAccessBlockedError,
     PlatformAccessCoordinator,
     PlatformCooldownActiveError,
@@ -140,9 +141,7 @@ def test_report_admission_freezes_summary_concurrency_and_access_snapshot(tmp_pa
 def test_report_summary_concurrency_is_bounded_for_each_supported_option(
     tmp_path, summary_concurrency
 ):
-    app, database, model, _ = api_environment(
-        tmp_path, count=summary_concurrency
-    )
+    app, database, model, _ = api_environment(tmp_path, count=summary_concurrency)
     for result_id in range(1, summary_concurrency + 1):
         save_body(database, result_id)
     model.block_stage = "initial"
@@ -318,16 +317,17 @@ def test_platform_access_settings_are_revisioned_and_atomic(tmp_path):
             },
         )
         assert invalid.status_code == 422
-        assert client.get("/api/v1/platform-access-settings").json()[
-            "interval_seconds"
-        ] == update["interval_seconds"]
+        assert (
+            client.get("/api/v1/platform-access-settings").json()["interval_seconds"]
+            == update["interval_seconds"]
+        )
 
 
 def test_platform_access_start_deadline_survives_coordinator_restart(tmp_path):
     database = Database(Path(tmp_path) / "restart.sqlite3")
-    database.initialize()
+    initialize_database(database)
     repository = PlatformAccessRepository(database)
-    repository.initialize()
+    initialize_repository(repository)
     wall = [datetime(2026, 1, 1, tzinfo=UTC)]
     monotonic = [0.0]
     sleeps = []
@@ -338,9 +338,7 @@ def test_platform_access_start_deadline_survives_coordinator_restart(tmp_path):
         monotonic[0] += seconds
 
     long_snapshot = PlatformAccessSnapshot(
-        interval_seconds=PlatformIntervals(
-            wb=17, dy=5, ks=5, xhs=5, toutiao=5
-        ),
+        interval_seconds=PlatformIntervals(wb=17, dy=5, ks=5, xhs=5, toutiao=5),
         basis="explicit",
     )
     short_snapshot = PlatformAccessSnapshot(
@@ -375,9 +373,9 @@ def test_platform_access_start_deadline_survives_coordinator_restart(tmp_path):
 
 def test_platform_access_preserves_diagnostics_and_requires_resume(tmp_path):
     database = Database(Path(tmp_path) / "platform.sqlite3")
-    database.initialize()
+    initialize_database(database)
     repository = PlatformAccessRepository(database)
-    repository.initialize()
+    initialize_repository(repository)
     now = datetime.now(UTC)
     retry_after = now + timedelta(minutes=2)
     detailed = PlatformAccessDiagnostic(
@@ -411,12 +409,12 @@ def test_platform_access_preserves_diagnostics_and_requires_resume(tmp_path):
 
 def test_platform_access_wait_is_cancellable_on_shutdown(tmp_path):
     async def exercise():
-        from longtian_api.database import Database
+        from opinion_workbench_api.database import Database
 
         database = Database(Path(tmp_path) / "shutdown.sqlite3")
-        database.initialize()
+        initialize_database(database)
         repository = PlatformAccessRepository(database)
-        repository.initialize()
+        initialize_repository(repository)
         coordinator = PlatformAccessCoordinator(repository)
         await coordinator.wait_for_turn("wb")
         waiting = asyncio.Event()
@@ -424,9 +422,7 @@ def test_platform_access_wait_is_cancellable_on_shutdown(tmp_path):
         async def notify(*_args):
             waiting.set()
 
-        task = asyncio.create_task(
-            coordinator.wait_for_turn("wb", on_waiting=notify)
-        )
+        task = asyncio.create_task(coordinator.wait_for_turn("wb", on_waiting=notify))
         await asyncio.wait_for(waiting.wait(), 1)
         coordinator.shutdown()
         with pytest.raises(asyncio.CancelledError):

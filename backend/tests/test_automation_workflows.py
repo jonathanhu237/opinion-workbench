@@ -9,19 +9,20 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from fixture_support import initialize_database, initialize_monitoring_rules
 
-from longtian_api import database as database_migrations
-from longtian_api.database import CURRENT_DATABASE_VERSION, Database
-from longtian_api.main import create_app
-from longtian_api.repositories.automation_workflows import (
+from opinion_workbench_api import database as database_migrations
+from opinion_workbench_api.database import CURRENT_DATABASE_VERSION, Database
+from opinion_workbench_api.main import create_app
+from opinion_workbench_api.repositories.automation_workflows import (
     AutomationRunActiveError,
     AutomationTaskChangedError,
     AutomationTaskNotFoundError,
     AutomationWorkflowRepository,
     BatchContentRecord,
 )
-from longtian_api.schemas.analysis_settings import PromptVersion
-from longtian_api.schemas.automation_workflows import (
+from opinion_workbench_api.schemas.analysis_settings import PromptVersion
+from opinion_workbench_api.schemas.automation_workflows import (
     AutomationDailySchedule,
     AutomationIntervalSchedule,
     AutomationRunCancel,
@@ -31,23 +32,25 @@ from longtian_api.schemas.automation_workflows import (
     AutomationTaskDelete,
     AutomationTaskReplace,
 )
-from longtian_api.schemas.content_analyses import (
+from opinion_workbench_api.schemas.content_analyses import (
     AnalysisAdmission,
     AnalysisCounts,
     AnalysisJob,
     AnalysisUsage,
 )
-from longtian_api.schemas.platform_access import (
+from opinion_workbench_api.schemas.platform_access import (
     PlatformAccessSnapshot,
     PlatformIntervals,
 )
-from longtian_api.services.automation_workflow_errors import AutomationWorkflowError
-from longtian_api.services.automation_workflows import (
+from opinion_workbench_api.services.automation_workflow_errors import (
+    AutomationWorkflowError,
+)
+from opinion_workbench_api.services.automation_workflows import (
     AutomationWorkflowService,
     schedule_next_due,
 )
-from longtian_api.services.monitoring_rules import MonitoringRuleService
-from longtian_api.services.search_batches import SearchBatchError
+from opinion_workbench_api.services.monitoring_rules import MonitoringRuleService
+from opinion_workbench_api.services.search_batches import SearchBatchError
 
 REQUEST = "123e4567-e89b-42d3-a456-426614174000"
 
@@ -73,12 +76,12 @@ def _task_payload(**changes):
 def _repository(tmp_path: Path):
     database = Database(tmp_path / "automation.sqlite3")
     rules = MonitoringRuleService(database_path=database.path)
-    rules.initialize()
+    initialize_monitoring_rules(rules)
     return database, rules, AutomationWorkflowRepository(database)
 
 
 def _snapshot(task, now):
-    from longtian_api.schemas.automation_workflows import AutomationSnapshot
+    from opinion_workbench_api.schemas.automation_workflows import AutomationSnapshot
 
     return AutomationSnapshot(
         task_id=task.id,
@@ -114,7 +117,7 @@ def test_v15_is_additive_and_does_not_convert_old_schedules(tmp_path: Path):
         ).fetchone()[0]
         assert old_schedule_count == 1
 
-    database.initialize()
+    initialize_database(database)
     Database(database.path).initialize()
 
     with database.connect() as connection:
@@ -154,7 +157,7 @@ def test_v15_is_additive_and_does_not_convert_old_schedules(tmp_path: Path):
 
 
 def test_v15_failure_rolls_back_real_schema_changes(tmp_path: Path, monkeypatch):
-    import longtian_api.migrations.automation_workflows as migration
+    import opinion_workbench_api.migrations.automation_workflows as migration
 
     database = _v14_database(tmp_path)
     original = migration.migrate
@@ -170,7 +173,7 @@ def test_v15_failure_rolls_back_real_schema_changes(tmp_path: Path, monkeypatch)
 
     monkeypatch.setattr(migration, "migrate", fail)
     with pytest.raises(RuntimeError, match="v15 failure"):
-        database.initialize()
+        initialize_database(database)
 
     with database.connect() as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 14
@@ -187,7 +190,7 @@ def test_v15_failure_rolls_back_real_schema_changes(tmp_path: Path, monkeypatch)
 
 
 def test_v17_failure_rolls_back_soft_delete_schema(tmp_path: Path, monkeypatch):
-    import longtian_api.migrations.automation_workflows_v17 as migration
+    import opinion_workbench_api.migrations.automation_workflows_v17 as migration
 
     database = _v14_database(tmp_path)
     with database.connect() as connection:
@@ -201,7 +204,7 @@ def test_v17_failure_rolls_back_soft_delete_schema(tmp_path: Path, monkeypatch):
 
     monkeypatch.setattr(migration, "migrate", fail)
     with pytest.raises(RuntimeError, match="v17 failure"):
-        database.initialize()
+        initialize_database(database)
 
     with database.connect() as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 16
@@ -238,7 +241,7 @@ def test_v17_keeps_existing_automation_tasks_visible_by_default(tmp_path: Path):
             ("2026-08-30T00:00:00+00:00", "2026-08-30T00:00:00+00:00"),
         )
 
-    database.initialize()
+    initialize_database(database)
     with database.connect() as connection:
         row = connection.execute(
             "SELECT name,deleted_at FROM automation_tasks"
@@ -320,9 +323,7 @@ def test_run_snapshot_round_trips_nested_platform_access_policy(tmp_path: Path):
     now = datetime(2026, 8, 30, 0, 0, tzinfo=UTC)
     task = repository.create_task(_task_payload(), now=now)
     access_snapshot = PlatformAccessSnapshot(
-        interval_seconds=PlatformIntervals(
-            wb=17, dy=11, ks=7, xhs=5, toutiao=3
-        ),
+        interval_seconds=PlatformIntervals(wb=17, dy=11, ks=7, xhs=5, toutiao=3),
         basis="explicit",
     )
     snapshot = _snapshot(task, now).model_copy(
@@ -340,8 +341,7 @@ def test_run_snapshot_round_trips_nested_platform_access_policy(tmp_path: Path):
 
     assert created is True
     assert (
-        repository.get_run(run.id).snapshot.platform_access_snapshot
-        == access_snapshot
+        repository.get_run(run.id).snapshot.platform_access_snapshot == access_snapshot
     )
     with repository.database.connect() as connection:
         stored = json.loads(
@@ -1632,7 +1632,7 @@ def test_http_contract_replaces_old_schedule_route_and_replays_run_now(tmp_path:
 
     def workflow_factory(owner: Database):
         rules = MonitoringRuleService(database_path=owner.path)
-        rules.initialize()
+        initialize_monitoring_rules(rules)
         return AutomationWorkflowService(
             owner,
             monitoring_rules=rules,

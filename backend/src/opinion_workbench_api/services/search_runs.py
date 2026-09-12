@@ -1,0 +1,952 @@
+"""Orchestrate durable one-shot platform searches through the shared worker."""
+
+import asyncio
+import inspect
+from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Literal, Protocol, cast
+from uuid import UUID, uuid4
+
+from opinion_workbench_api.database import Database
+from opinion_workbench_api.repositories.search_runs import (
+    SearchContentInput,
+    SearchResultNotFoundError,
+    SearchResultOpenTargetRecord,
+    SearchResultRecord,
+    SearchRunNotActiveError,
+    SearchRunNotFoundError,
+    SearchRunOrdering,
+    SearchRunRecord,
+    SearchRunRepository,
+    SearchRunRepositoryUnavailableError,
+    SearchRunStatus,
+)
+from opinion_workbench_api.schemas.monitoring_rules import MonitoringRule
+from opinion_workbench_api.schemas.platform_access import (
+    default_platform_access_snapshot,
+)
+from opinion_workbench_api.schemas.search_runs import (
+    SearchResult,
+    SearchResultListResponse,
+    SearchResultOpenResponse,
+    SearchRunCreate,
+    SearchRunDetail,
+    SearchRunErrorCode,
+    SearchRunListResponse,
+    SearchRunSummary,
+    SearchTermDiagnostic,
+)
+from opinion_workbench_api.search_failure_reasons import (
+    SEARCH_FAILURE_REASONS,
+    SearchFailureReason,
+    is_search_failure_reason,
+)
+from opinion_workbench_api.search_platforms import (
+    SearchPlatform,
+    is_valid_search_content_url,
+)
+from opinion_workbench_api.services.browser_operations import (
+    BrowserOperationCoordinator,
+    BrowserOperationOwner,
+)
+from opinion_workbench_api.services.collector_contracts import (
+    AuthWorkerError,
+    ManualPageAction,
+    ManualPageWorkerResult,
+    SearchCollector,
+    SearchTermIncompleteReason,
+    SearchWorkerItem,
+    supports_platform,
+)
+from opinion_workbench_api.services.collector_contracts import (
+    SearchTermDiagnostic as CollectorSearchTermDiagnostic,
+)
+from opinion_workbench_api.services.monitoring_rules import (
+    MonitoringRuleError,
+    MonitoringRuleService,
+)
+from opinion_workbench_api.services.platform_access import PlatformAccessBlockedError
+from opinion_workbench_api.services.settled_tasks import database_call, settle
+
+MAX_SEARCH_TERMS = 20
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectedSearchTerminal:
+    """One safe projection of a worker outcome into durable run state."""
+
+    status: SearchRunStatus
+    failure_reason: SearchFailureReason | None = None
+
+    def __post_init__(self) -> None:
+        if self.failure_reason is not None and (
+            self.status != "structure_changed"
+            or not is_search_failure_reason(self.failure_reason)
+        ):
+            raise ValueError("failure_reason requires structure_changed status")
+
+
+class SearchRunRepositoryProtocol(Protocol):
+    def initialize(self) -> None: ...
+
+    def create_run(
+        self,
+        *,
+        monitoring_rule_id: int,
+        platform: SearchPlatform,
+        rule_name: str,
+        terms: tuple[str, ...],
+        max_results_per_term: int,
+        max_total_results: int | None = None,
+        ordering: SearchRunOrdering | None = None,
+    ) -> SearchRunRecord: ...
+
+    def collection_content_ids(self, run_id: int) -> set[str]: ...
+
+    def collection_term_content_ids(self, run_id: int) -> dict[int, set[str]]: ...
+
+    def mark_running(self, run_id: int) -> SearchRunRecord: ...
+
+    def set_progress(self, run_id: int, term_position: int) -> None: ...
+
+    def complete_term(
+        self, run_id: int, term_position: int, item_count: int
+    ) -> None: ...
+
+    def observe_item(
+        self, *, run_id: int, term_position: int, item: SearchContentInput
+    ) -> None: ...
+
+    def record_incomplete_terms(
+        self, run_id: int, diagnostics: tuple[CollectorSearchTermDiagnostic, ...]
+    ) -> None: ...
+
+    def finish(
+        self,
+        run_id: int,
+        status: SearchRunStatus,
+        failure_reason: SearchFailureReason | None = None,
+    ) -> SearchRunRecord: ...
+
+    def get(self, run_id: int) -> SearchRunRecord: ...
+
+    def list(
+        self, *, limit: int, before_id: int | None, standalone_only: bool = False
+    ) -> tuple[tuple[SearchRunRecord, ...], int | None]: ...
+
+    def list_results(
+        self,
+        *,
+        run_id: int,
+        kind: Literal["all", "new", "repeated"],
+        limit: int,
+        offset: int,
+    ) -> tuple[tuple[SearchResultRecord, ...], int]: ...
+
+    def get_result_open_target(
+        self, *, run_id: int, result_id: int
+    ) -> SearchResultOpenTargetRecord: ...
+
+
+async def _record_incomplete_terms(
+    repository: SearchRunRepositoryProtocol,
+    run_id: int,
+    start: int,
+    diagnostics: tuple[CollectorSearchTermDiagnostic, ...],
+) -> None:
+    """Persist keyword diagnostics when the repository supports the extension."""
+    if not diagnostics:
+        return
+    record_diagnostics = getattr(repository, "record_incomplete_terms", None)
+    if record_diagnostics is None:
+        return
+    await database_call(
+        record_diagnostics,
+        run_id,
+        tuple(
+            CollectorSearchTermDiagnostic(
+                position=start + diagnostic.position,
+                reason=diagnostic.reason,
+                result_count=diagnostic.result_count,
+            )
+            for diagnostic in diagnostics
+        ),
+    )
+
+
+class SearchRunError(Exception):
+    """Expected product error translated by the HTTP route."""
+
+    def __init__(
+        self, *, status_code: int, code: SearchRunErrorCode, message: str
+    ) -> None:
+        super().__init__(code)
+        self.status_code = status_code
+        self.code = code
+        self.message = message
+
+
+class SearchRunService:
+    """Own search admission, background lifecycle, and public projections."""
+
+    def __init__(
+        self,
+        *,
+        monitoring_rules: MonitoringRuleService,
+        worker: SearchCollector,
+        browser_operations: BrowserOperationCoordinator,
+        repository: SearchRunRepositoryProtocol | None = None,
+        database: Database | None = None,
+        database_path: Path | None = None,
+        search_timeout_seconds: float = 180.0,
+        open_timeout_seconds: float = 45.0,
+        platform_access=None,
+    ) -> None:
+        configured_sources = sum(
+            source is not None for source in (repository, database, database_path)
+        )
+        if configured_sources > 1:
+            raise ValueError(
+                "Provide only one of repository, database, or database_path."
+            )
+        self._monitoring_rules = monitoring_rules
+        self._worker = worker
+        self._browser_operations = browser_operations
+        if repository is None:
+            self._database: Database | None = database or Database(database_path)
+            self._repository = SearchRunRepository(self._database)
+        else:
+            self._database = None
+            self._repository = repository
+        self._search_timeout_seconds = search_timeout_seconds
+        self._open_timeout_seconds = open_timeout_seconds
+        self._platform_access = platform_access
+        self._lock = asyncio.Lock()
+        self._active_run_id: int | None = None
+        self._active_request_id: UUID | None = None
+        self._current_task: asyncio.Task[None] | None = None
+        self._active_open_task: asyncio.Task[object] | None = None
+        self._active_open_request_id: UUID | None = None
+        self._shutdown_started = False
+        self.on_collection_finished = None
+
+    @property
+    def database(self) -> Database | None:
+        """Return the shared product database when this service owns one."""
+        return self._database
+
+    def initialize(self) -> None:
+        self._repository.initialize()
+
+    def configure_platform_access(self, coordinator) -> None:
+        """Attach the application-wide access coordinator after composition."""
+        self._platform_access = coordinator
+
+    @property
+    def browser_session_available(self) -> bool:
+        """No-I/O conservative session evidence; never launch a worker to probe."""
+        return getattr(self._worker, "browser_session_available", False) is True
+
+    def supports_platform(self, platform):
+        return supports_platform(self._worker, platform)
+
+    def ordering_for_platform(self, platform: SearchPlatform) -> SearchRunOrdering:
+        """Describe the ordering the injected collector will actually use."""
+
+        # The native Weibo adapter exposes its latest-first switch.  Other
+        # platform adapters may try latest sorting, but can fall back for each
+        # term. Keep their run-level label conservative: platform order.
+        if platform == "wb" and getattr(self._worker, "latest_first", False):
+            return "latest"
+        return "platform"
+
+    async def start_run(self, payload: SearchRunCreate) -> SearchRunDetail:
+        if not self.supports_platform(payload.platform):
+            raise SearchRunError(
+                status_code=409,
+                code="search_platform_not_available",
+                message="该平台尚未接入当前采集器，历史内容仍可查看。",
+            )
+        rule = await self.load_rule(payload.monitoring_rule_id)
+        if len(rule.terms) > MAX_SEARCH_TERMS:
+            raise SearchRunError(
+                status_code=422,
+                code="too_many_search_terms",
+                message="一次最多采集 20 个搜索词，请拆分监控规则后重试。",
+            )
+
+        request_id = uuid4()
+        owner = BrowserOperationOwner("search_run", request_id)
+        async with self._lock:
+            if self._shutdown_started or (
+                self._current_task is not None and not self._current_task.done()
+            ):
+                raise _browser_operation_active()
+            if not await self._browser_operations.try_claim(owner):
+                raise _browser_operation_active()
+            try:
+                create_kwargs = {
+                    "monitoring_rule_id": rule.id,
+                    "platform": payload.platform,
+                    "rule_name": rule.name,
+                    "terms": tuple(rule.terms),
+                    "max_results_per_term": payload.max_results_per_term,
+                    "ordering": self.ordering_for_platform(payload.platform),
+                }
+                if self._platform_access is not None:
+                    create_kwargs["platform_access_snapshot"] = await database_call(
+                        self._platform_access.snapshot
+                    )
+                if payload.max_total_results is not None:
+                    create_kwargs["max_total_results"] = payload.max_total_results
+                try:
+                    record = await database_call(
+                        self._repository.create_run, **create_kwargs
+                    )
+                except TypeError:
+                    # Keep injected pre-ordering repositories usable in tests
+                    # and during a rolling local upgrade. Production storage
+                    # accepts and persists the marker above.
+                    create_kwargs.pop("ordering", None)
+                    create_kwargs.pop("platform_access_snapshot", None)
+                    record = await database_call(
+                        self._repository.create_run, **create_kwargs
+                    )
+            except SearchRunRepositoryUnavailableError:
+                await settle(self._browser_operations.release(owner))
+                raise _storage_unavailable() from None
+            except BaseException:
+                await settle(self._browser_operations.release(owner))
+                raise
+
+            self._active_run_id = record.id
+            self._active_request_id = request_id
+            self._current_task = asyncio.create_task(
+                self._run_search(record, request_id, owner),
+                name=f"search-run-{record.id}-{request_id}",
+            )
+            return _to_detail(record)
+
+    async def list_runs(
+        self, *, limit: int, before_id: int | None, standalone_only: bool = False
+    ) -> SearchRunListResponse:
+        try:
+            records, next_before_id = await database_call(
+                self._repository.list,
+                limit=limit,
+                before_id=before_id,
+                standalone_only=standalone_only,
+            )
+        except SearchRunRepositoryUnavailableError:
+            raise _storage_unavailable() from None
+        return SearchRunListResponse(
+            runs=[_to_summary(record) for record in records],
+            next_before_id=next_before_id,
+        )
+
+    async def get_run(self, run_id: int) -> SearchRunDetail:
+        return _to_detail(await self._get_record(run_id))
+
+    async def list_results(
+        self,
+        *,
+        run_id: int,
+        kind: Literal["all", "new", "repeated"],
+        limit: int,
+        offset: int,
+    ) -> SearchResultListResponse:
+        try:
+            records, total = await database_call(
+                self._repository.list_results,
+                run_id=run_id,
+                kind=kind,
+                limit=limit,
+                offset=offset,
+            )
+        except SearchRunNotFoundError:
+            raise _not_found() from None
+        except SearchRunRepositoryUnavailableError:
+            raise _storage_unavailable() from None
+        return SearchResultListResponse(
+            results=[_to_result(record) for record in records],
+            total=total,
+            limit=limit,
+            offset=offset,
+        )
+
+    async def open_result(
+        self, *, run_id: int, result_id: int
+    ) -> SearchResultOpenResponse:
+        try:
+            target = await database_call(
+                self._repository.get_result_open_target,
+                run_id=run_id,
+                result_id=result_id,
+            )
+        except SearchResultNotFoundError:
+            raise _result_not_found() from None
+        except SearchRunRepositoryUnavailableError:
+            raise _storage_unavailable() from None
+        target_url = getattr(target, "content_url", None)
+        if target_url is not None and not is_valid_search_content_url(
+            target.platform, target.platform_content_id, target_url
+        ):
+            # A malformed historical row must never become a browser target.
+            raise _open_not_supported()
+        if not self.supports_platform(target.platform):
+            raise _open_not_supported()
+
+        request_id = uuid4()
+        owner = BrowserOperationOwner("search_result_open", request_id)
+        current_task = asyncio.current_task()
+        if (
+            current_task is None
+        ):  # pragma: no cover - always called by an event loop task.
+            raise RuntimeError("open result requires an asyncio task")
+        async with self._lock:
+            if self._shutdown_started or (
+                self._active_open_task is not None and not self._active_open_task.done()
+            ):
+                raise _browser_operation_active()
+            if not await self._browser_operations.try_claim(owner):
+                raise _browser_operation_active()
+            self._active_open_task = current_task
+            self._active_open_request_id = request_id
+
+        try:
+            try:
+                if self._platform_access is not None:
+                    await self._platform_access.wait_for_turn(
+                        target.platform,
+                        stage="detail",
+                    )
+                # Pacing is outside the navigation timeout: a legal interval
+                # wait must not be reported as a failed browser open.
+                async with asyncio.timeout(self._open_timeout_seconds):
+                    kwargs = {
+                        "request_id": request_id,
+                        "term": target.matched_terms[0],
+                        "content_id": target.platform_content_id,
+                    }
+                    parameters = inspect.signature(self._worker.open_result).parameters
+                    if "platform" in parameters or any(
+                        p.kind is inspect.Parameter.VAR_KEYWORD
+                        for p in parameters.values()
+                    ):
+                        kwargs.update(
+                            platform=target.platform,
+                            content_url=target_url,
+                        )
+                    result = await self._worker.open_result(**kwargs)
+            except PlatformAccessBlockedError:
+                return SearchResultOpenResponse(
+                    outcome="platform_blocked_or_rate_limited"
+                )
+            except (AuthWorkerError, TimeoutError):
+                return SearchResultOpenResponse(outcome="internal_error")
+            return SearchResultOpenResponse(outcome=result.outcome)
+        finally:
+            await settle(self._browser_operations.release(owner))
+            async with self._lock:
+                if self._active_open_request_id == request_id:
+                    self._active_open_task = None
+                    self._active_open_request_id = None
+
+    async def cancel_run(self, run_id: int) -> SearchRunDetail:
+        async with self._lock:
+            task = self._current_task
+            if self._active_run_id != run_id or task is None or task.done():
+                record = await self._get_record(run_id)
+                if record.status not in {"queued", "running"}:
+                    raise _not_active()
+                raise _not_active()
+            task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        return _to_detail(await self._get_record(run_id))
+
+    async def shutdown(self) -> None:
+        async with self._lock:
+            self._shutdown_started = True
+            task = self._current_task
+            open_task = self._active_open_task
+        if task is not None and not task.done():
+            task.cancel()
+        if task is not None:
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+        if open_task is not None and not open_task.done():
+            open_task.cancel()
+        if open_task is not None:
+            try:
+                await open_task
+            except asyncio.CancelledError:
+                pass
+
+    async def execute_attempt(
+        self,
+        record: SearchRunRecord,
+        request_id: UUID,
+        cancellation_status: Callable[[], SearchRunStatus] | None = None,
+    ) -> SearchRunRecord:
+        """Execute one already-persisted batch attempt under external ownership."""
+        terminal, cancelled = await self._execute_record(
+            record, request_id, cancellation_status
+        )
+        if cancelled:
+            raise asyncio.CancelledError
+        return await self._get_record(record.id)
+
+    async def manual_page(
+        self, platform: SearchPlatform, action: ManualPageAction
+    ) -> ManualPageWorkerResult:
+        """Caller already owns the batch browser operation."""
+        try:
+            async with asyncio.timeout(self._open_timeout_seconds):
+                result = await self._worker.manual_page(
+                    request_id=uuid4(), platform=platform, action=action
+                )
+        except (AuthWorkerError, TimeoutError):
+            await self._worker.discard_session()
+            return ManualPageWorkerResult("internal_error")
+        if action == "close" and result.outcome not in {
+            "closed",
+            "not_present",
+            "browser_unavailable",
+        }:
+            await self._worker.discard_session()
+        return result
+
+    async def load_rule(self, rule_id: int) -> MonitoringRule:
+        """Load and validate the enabled rule shared by run orchestrators."""
+        try:
+            enabled_rules = await database_call(self._monitoring_rules.list_enabled)
+        except MonitoringRuleError:
+            raise _storage_unavailable() from None
+        rule = next((item for item in enabled_rules if item.id == rule_id), None)
+        if rule is not None:
+            return rule
+
+        try:
+            disabled_rules = await database_call(
+                self._monitoring_rules.list_rules, enabled=False
+            )
+        except MonitoringRuleError:
+            raise _storage_unavailable() from None
+        if any(item.id == rule_id for item in disabled_rules.rules):
+            raise SearchRunError(
+                status_code=409,
+                code="monitoring_rule_disabled",
+                message="该监控规则已停用，请先启用后再采集。",
+            )
+        raise SearchRunError(
+            status_code=404,
+            code="monitoring_rule_not_found",
+            message="未找到该监控规则。",
+        )
+
+    async def _get_record(self, run_id: int) -> SearchRunRecord:
+        try:
+            return await database_call(self._repository.get, run_id)
+        except SearchRunNotFoundError:
+            raise _not_found() from None
+        except SearchRunRepositoryUnavailableError:
+            raise _storage_unavailable() from None
+
+    async def _run_search(
+        self,
+        record: SearchRunRecord,
+        request_id: UUID,
+        owner: BrowserOperationOwner,
+    ) -> None:
+        cancelled = False
+        try:
+            _, cancelled = await self._execute_record(record, request_id)
+        finally:
+            await settle(self._browser_operations.release(owner))
+            async with self._lock:
+                if self._active_request_id == request_id:
+                    self._active_run_id = None
+                    self._active_request_id = None
+                    self._current_task = None
+            if (
+                not self._shutdown_started
+                and not cancelled
+                and self.on_collection_finished is not None
+            ):
+                try:
+                    await self.on_collection_finished("run", record.id)
+                except Exception:
+                    # Committed discovery claims survive a downstream admission failure.
+                    pass
+        if cancelled:
+            raise asyncio.CancelledError
+
+    async def _execute_record(
+        self,
+        record: SearchRunRecord,
+        request_id: UUID,
+        cancellation_status: Callable[[], SearchRunStatus] | None = None,
+    ) -> tuple[SearchRunStatus, bool]:
+        terminal: SearchRunStatus = "internal_error"
+        failure_reason: SearchFailureReason | None = None
+        execution_limit = None
+        cancelled = False
+        access_diagnostic = None
+        notice_setter = getattr(self._repository, "set_access_notice", None)
+        try:
+            await database_call(self._repository.mark_running, record.id)
+            snapshot = record.platform_access_snapshot
+            if snapshot is not None and snapshot.basis == "legacy_unavailable":
+                snapshot = default_platform_access_snapshot(
+                    basis="upgrade_safe_default"
+                )
+                ensure_snapshot = getattr(
+                    self._repository, "ensure_platform_access_snapshot", None
+                )
+                if callable(ensure_snapshot):
+                    await database_call(ensure_snapshot, record.id, snapshot)
+            start = record.execution_start_term_position
+
+            async def on_progress(position: int, _count: int) -> None:
+                await database_call(
+                    self._repository.set_progress, record.id, start + position
+                )
+
+            async def on_term_completed(
+                position: int,
+                count: int,
+                incomplete_reason: SearchTermIncompleteReason | None = None,
+            ) -> None:
+                await database_call(
+                    self._repository.complete_term, record.id, start + position, count
+                )
+                if incomplete_reason is not None:
+                    await _record_incomplete_terms(
+                        self._repository,
+                        record.id,
+                        start,
+                        (
+                            CollectorSearchTermDiagnostic(
+                                position=position,
+                                reason=incomplete_reason,
+                                result_count=count,
+                            ),
+                        ),
+                    )
+
+            async def on_item(position: int, item: SearchWorkerItem) -> None:
+                if not is_valid_search_content_url(
+                    record.platform, item.content_id, item.content_url
+                ):
+                    # Worker output is untrusted at this boundary.  Reject a
+                    # malformed identity before it can reach SQLite or a
+                    # browser-opening path.
+                    raise AuthWorkerError
+                observed_at = _timestamp_from_epoch_milliseconds(item.discovered_at)
+                await database_call(
+                    self._repository.observe_item,
+                    run_id=record.id,
+                    term_position=start + position,
+                    item=SearchContentInput(
+                        platform_content_id=item.content_id,
+                        content_type=item.content_type,
+                        title=item.title,
+                        snippet=item.snippet,
+                        creator_hash=item.creator_hash,
+                        publisher_name=item.publisher_name,
+                        published_at_text=item.published_at_text,
+                        content_url=item.content_url,
+                        observed_at=observed_at,
+                        hashtags=item.hashtags,
+                        interaction_stats=item.interaction_stats,
+                    ),
+                )
+
+            async def on_access_waiting(platform, seconds, stage):
+                setter = getattr(self._repository, "set_access_waiting", None)
+                if callable(setter):
+                    await database_call(
+                        setter,
+                        record.id,
+                        None
+                        if not seconds
+                        else {
+                            "platform": platform,
+                            "stage": stage,
+                            "seconds": round(float(seconds), 3),
+                        },
+                    )
+
+            latest_options = {}
+            if record.max_total_results is not None:
+                latest_options = {
+                    "max_total_results": record.max_total_results,
+                    "previous_content_ids": await database_call(
+                        self._repository.collection_content_ids, record.id
+                    ),
+                }
+            elif getattr(self._worker, "supports_per_term_resume_budget", False):
+                previous = await database_call(
+                    self._repository.collection_term_content_ids, record.id
+                )
+                latest_options = {
+                    "previous_content_ids_by_term": tuple(
+                        tuple(previous.get(position, ()))
+                        for position in range(start, len(record.terms))
+                    )
+                }
+            search_kwargs = {
+                "request_id": request_id,
+                "platform": record.platform,
+                "terms": record.terms[start:],
+                "max_results_per_term": record.max_results_per_term,
+                **latest_options,
+                "on_progress": on_progress,
+                "on_item": on_item,
+                "on_term_completed": on_term_completed,
+                "platform_access_snapshot": snapshot,
+                "on_access_waiting": on_access_waiting,
+            }
+            try:
+                parameters = inspect.signature(self._worker.search).parameters
+            except (TypeError, ValueError):
+                parameters = {}
+            # A wrapper with ``**kwargs`` can still delegate to an older
+            # strict worker (the common test/integration adapter shape). Only
+            # pass additive arguments when the callable explicitly advertises
+            # them; native collectors do so, while legacy wrappers do not.
+            for optional in ("platform_access_snapshot", "on_access_waiting"):
+                if optional not in parameters:
+                    search_kwargs.pop(optional, None)
+            access_timeout = 0.0
+            if self._platform_access is not None and snapshot is not None:
+                access_timeout = snapshot.for_platform(record.platform) * max(
+                    1, int(getattr(self._worker, "max_pages", 40))
+                )
+            async with asyncio.timeout(self._search_timeout_seconds + access_timeout):
+                result = await self._worker.search(**search_kwargs)
+            await _record_incomplete_terms(
+                self._repository, record.id, start, result.incomplete_terms
+            )
+            waiting_setter = getattr(self._repository, "set_access_waiting", None)
+            if callable(waiting_setter):
+                await database_call(waiting_setter, record.id, None)
+            diagnostic = getattr(result, "platform_access_diagnostic", None)
+            if (
+                result.outcome == "platform_blocked_or_rate_limited"
+                and self._platform_access is not None
+                and diagnostic is None
+            ):
+                blocker = getattr(self._platform_access, "block_async", None)
+                if blocker is None:
+                    blocker = self._platform_access.block
+                diagnostic = blocker(record.platform)
+                if inspect.isawaitable(diagnostic):
+                    diagnostic = await diagnostic
+            access_diagnostic = (
+                diagnostic
+                if result.outcome == "platform_blocked_or_rate_limited"
+                else None
+            )
+            projected = project_worker_outcome(result.outcome)
+            terminal = projected.status
+            failure_reason = projected.failure_reason
+            execution_limit = result.execution_limit
+        except PlatformAccessBlockedError as error:
+            # Native collectors normally project a blocked access into their
+            # worker result. Compatibility collectors may surface the shared
+            # coordinator exception directly; preserve the same durable pause
+            # and safe diagnostic instead of misclassifying it as an internal
+            # search failure.
+            terminal = "platform_blocked_or_rate_limited"
+            access_diagnostic = error.diagnostic
+        except TimeoutError:
+            terminal = "timed_out"
+        except asyncio.CancelledError:
+            terminal = cancellation_status() if cancellation_status else "cancelled"
+            cancelled = True
+        except (AuthWorkerError, SearchRunRepositoryUnavailableError):
+            terminal = "internal_error"
+        except Exception:
+            terminal = "internal_error"
+        try:
+            if callable(notice_setter):
+                await database_call(notice_setter, record.id, access_diagnostic)
+            if execution_limit is not None:
+                await database_call(
+                    self._repository.finish,
+                    record.id,
+                    terminal,
+                    failure_reason,
+                    execution_limit,
+                )
+            elif failure_reason is None:
+                # Keep the old two-argument repository seam usable for
+                # callers/test doubles that predate structured diagnostics.
+                await database_call(self._repository.finish, record.id, terminal)
+            else:
+                await database_call(
+                    self._repository.finish,
+                    record.id,
+                    terminal,
+                    failure_reason,
+                )
+        except (SearchRunNotActiveError, SearchRunRepositoryUnavailableError):
+            pass
+        return terminal, cancelled
+
+
+def project_worker_outcome(outcome: str) -> ProjectedSearchTerminal:
+    """Project one closed worker outcome into lifecycle state and its cause."""
+
+    if outcome == "browser_disconnected":
+        return ProjectedSearchTerminal("browser_unavailable")
+    if outcome in SEARCH_FAILURE_REASONS:
+        # The set is runtime data from the shared Literal.  The explicit
+        # predicate keeps the cast at this one boundary instead of leaking
+        # arbitrary worker strings into persistence or public schemas.
+        if not is_search_failure_reason(outcome):  # pragma: no cover - set is closed
+            return ProjectedSearchTerminal("internal_error")
+        return ProjectedSearchTerminal(
+            "structure_changed", cast(SearchFailureReason, outcome)
+        )
+    if outcome in {
+        "timed_out",
+        "completed_with_results",
+        "completed_empty",
+        "completed_with_incomplete",
+        "login_required",
+        "manual_challenge_required",
+        "platform_blocked_or_rate_limited",
+        "structure_changed",
+        "browser_unavailable",
+        "cancelled",
+        "internal_error",
+    }:
+        return ProjectedSearchTerminal(outcome)  # type: ignore[arg-type]
+    return ProjectedSearchTerminal("internal_error")
+
+
+def _to_summary(record: SearchRunRecord) -> SearchRunSummary:
+    return SearchRunSummary(
+        id=record.id,
+        monitoring_rule_id=record.monitoring_rule_id,
+        platform=record.platform,
+        rule_name=record.rule_name,
+        term_count=len(record.terms),
+        max_results_per_term=record.max_results_per_term,
+        max_total_results=record.max_total_results,
+        status=record.status,
+        failure_reason=record.failure_reason,
+        execution_limit=record.execution_limit,
+        current_term_position=record.current_term_position,
+        new_count=record.new_count,
+        repeated_count=record.repeated_count,
+        total_count=record.total_count,
+        created_at=record.created_at,
+        started_at=record.started_at,
+        finished_at=record.finished_at,
+        incomplete_terms=tuple(
+            SearchTermDiagnostic(
+                position=diagnostic.position,
+                term=record.terms[diagnostic.position],
+                reason=diagnostic.reason,
+                result_count=diagnostic.result_count,
+            )
+            for diagnostic in record.incomplete_terms
+        ),
+        ordering=record.ordering,
+        platform_access_snapshot=record.platform_access_snapshot,
+        access_waiting=record.access_waiting,
+        access_notice=record.access_notice,
+    )
+
+
+def _to_detail(record: SearchRunRecord) -> SearchRunDetail:
+    return SearchRunDetail(**_to_summary(record).model_dump(), terms=record.terms)
+
+
+def _to_result(record: SearchResultRecord) -> SearchResult:
+    return SearchResult(
+        id=record.id,
+        platform=record.platform,
+        platform_content_id=record.platform_content_id,
+        content_type=record.content_type,
+        title=record.title,
+        snippet=record.snippet,
+        creator_hash=record.creator_hash,
+        publisher_name=record.publisher_name,
+        published_at_text=record.published_at_text,
+        content_url=record.content_url,
+        hashtags=record.hashtags,
+        interaction_stats=record.interaction_stats,
+        kind=record.discovery_kind,
+        matched_terms=record.matched_terms,
+        first_seen_at=record.first_seen_at,
+        last_seen_at=record.last_seen_at,
+        first_observed_at=record.first_observed_at,
+        last_observed_at=record.last_observed_at,
+    )
+
+
+def _timestamp_from_epoch_milliseconds(value: int) -> str:
+    from datetime import UTC, datetime
+
+    try:
+        return datetime.fromtimestamp(value / 1000, UTC).isoformat()
+    except (OverflowError, OSError, ValueError):
+        raise AuthWorkerError from None
+
+
+def _browser_operation_active() -> SearchRunError:
+    return SearchRunError(
+        status_code=409,
+        code="browser_operation_active",
+        message="谷歌浏览器正在执行其他操作，请稍后重试。",
+    )
+
+
+def _not_found() -> SearchRunError:
+    return SearchRunError(
+        status_code=404,
+        code="search_run_not_found",
+        message="未找到该采集任务。",
+    )
+
+
+def _not_active() -> SearchRunError:
+    return SearchRunError(
+        status_code=409,
+        code="search_run_not_active",
+        message="该采集任务已经结束，无法取消。",
+    )
+
+
+def _result_not_found() -> SearchRunError:
+    return SearchRunError(
+        status_code=404,
+        code="search_result_not_found",
+        message="未在该采集任务中找到这条结果。",
+    )
+
+
+def _open_not_supported() -> SearchRunError:
+    return SearchRunError(
+        status_code=409,
+        code="search_result_open_not_supported",
+        message="该采集结果当前无法通过浏览器打开。",
+    )
+
+
+def _storage_unavailable() -> SearchRunError:
+    return SearchRunError(
+        status_code=503,
+        code="search_storage_unavailable",
+        message="采集任务暂时无法读取或保存，请稍后重试。",
+    )

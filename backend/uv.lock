@@ -697,7 +697,7 @@ wheels = [
 ]
 
 [[package]]
-name = "longtian-api"
+name = "opinion-workbench-api"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

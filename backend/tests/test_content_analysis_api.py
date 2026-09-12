@@ -5,23 +5,26 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from fixture_support import initialize_database
 from initial_analysis_fixtures import UnderstandingClient, finish
 from summary_fixtures import BASE, KEY, MODEL, MediaWorker, seed_run
 
-from longtian_api.database import Database
-from longtian_api.main import create_app
-from longtian_api.repositories.search_runs import SearchRunRepository
-from longtian_api.services.ai_errors import AI_ERROR_CONTRACTS
-from longtian_api.services.ai_settings import AISettingsService
-from longtian_api.services.analysis_errors import ERRORS
-from longtian_api.services.content_enrichment import ContentEnrichmentService
-from longtian_api.services.enrichment_staging import MediaSpool
-from longtian_api.services.monitoring_rules import MonitoringRuleService
-from longtian_api.services.platform_access import (
+from opinion_workbench_api.database import Database
+from opinion_workbench_api.main import create_app
+from opinion_workbench_api.repositories.search_runs import SearchRunRepository
+from opinion_workbench_api.services.ai_errors import AI_ERROR_CONTRACTS
+from opinion_workbench_api.services.ai_settings import AISettingsService
+from opinion_workbench_api.services.analysis_errors import ERRORS
+from opinion_workbench_api.services.content_enrichment import ContentEnrichmentService
+from opinion_workbench_api.services.enrichment_staging import MediaSpool
+from opinion_workbench_api.services.monitoring_rules import MonitoringRuleService
+from opinion_workbench_api.services.platform_access import (
     PlatformAccessCoordinator,
     PlatformAccessService,
 )
-from longtian_api.services.platform_connections import PlatformConnectionService
+from opinion_workbench_api.services.platform_connections import (
+    PlatformConnectionService,
+)
 
 
 def api_fixture(tmp_path, count=2, **app_options):
@@ -56,7 +59,7 @@ def api_fixture(tmp_path, count=2, **app_options):
         return service
 
     database = Database(tmp_path / "api.sqlite3")
-    database.initialize()
+    initialize_database(database)
     seed_run(database, count)
     model, media = UnderstandingClient(), MediaWorker()
 

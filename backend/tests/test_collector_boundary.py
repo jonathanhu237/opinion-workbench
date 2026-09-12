@@ -1,12 +1,16 @@
 """The application accepts a project-owned collection runtime, without a subprocess."""
 
 from fastapi.testclient import TestClient
+from fixture_support import create_test_rule
 from test_search_runs import FakeSearchWorker, _wait_for_terminal
 
-from longtian_api.main import create_app
-from longtian_api.services.collector_contracts import AuthWorkerResult
-from longtian_api.services.monitoring_rules import MonitoringRuleService
-from longtian_api.services.platform_connections import PlatformConnectionService
+from opinion_workbench_api.database import Database
+from opinion_workbench_api.main import create_app
+from opinion_workbench_api.services.collector_contracts import AuthWorkerResult
+from opinion_workbench_api.services.monitoring_rules import MonitoringRuleService
+from opinion_workbench_api.services.platform_connections import (
+    PlatformConnectionService,
+)
 
 
 class LocalRuntime(FakeSearchWorker):
@@ -29,6 +33,9 @@ class LocalRuntime(FakeSearchWorker):
 
 
 def test_replaceable_runtime_search_persists_without_legacy_worker(tmp_path):
+    database = Database(tmp_path / "db.sqlite3")
+    database.initialize()
+    create_test_rule(database, monitoring_objects=("龙田街道",))
     runtime = LocalRuntime()
     service = PlatformConnectionService(collector_factory=lambda **kwargs: runtime)
     app = create_app(
@@ -62,6 +69,9 @@ def test_replaceable_runtime_search_persists_without_legacy_worker(tmp_path):
 
 
 def test_replacement_login_barrier_never_falls_back_to_legacy(tmp_path):
+    database = Database(tmp_path / "db.sqlite3")
+    database.initialize()
+    create_test_rule(database, monitoring_objects=("龙田街道",))
     runtime = LocalRuntime()
     runtime.outcome = "login_required"
     runtime.emit_item = False

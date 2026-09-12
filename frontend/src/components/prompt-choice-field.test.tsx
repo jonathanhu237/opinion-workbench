@@ -11,7 +11,7 @@ function PromptChoiceHarness() {
   return (
     <PromptChoiceField
       id="prompt"
-      label="内容理解提示词"
+      label="总结提示词"
       description="每条来源的初步理解。"
       value={value}
       onChange={setValue}

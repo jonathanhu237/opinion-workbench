@@ -74,7 +74,7 @@ function renderWorkbench() {
             context={{
               healthState: {
                 status: 'connected',
-                data: { status: 'ok', service: 'longtian-api' },
+                data: { status: 'ok', service: 'opinion-workbench-api' },
               },
               retryHealth,
             }}

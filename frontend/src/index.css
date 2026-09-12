@@ -112,7 +112,7 @@ a {
   scroll-margin-block: 5rem 1rem;
 }
 
-.community-watch-mark {
+.workbench-mark {
   position: relative;
   display: block;
   width: 2.75rem;
@@ -120,7 +120,7 @@ a {
   flex: 0 0 auto;
 }
 
-.community-watch-cell {
+.workbench-mark-cell {
   position: absolute;
   width: 1.05rem;
   height: 1.05rem;
@@ -129,23 +129,23 @@ a {
   background: color-mix(in srgb, var(--sidebar-accent) 78%, transparent);
 }
 
-.community-watch-cell-a {
+.workbench-mark-cell-a {
   inset: 0 auto auto 0;
 }
 
-.community-watch-cell-b {
+.workbench-mark-cell-b {
   inset: 0 0 auto auto;
 }
 
-.community-watch-cell-c {
+.workbench-mark-cell-c {
   inset: auto auto 0 0;
 }
 
-.community-watch-cell-d {
+.workbench-mark-cell-d {
   inset: auto 0 0 auto;
 }
 
-.community-watch-core {
+.workbench-mark-core {
   position: absolute;
   inset: 50% auto auto 50%;
   width: 0.62rem;

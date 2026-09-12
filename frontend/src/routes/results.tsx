@@ -59,7 +59,7 @@ import { ResultsJobs } from '@/routes/results-jobs'
 import { isReportRecordContext } from '@/lib/report-route-state'
 import { searchPlatformPresenters } from '@/routes/search-run-presenters'
 
-const selectionDraftKey = 'longtian:report-selection-draft:v1'
+const selectionDraftKey = 'opinion-workbench:report-selection-draft:v1'
 
 function readSelectionDraft() {
   try {

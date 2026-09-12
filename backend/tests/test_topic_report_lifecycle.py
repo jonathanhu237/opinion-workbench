@@ -19,16 +19,16 @@ from topic_report_fixtures import (
     retry_request,
 )
 
-from longtian_api.schemas.ai_settings import AISettingsUpdate
-from longtian_api.schemas.topic_reports import ReportCancel
-from longtian_api.services.ai_client import MAX_USAGE_TOKENS, AIUsage
-from longtian_api.services.ai_errors import AI_ERROR_CONTRACTS, AIError
-from longtian_api.services.topic_report_engine import (
+from opinion_workbench_api.schemas.ai_settings import AISettingsUpdate
+from opinion_workbench_api.schemas.topic_reports import ReportCancel
+from opinion_workbench_api.services.ai_client import MAX_USAGE_TOKENS, AIUsage
+from opinion_workbench_api.services.ai_errors import AI_ERROR_CONTRACTS, AIError
+from opinion_workbench_api.services.topic_report_engine import (
     ENGINE_VERSION,
     check_request,
     prepare_judgment,
 )
-from longtian_api.services.topic_report_errors import TopicReportError
+from opinion_workbench_api.services.topic_report_errors import TopicReportError
 
 
 def test_event_link_rollback_replay_and_concurrent_consumers(tmp_path):
@@ -114,7 +114,7 @@ def test_pending_manual_event_startup_is_storage_only_and_admits_no_report(tmp_p
 
 def test_workflow_report_freezes_goal_replays_and_saves_zero_model_empty(tmp_path):
     async def run():
-        from longtian_api.repositories.analysis_settings import (
+        from opinion_workbench_api.repositories.analysis_settings import (
             AnalysisSettingsRepository,
         )
 
@@ -329,7 +329,7 @@ def test_retry_after_engine_upgrade_recomputes_without_touching_saved_reports(
         with monkeypatch.context() as old:
             for constant in ("ENGINE_VERSION", "OVERVIEW_ENGINE_VERSION"):
                 old.setattr(
-                    f"longtian_api.services.topic_report_engine.{constant}",
+                    f"opinion_workbench_api.services.topic_report_engine.{constant}",
                     "topic-text-engine-v2-citations",
                 )
             _, original = await analyse_all(db, initial, reports)

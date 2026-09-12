@@ -5,13 +5,15 @@ import asyncio
 from initial_analysis_fixtures import environment, finish
 from test_search_runs import FakeSearchWorker
 
-from longtian_api.repositories.analysis_settings import AnalysisSettingsRepository
-from longtian_api.schemas.analysis_settings import AutomationUpdate
-from longtian_api.schemas.search_batches import SearchBatchCreate
-from longtian_api.schemas.search_runs import SearchRunCreate
-from longtian_api.services.monitoring_rules import MonitoringRuleService
-from longtian_api.services.search_batches import SearchBatchService
-from longtian_api.services.search_runs import SearchRunService
+from opinion_workbench_api.repositories.analysis_settings import (
+    AnalysisSettingsRepository,
+)
+from opinion_workbench_api.schemas.analysis_settings import AutomationUpdate
+from opinion_workbench_api.schemas.search_batches import SearchBatchCreate
+from opinion_workbench_api.schemas.search_runs import SearchRunCreate
+from opinion_workbench_api.services.monitoring_rules import MonitoringRuleService
+from opinion_workbench_api.services.search_batches import SearchBatchService
+from opinion_workbench_api.services.search_runs import SearchRunService
 
 
 class IdentityConsistentWorker(FakeSearchWorker):

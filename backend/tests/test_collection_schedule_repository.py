@@ -7,6 +7,7 @@ from threading import Barrier
 
 import pytest
 from collection_schedule_fixtures import enabled, environment, payload
+from fixture_support import initialize_database
 from schema_fixtures import (
     create_legacy_schema,
     seed_historical_content,
@@ -14,23 +15,25 @@ from schema_fixtures import (
 )
 from test_content_analysis_repository import old_projection
 
-from longtian_api import database as migrations
-from longtian_api.database import (
+from opinion_workbench_api import database as migrations
+from opinion_workbench_api.database import (
     CURRENT_DATABASE_VERSION,
     Database,
     DatabaseVersionError,
 )
-from longtian_api.repositories.search_batches import (
+from opinion_workbench_api.repositories.search_batches import (
     ScheduledDispatchChangedError,
     SearchBatchRepository,
     SearchBatchRepositoryUnavailableError,
 )
-from longtian_api.schemas.collection_schedules import (
+from opinion_workbench_api.schemas.collection_schedules import (
     CollectionScheduleCreate,
     CollectionScheduleReplace,
 )
-from longtian_api.schemas.monitoring_rules import MonitoringRuleReplace
-from longtian_api.services.collection_schedule_errors import CollectionScheduleError
+from opinion_workbench_api.schemas.monitoring_rules import MonitoringRuleReplace
+from opinion_workbench_api.services.collection_schedule_errors import (
+    CollectionScheduleError,
+)
 
 
 def test_real_v12_to_v13_preserves_every_old_column_and_reopens(tmp_path):
@@ -42,7 +45,7 @@ def test_real_v12_to_v13_preserves_every_old_column_and_reopens(tmp_path):
         migrations._migrate_to_version_12(connection)
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 12
     before = old_projection(database)
-    database.initialize()
+    initialize_database(database)
     Database(database.path).initialize()
     after = old_projection(database)
     assert all(after[table] == rows for table, rows in before.items())
@@ -89,7 +92,7 @@ def test_real_v12_to_v13_preserves_every_old_column_and_reopens(tmp_path):
 
 
 def test_v13_migration_failure_rolls_back_actual_ddl(tmp_path, monkeypatch):
-    import longtian_api.migrations.collection_schedules as migration
+    import opinion_workbench_api.migrations.collection_schedules as migration
 
     database = Database(tmp_path / "rollback.sqlite3")
     create_legacy_schema(database, 12)
@@ -102,13 +105,13 @@ def test_v13_migration_failure_rolls_back_actual_ddl(tmp_path, monkeypatch):
 
     monkeypatch.setattr(migration, "migrate", fail)
     with pytest.raises(RuntimeError):
-        database.initialize()
+        initialize_database(database)
     assert old_projection(database) == before
     with database.connect() as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 12
         connection.execute(f"PRAGMA user_version={CURRENT_DATABASE_VERSION + 1}")
     with pytest.raises(DatabaseVersionError):
-        database.initialize()
+        initialize_database(database)
 
 
 @pytest.mark.parametrize(
@@ -133,7 +136,7 @@ def test_interval_roundtrip_defaults_and_catalog_order(tmp_path, value, unit, mi
     assert schedule.interval_minutes == minutes
     assert schedule.platforms == ["wb"]
     assert not schedule.enabled and schedule.anchor_at is schedule.next_due_at is None
-    database.initialize()
+    initialize_database(database)
     assert service.get(schedule.id) == schedule
     changed = service.replace(
         schedule.id,

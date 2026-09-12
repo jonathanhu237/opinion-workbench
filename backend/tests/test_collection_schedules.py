@@ -11,14 +11,18 @@ from initial_analysis_fixtures import finish
 from test_initial_analysis_handoff import services
 from test_search_runs import BlockingSearchWorker
 
-from longtian_api.repositories.search_batches import SearchBatchRepository
-from longtian_api.schemas.collection_schedules import CollectionScheduleReplace
-from longtian_api.schemas.monitoring_rules import MonitoringRuleReplace
-from longtian_api.schemas.search_batches import SearchBatchCreate
-from longtian_api.services.browser_operations import BrowserOperationOwner
-from longtian_api.services.collection_schedule_errors import CollectionScheduleError
-from longtian_api.services.collection_schedules import CollectionScheduleService
-from longtian_api.services.search_batches import ScheduledAdmissionError
+from opinion_workbench_api.repositories.search_batches import SearchBatchRepository
+from opinion_workbench_api.schemas.collection_schedules import CollectionScheduleReplace
+from opinion_workbench_api.schemas.monitoring_rules import MonitoringRuleReplace
+from opinion_workbench_api.schemas.search_batches import SearchBatchCreate
+from opinion_workbench_api.services.browser_operations import BrowserOperationOwner
+from opinion_workbench_api.services.collection_schedule_errors import (
+    CollectionScheduleError,
+)
+from opinion_workbench_api.services.collection_schedules import (
+    CollectionScheduleService,
+)
+from opinion_workbench_api.services.search_batches import ScheduledAdmissionError
 
 
 def test_exact_due_duplicate_polls_and_concurrent_token_dispatch(tmp_path):

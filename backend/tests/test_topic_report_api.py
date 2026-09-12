@@ -4,12 +4,13 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from summary_fixtures import seed_run
 from test_content_analysis_api import body, saved
 from topic_report_fixtures import api_environment, finish, interval_request
 
-from longtian_api.services.ai_errors import AI_ERROR_CONTRACTS
-from longtian_api.services.analysis_errors import ERRORS as ANALYSIS_ERRORS
-from longtian_api.services.topic_report_errors import ERRORS
+from opinion_workbench_api.services.ai_errors import AI_ERROR_CONTRACTS
+from opinion_workbench_api.services.analysis_errors import ERRORS as ANALYSIS_ERRORS
+from opinion_workbench_api.services.topic_report_errors import ERRORS
 
 
 def assert_error(response, code):
@@ -30,6 +31,89 @@ def initial_report(client, app, database):
     assert report.status_code == 202, report.text
     client.portal.call(finish, app.state.topic_report_service)
     return client.get(f"/api/v1/topic-reports/{report.json()['id']}").json()
+
+
+def test_cross_batch_report_selection_keeps_operator_prompts_independent(tmp_path):
+    app, db, model, _ = api_environment(tmp_path, count=0)
+    first_run = seed_run(
+        db,
+        count=1,
+        rule_name="第一批合成规则",
+        terms=("第一批对象",),
+        start=1000,
+    )
+    second_run = seed_run(
+        db,
+        count=1,
+        rule_name="第二批合成规则",
+        terms=("第二批对象",),
+        start=2000,
+    )
+    initial_instructions = "总结阶段只提取来源文字中的时间和地点线索。"
+    report_instructions = "报告阶段只关注操作者指定的主题边界，保留跨批次来源归属。"
+
+    with TestClient(app, base_url="http://127.0.0.1") as client:
+        saved(client)
+        source_runs = {
+            client.get(f"/api/v1/results/{result_id}/origins").json()["items"][0][
+                "source_run_id"
+            ]
+            for result_id in (1, 2)
+        }
+        assert len(source_runs) == 2 and source_runs == {first_run, second_run}
+
+        analysis = client.post(
+            "/api/v1/content-analysis-jobs",
+            json=body(
+                client,
+                initial_prompt={
+                    "mode": "custom",
+                    "instructions": initial_instructions,
+                },
+                selection={"kind": "explicit", "result_ids": [1, 2]},
+            ),
+        )
+        assert analysis.status_code == 202, analysis.text
+        client.portal.call(finish, app.state.content_analysis_service)
+        initial_systems = [
+            messages[0]["content"]
+            for stage, messages in model.calls
+            if stage == "initial"
+        ]
+        assert initial_systems and all(
+            initial_instructions in text for text in initial_systems
+        )
+        assert all(report_instructions not in text for text in initial_systems)
+
+        report = client.post(
+            "/api/v1/topic-reports",
+            json=interval_request(
+                db,
+                selection={"kind": "explicit", "result_ids": [1, 2]},
+                report_prompt={"mode": "custom", "instructions": report_instructions},
+            ).model_dump(exclude_none=True),
+        )
+        assert report.status_code == 202, report.text
+        client.portal.call(finish, app.state.topic_report_service)
+        stored = client.get(f"/api/v1/topic-reports/{report.json()['id']}").json()
+        assert stored["status"] == "completed"
+        assert stored["selection"] == {"kind": "explicit", "result_ids": [1, 2]}
+        assert stored["prompt"]["instructions"] == report_instructions
+
+        report_systems = [
+            messages[0]["content"]
+            for stage, messages in model.calls
+            if stage in {"judgment", "leaf", "overview"}
+        ]
+        assert report_systems and all(
+            text.endswith(report_instructions) for text in report_systems
+        )
+        assert all(initial_instructions not in text for text in report_systems)
+        assert all(
+            object_name not in text
+            for text in report_systems
+            for object_name in ("第一批对象", "第二批对象")
+        )
 
 
 def test_explicit_report_selection_frozen_pages_and_new_version_ids(tmp_path):

@@ -574,7 +574,7 @@ describe('automatic second-stage report views', () => {
       await screen.findByRole('button', { name: '用其他提示词重新生成' }),
     )
     const input = screen.getByRole('textbox', {
-      name: '相关性判断与报告提示词',
+      name: '报告提示词',
     })
     await user.clear(input)
     await user.type(input, '  本次只整理道路信息，保留不确定性。')
@@ -658,7 +658,7 @@ describe('automatic second-stage report views', () => {
       await screen.findByRole('button', { name: '用其他提示词重新生成' }),
     )
     const input = screen.getByRole('textbox', {
-      name: '相关性判断与报告提示词',
+      name: '报告提示词',
     })
     await user.clear(input)
     await user.type(input, '草稿必须保留')

@@ -8,30 +8,66 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fixture_support import initialize_database
 from pydantic import ValidationError
 
-from longtian_api import database as database_migrations
-from longtian_api.database import CURRENT_DATABASE_VERSION, Database
-from longtian_api.repositories.analysis_settings import (
+from opinion_workbench_api import database as database_migrations
+from opinion_workbench_api.database import CURRENT_DATABASE_VERSION, Database
+from opinion_workbench_api.repositories.analysis_settings import (
     prompt_snapshot,
     resolve_prompt_choice,
 )
-from longtian_api.repositories.automation_workflows import (
+from opinion_workbench_api.repositories.automation_workflows import (
     AutomationWorkflowRepository,
 )
-from longtian_api.repositories.topic_reports import TopicReportRepository
-from longtian_api.schemas.analysis_settings import (
+from opinion_workbench_api.repositories.topic_reports import TopicReportRepository
+from opinion_workbench_api.schemas.analysis_settings import (
     DEFAULT_INITIAL_INSTRUCTIONS,
     DEFAULT_REPORT_INSTRUCTIONS,
     PromptChoiceCustom,
     PromptSnapshot,
 )
-from longtian_api.schemas.automation_workflows import (
+from opinion_workbench_api.schemas.automation_workflows import (
     AutomationSnapshot,
     AutomationTaskCreate,
 )
-from longtian_api.services.analysis_errors import AnalysisError
-from longtian_api.services.monitoring_rules import MonitoringRuleService
+from opinion_workbench_api.schemas.monitoring_rules import MonitoringRuleCreate
+from opinion_workbench_api.services.analysis_errors import AnalysisError
+from opinion_workbench_api.services.monitoring_rules import MonitoringRuleService
+
+
+def _seed_rule(database: Database) -> None:
+    service = MonitoringRuleService(database_path=database.path)
+    service.initialize()
+    service.create_rule(
+        MonitoringRuleCreate(
+            name="测试采集规则",
+            monitoring_objects=["测试对象"],
+            issue_keywords=[],
+            enabled=True,
+        )
+    )
+
+
+def test_fresh_workspace_seeds_neutral_prompts_and_no_rules(tmp_path: Path):
+    database = Database(tmp_path / "fresh.sqlite3")
+    database.initialize()
+
+    assert MonitoringRuleService(database_path=database.path).list_rules().rules == []
+    with database.connect() as connection:
+        defaults = connection.execute(
+            "SELECT stage,instructions FROM analysis_prompt_versions "
+            "WHERE stage IN ('initial','report') ORDER BY stage"
+        ).fetchall()
+
+    assert [(row[0], row[1]) for row in defaults] == [
+        ("initial", DEFAULT_INITIAL_INSTRUCTIONS),
+        ("report", DEFAULT_REPORT_INSTRUCTIONS),
+    ]
+    assert not any(
+        forbidden in " ".join(row[1] for row in defaults)
+        for forbidden in ("龙田", "竹坑", "老坑", "南布")
+    )
 
 
 def test_prompt_choices_reject_blank_unsafe_or_oversized_custom_text():
@@ -65,7 +101,7 @@ def test_prompt_choice_resolution_reuses_versions_but_preserves_custom_mode(
     tmp_path: Path,
 ):
     database = Database(tmp_path / "prompts.sqlite3")
-    database.initialize()
+    initialize_database(database)
     with database.connect() as connection:
         default = resolve_prompt_choice(connection, "report", {"mode": "default"})
         custom_equal_default = resolve_prompt_choice(
@@ -87,7 +123,7 @@ def test_prompt_choice_resolution_reuses_versions_but_preserves_custom_mode(
 
 def test_prompt_choice_resolution_rejects_ambiguous_mapping(tmp_path: Path):
     database = Database(tmp_path / "strict-prompts.sqlite3")
-    database.initialize()
+    initialize_database(database)
     with database.connect() as connection:
         with pytest.raises(AnalysisError, match="invalid_analysis_prompt"):
             resolve_prompt_choice(
@@ -101,7 +137,7 @@ def test_prompt_choice_resolution_fails_closed_on_default_hash_collision(
     tmp_path: Path,
 ):
     database = Database(tmp_path / "default-collision.sqlite3")
-    database.initialize()
+    initialize_database(database)
     with database.connect() as connection:
         default = connection.execute(
             "SELECT content_hash FROM analysis_prompt_versions "
@@ -130,7 +166,7 @@ def test_prompt_choice_resolution_fails_closed_on_default_hash_collision(
 
 def test_automation_task_persists_both_prompt_choices(tmp_path: Path):
     database = Database(tmp_path / "automation-prompts.sqlite3")
-    MonitoringRuleService(database_path=database.path).initialize()
+    _seed_rule(database)
     repository = AutomationWorkflowRepository(database)
     task = repository.create_task(
         AutomationTaskCreate.model_validate(
@@ -171,7 +207,7 @@ def test_automation_task_persists_both_prompt_choices(tmp_path: Path):
 
 def test_pre_v18_run_snapshot_is_adapted_without_rewriting_history(tmp_path: Path):
     database = Database(tmp_path / "legacy-run.sqlite3")
-    MonitoringRuleService(database_path=database.path).initialize()
+    _seed_rule(database)
     repository = AutomationWorkflowRepository(database)
     task = repository.create_task(
         AutomationTaskCreate.model_validate(
@@ -261,7 +297,7 @@ def test_pre_v18_run_snapshot_is_adapted_without_rewriting_history(tmp_path: Pat
 
 def test_pre_v18_report_prompt_is_adapted_without_rewriting_history(tmp_path: Path):
     database = Database(tmp_path / "legacy-report.sqlite3")
-    database.initialize()
+    initialize_database(database)
     request_id = "123e4567-e89b-42d3-a456-426614174000"
     with database.connect() as connection:
         report_id = connection.execute(
@@ -300,7 +336,7 @@ def test_pre_v18_report_prompt_is_adapted_without_rewriting_history(tmp_path: Pa
 
 def test_legacy_workflow_goal_preserves_report_version_reference(tmp_path: Path):
     database = Database(tmp_path / "legacy-workflow.sqlite3")
-    database.initialize()
+    initialize_database(database)
     with database.connect() as connection:
         initial = connection.execute(
             "SELECT id FROM analysis_prompt_versions "
@@ -331,7 +367,7 @@ def test_legacy_workflow_goal_preserves_report_version_reference(tmp_path: Path)
 def test_workflow_preserves_custom_source_when_text_matches_default(tmp_path: Path):
     from initial_analysis_fixtures import environment, finish
 
-    from longtian_api.repositories.analysis_settings import (
+    from opinion_workbench_api.repositories.analysis_settings import (
         AnalysisSettingsRepository,
     )
 
@@ -405,7 +441,7 @@ def test_v18_backfills_legacy_automation_prompt_choices(tmp_path: Path):
             ),
         )
 
-    database.initialize()
+    initialize_database(database)
     with database.connect() as connection:
         row = connection.execute(
             """SELECT initial_prompt_mode,initial_prompt_version_id,
@@ -444,7 +480,7 @@ def test_v18_failure_rolls_back_prompt_columns_and_backfill(
 ):
     from test_topic_report_migrations import populated_v13
 
-    import longtian_api.migrations.automation_workflows_v18 as migration
+    import opinion_workbench_api.migrations.automation_workflows_v18 as migration
 
     database = populated_v13(tmp_path)
     with database.connect() as connection:
@@ -481,7 +517,7 @@ def test_v18_failure_rolls_back_prompt_columns_and_backfill(
 
     monkeypatch.setattr(migration, "migrate", fail)
     with pytest.raises(RuntimeError, match="v18 failure"):
-        database.initialize()
+        initialize_database(database)
 
     with database.connect() as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 17

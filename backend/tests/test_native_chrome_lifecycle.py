@@ -6,18 +6,22 @@ import socket
 
 import pytest
 from fastapi.testclient import TestClient
+from fixture_support import create_test_rule
 from test_native_weibo_discovery import CARD, _VirtualPacingClock
 from test_search_runs import _wait_for_terminal
 
-from longtian_api.main import create_app
-from longtian_api.services.monitoring_rules import MonitoringRuleService
-from longtian_api.services.native_chrome import ManagedChrome
-from longtian_api.services.native_weibo import NativeWeiboCollector
-from longtian_api.services.platform_access import (
+from opinion_workbench_api.database import Database
+from opinion_workbench_api.main import create_app
+from opinion_workbench_api.services.monitoring_rules import MonitoringRuleService
+from opinion_workbench_api.services.native_chrome import ManagedChrome
+from opinion_workbench_api.services.native_weibo import NativeWeiboCollector
+from opinion_workbench_api.services.platform_access import (
     PlatformAccessCoordinator,
     PlatformAccessService,
 )
-from longtian_api.services.platform_connections import PlatformConnectionService
+from opinion_workbench_api.services.platform_connections import (
+    PlatformConnectionService,
+)
 
 
 @pytest.mark.parametrize("alive", [False, True])
@@ -34,7 +38,9 @@ def test_local_chrome_lock_recovery_requires_dead_owner(tmp_path, monkeypatch, a
             raise ProcessLookupError()
 
     monkeypatch.setattr(os, "kill", probe)
-    from longtian_api.services.native_browser_contracts import BrowserUnavailable
+    from opinion_workbench_api.services.native_browser_contracts import (
+        BrowserUnavailable,
+    )
 
     if alive:
         with pytest.raises(BrowserUnavailable):
@@ -53,7 +59,9 @@ def test_stale_cleanup_removes_only_links_and_retains_login_files(
     profile.mkdir(parents=True, mode=0o700)
     (profile / "SingletonLock").symlink_to(f"{socket.gethostname()}-12345")
     (profile / "SingletonCookie").symlink_to("cookie-marker")
-    (profile / "SingletonSocket").symlink_to("/tmp/longtian-test-nonexistent-socket")
+    (profile / "SingletonSocket").symlink_to(
+        "/tmp/opinion-workbench-test-nonexistent-socket"
+    )
     marker = profile / "Login Data"
     marker.write_text("retained-fixture")
 
@@ -70,11 +78,13 @@ def test_stale_cleanup_removes_only_links_and_retains_login_files(
         for name in ("SingletonLock", "SingletonCookie", "SingletonSocket")
     )
     assert marker.read_text() == "retained-fixture"
-    assert (profile / ".longtian-browser-owner.lock").is_file()
+    assert (profile / ".opinion-workbench-browser-owner.lock").is_file()
 
 
 def test_live_socket_blocks_cleanup_even_if_lock_pid_is_dead(tmp_path, monkeypatch):
-    from longtian_api.services.native_browser_contracts import BrowserUnavailable
+    from opinion_workbench_api.services.native_browser_contracts import (
+        BrowserUnavailable,
+    )
 
     profile = tmp_path / "runtime/browser/managed-chrome"
     profile.mkdir(parents=True, mode=0o700)
@@ -106,6 +116,9 @@ def test_live_socket_blocks_cleanup_even_if_lock_pid_is_dead(tmp_path, monkeypat
 
 
 def test_native_browser_refuses_daily_profile_without_starting_a_process(tmp_path):
+    database = Database(tmp_path / "db.sqlite3")
+    database.initialize()
+    create_test_rule(database, monitoring_objects=("测试对象",))
     launched = []
 
     async def launch(*args, **kwargs):
@@ -271,6 +284,9 @@ def test_shutdown_settles_owned_process_even_when_sdk_cleanup_fails(tmp_path, fa
 def test_collection_uses_normal_browser_loading_and_owns_only_dedicated_process(
     tmp_path,
 ):
+    database = Database(tmp_path / "db.sqlite3")
+    database.initialize()
+    create_test_rule(database, monitoring_objects=("测试对象",))
     profile = tmp_path / "runtime/browser/managed-chrome"
     profile.mkdir(parents=True, mode=0o700)
     marker = profile / "keep-login-fixture"
@@ -354,6 +370,9 @@ def test_first_browser_window_shows_a_blank_tab(tmp_path):
 def test_unsafe_or_already_owned_profile_is_not_repaired_or_launched(
     tmp_path, obstacle
 ):
+    database = Database(tmp_path / "db.sqlite3")
+    database.initialize()
+    create_test_rule(database, monitoring_objects=("测试对象",))
     profile = tmp_path / "runtime/browser/managed-chrome"
     profile.mkdir(parents=True, mode=0o700)
     marker = profile / "user-marker"
@@ -390,7 +409,7 @@ def test_unsafe_or_already_owned_profile_is_not_repaired_or_launched(
 
 
 def test_legacy_collector_backend_is_rejected(tmp_path, monkeypatch):
-    monkeypatch.setenv("LONGTIAN_COLLECTOR_BACKEND", "legacy")
+    monkeypatch.setenv("OPINION_WORKBENCH_COLLECTOR_BACKEND", "legacy")
     with pytest.raises(ValueError, match="Unsupported collector backend"):
         PlatformConnectionService(
             browser_profile_dir=tmp_path / "runtime" / "browser" / "managed-chrome"
@@ -406,7 +425,9 @@ def test_legacy_collector_backend_is_rejected(tmp_path, monkeypatch):
     ],
 )
 def test_application_navigation_stays_on_selected_platforms(tmp_path, external):
-    from longtian_api.services.native_browser_contracts import BrowserUnavailable
+    from opinion_workbench_api.services.native_browser_contracts import (
+        BrowserUnavailable,
+    )
 
     async def run():
         profile = tmp_path / "runtime/browser/managed-chrome"

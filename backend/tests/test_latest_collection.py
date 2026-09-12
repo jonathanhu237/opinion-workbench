@@ -7,21 +7,22 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from fastapi.testclient import TestClient
+from fixture_support import initialize_database
 from test_automation_workflows import _repository, _task_payload
 from test_native_weibo_discovery import EMPTY, BrowserFixture, card, environment
 from test_search_batches import _control, _wait_for_batch
 from test_search_recovery import _item, control
 from test_search_runs import _wait_for_terminal
 
-from longtian_api.database import Database
-from longtian_api.repositories.search_batches import SearchBatchRepository
-from longtian_api.repositories.search_runs import (
+from opinion_workbench_api.database import Database
+from opinion_workbench_api.repositories.search_batches import SearchBatchRepository
+from opinion_workbench_api.repositories.search_runs import (
     SearchRunNotActiveError,
     SearchRunRepository,
 )
-from longtian_api.schemas.automation_workflows import AutomationTaskReplace
-from longtian_api.services.native_weibo import NativeWeiboCollector
-from longtian_api.services.weibo_dom import read_search_page
+from opinion_workbench_api.schemas.automation_workflows import AutomationTaskReplace
+from opinion_workbench_api.services.native_weibo import NativeWeiboCollector
+from opinion_workbench_api.services.weibo_dom import read_search_page
 
 A, B, C, D = (str(5012345678901234 + i) for i in range(4))
 
@@ -192,7 +193,7 @@ def test_batch_manual_recovery_shares_frozen_cap_and_prior_ids(tmp_path):
 
 def test_repository_fences_total_limit_including_previous_attempt(tmp_path):
     db = Database(tmp_path / "cap.sqlite3")
-    db.initialize()
+    initialize_database(db)
     batches, runs = SearchBatchRepository(db), SearchRunRepository(db)
     batch = batches.create_batch(
         monitoring_rule_id=1,
@@ -254,8 +255,10 @@ def test_automation_total_limit_is_saved_replaced_and_legacy_is_distinct(tmp_pat
 def test_automation_freezes_total_limit_and_passes_it_to_collection(tmp_path):
     from test_automation_workflows import REQUEST, _FakeBatch, _NoModel, _NoReport
 
-    from longtian_api.schemas.automation_workflows import AutomationRunNow
-    from longtian_api.services.automation_workflows import AutomationWorkflowService
+    from opinion_workbench_api.schemas.automation_workflows import AutomationRunNow
+    from opinion_workbench_api.services.automation_workflows import (
+        AutomationWorkflowService,
+    )
 
     async def run():
         database, rules, repository = _repository(tmp_path)

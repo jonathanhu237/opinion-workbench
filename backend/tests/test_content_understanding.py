@@ -4,14 +4,17 @@ import json
 from dataclasses import replace
 
 import pytest
+from fixture_support import initialize_database
 from initial_analysis_fixtures import UNDERSTANDING
 from test_ai_analysis import CONFIGURATION, KEY, USAGE, enriched_item
 
-from longtian_api.database import Database
-from longtian_api.repositories.analysis_settings import AnalysisSettingsRepository
-from longtian_api.services.ai_analysis import AIAnalysisError
-from longtian_api.services.ai_client import AICompletion
-from longtian_api.services.content_understanding import (
+from opinion_workbench_api.database import Database
+from opinion_workbench_api.repositories.analysis_settings import (
+    AnalysisSettingsRepository,
+)
+from opinion_workbench_api.services.ai_analysis import AIAnalysisError
+from opinion_workbench_api.services.ai_client import AICompletion
+from opinion_workbench_api.services.content_understanding import (
     build_understanding_messages,
     parse_understanding,
 )
@@ -27,7 +30,7 @@ from longtian_api.services.content_understanding import (
 )
 def test_same_neutral_contract_omits_media_and_keeps_exact_prompt(tmp_path, assets):
     database = Database(tmp_path / "prompt.sqlite3")
-    database.initialize()
+    initialize_database(database)
     prompt = AnalysisSettingsRepository(database).read().initial_prompt
     item = enriched_item(assets=assets)
     messages = build_understanding_messages(CONFIGURATION, item, prompt)
@@ -105,7 +108,7 @@ def test_credential_and_changed_byte_rejection(tmp_path):
             api_key=CONFIGURATION.api_key,
         )
     database = Database(tmp_path / "prompt.sqlite3")
-    database.initialize()
+    initialize_database(database)
     prompt = AnalysisSettingsRepository(database).read().initial_prompt
     item = enriched_item(assets=(("image", "image/png", b"verified"),))
     changed = replace(item, media=(replace(item.media[0], data=b"tampered"),))

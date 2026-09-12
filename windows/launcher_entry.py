@@ -1,4 +1,4 @@
-from longtian_api.launcher import main
+from opinion_workbench_api.launcher import main
 
 
 if __name__ == "__main__":

@@ -8,9 +8,9 @@ import pytest
 from test_native_weibo_discovery import BrowserFixture
 from test_platform_search_cards import XHS
 
-from longtian_api.services.native_browser_contracts import BrowserUnavailable
-from longtian_api.services.native_chrome import ManagedChrome
-from longtian_api.services.native_weibo import NativeWeiboCollector
+from opinion_workbench_api.services.native_browser_contracts import BrowserUnavailable
+from opinion_workbench_api.services.native_chrome import ManagedChrome
+from opinion_workbench_api.services.native_weibo import NativeWeiboCollector
 
 
 @pytest.mark.parametrize("enabled", [True, False])

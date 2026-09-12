@@ -8,24 +8,28 @@ from urllib.parse import quote_plus, urlencode
 
 import pytest
 from fastapi.testclient import TestClient
+from fixture_support import create_test_rule
 from test_search_batches import _control, _wait_for_batch
 from test_search_runs import _wait_for_terminal
 
-from longtian_api.main import create_app
-from longtian_api.services.ai_settings import AISettingsService
-from longtian_api.services.collector_contracts import AuthWorkerResult
-from longtian_api.services.monitoring_rules import MonitoringRuleService
-from longtian_api.services.native_weibo import (
+from opinion_workbench_api.database import Database
+from opinion_workbench_api.main import create_app
+from opinion_workbench_api.services.ai_settings import AISettingsService
+from opinion_workbench_api.services.collector_contracts import AuthWorkerResult
+from opinion_workbench_api.services.monitoring_rules import MonitoringRuleService
+from opinion_workbench_api.services.native_weibo import (
     NativeWeiboCollector,
     _classify_connection_page,
     _generic_detail_text,
 )
-from longtian_api.services.platform_access import (
+from opinion_workbench_api.services.platform_access import (
     PlatformAccessCoordinator,
     PlatformAccessService,
 )
-from longtian_api.services.platform_connections import PlatformConnectionService
-from longtian_api.services.weibo_dom import barrier, document, read_search_page
+from opinion_workbench_api.services.platform_connections import (
+    PlatformConnectionService,
+)
+from opinion_workbench_api.services.weibo_dom import barrier, document, read_search_page
 
 CARD = """<div class="card-wrap" action-type="feed_list_item" mid="3501756485200075">
   <div class="content"><a class="name" href="//weibo.com/1234567890">样本发布者</a>
@@ -234,6 +238,14 @@ class _VirtualPacingClock:
 
 
 def environment(tmp_path, pages, *, model=None, **runtime_options):
+    database_path = tmp_path / "db.sqlite3"
+    database = Database(database_path)
+    database.initialize()
+    create_test_rule(
+        database,
+        name="网页采集回归规则",
+        monitoring_objects=("龙田街道", "龙田社区", "老坑社区", "竹坑社区", "南布社区"),
+    )
     # These fixtures explicitly cover the historical comprehensive-search DOM.
     # Latest-first default/per-term behavior is exercised in test_latest_collection.
     runtime_options.setdefault("latest_first", False)
@@ -255,7 +267,7 @@ def environment(tmp_path, pages, *, model=None, **runtime_options):
             ),
         ),
         monitoring_rule_service_factory=lambda: MonitoringRuleService(
-            database_path=tmp_path / "db.sqlite3"
+            database_path=database_path
         ),
         ai_settings_service_factory=(
             (lambda db: AISettingsService(db, client=model)) if model else None
@@ -333,7 +345,9 @@ def test_open_browser_failure_is_sanitized_and_releases_admission(tmp_path):
     app, browser = environment(tmp_path, [EMPTY])
 
     async def fail_show():
-        from longtian_api.services.native_browser_contracts import BrowserUnavailable
+        from opinion_workbench_api.services.native_browser_contracts import (
+            BrowserUnavailable,
+        )
 
         raise BrowserUnavailable()
 

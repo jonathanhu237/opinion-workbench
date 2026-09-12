@@ -5,22 +5,27 @@ import json
 from pathlib import Path
 
 from enrichment_fixtures import PNG, content_payload, image_asset, write_file
+from fixture_support import initialize_database
 from pydantic import SecretStr
 
-from longtian_api.database import Database
-from longtian_api.repositories.search_runs import (
+from opinion_workbench_api.database import Database
+from opinion_workbench_api.repositories.search_runs import (
     SearchContentInput,
     SearchRunRepository,
 )
-from longtian_api.schemas.ai_settings import AISettingsUpdate
-from longtian_api.services.ai_client import AICompletion, AIUsage
-from longtian_api.services.ai_settings import AISettingsService
-from longtian_api.services.ai_summaries import SummaryService
-from longtian_api.services.browser_operations import BrowserOperationCoordinator
-from longtian_api.services.collector_contracts import EnrichmentWorkerResult
-from longtian_api.services.content_enrichment import ContentEnrichmentService
-from longtian_api.services.enrichment_models import EnrichedContent
-from longtian_api.services.enrichment_staging import MediaSpool
+from opinion_workbench_api.schemas.ai_settings import AISettingsUpdate
+from opinion_workbench_api.schemas.monitoring_rules import MonitoringRuleCreate
+from opinion_workbench_api.services.ai_client import AICompletion, AIUsage
+from opinion_workbench_api.services.ai_settings import AISettingsService
+from opinion_workbench_api.services.ai_summaries import SummaryService
+from opinion_workbench_api.services.browser_operations import (
+    BrowserOperationCoordinator,
+)
+from opinion_workbench_api.services.collector_contracts import EnrichmentWorkerResult
+from opinion_workbench_api.services.content_enrichment import ContentEnrichmentService
+from opinion_workbench_api.services.enrichment_models import EnrichedContent
+from opinion_workbench_api.services.enrichment_staging import MediaSpool
+from opinion_workbench_api.services.monitoring_rules import MonitoringRuleService
 
 KEY = "synthetic-summary-secret-never-public"
 BASE = "https://dashscope.aliyuncs.com/compatible-mode/v1"
@@ -42,6 +47,16 @@ def seed_run(
     terms=("对象", "另一个对象", "第三个对象"),
     start=1000,
 ):
+    rule_service = MonitoringRuleService(database_path=database.path)
+    if not rule_service.list_rules().rules:
+        rule_service.create_rule(
+            MonitoringRuleCreate(
+                name=rule_name,
+                monitoring_objects=list(terms),
+                issue_keywords=[],
+                enabled=True,
+            )
+        )
     repository = SearchRunRepository(database)
     run = repository.create_run(
         monitoring_rule_id=1,
@@ -186,7 +201,7 @@ class ModelClient:
 
 def environment(tmp_path: Path, *, count=1, media=True):
     database = Database(tmp_path / "summary.sqlite3")
-    database.initialize()
+    initialize_database(database)
     source_run_id = seed_run(database, count)
     client = ModelClient()
     settings = AISettingsService(database, client=client)

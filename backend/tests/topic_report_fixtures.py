@@ -14,9 +14,9 @@ from initial_analysis_fixtures import (
 )
 from summary_fixtures import KEY, USAGE, seed_run
 
-from longtian_api.schemas.topic_reports import ReportCreate, ReportRetry
-from longtian_api.services.ai_client import AICompletion
-from longtian_api.services.topic_reports import TopicReportService
+from opinion_workbench_api.schemas.topic_reports import ReportCreate, ReportRetry
+from opinion_workbench_api.services.ai_client import AICompletion
+from opinion_workbench_api.services.topic_reports import TopicReportService
 
 
 class TextPipelineClient:

@@ -130,7 +130,7 @@ function getConnectionPanel() {
   return panel
 }
 
-describe('Longtian public opinion application', () => {
+describe('OpinionWorkbench public opinion application', () => {
   beforeEach(() => {
     mockedFetchHealth.mockReset().mockResolvedValue(connectedResponse)
     mockedFetchAISettings.mockReset().mockResolvedValue({

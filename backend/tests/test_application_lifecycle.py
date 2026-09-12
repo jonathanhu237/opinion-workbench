@@ -7,11 +7,11 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
-from longtian_api import launcher as launcher_module
-from longtian_api.launcher import LauncherConfig, LaunchError, LocalApplication
-from longtian_api.main import create_app
-from longtian_api.services.application_lifecycle import ApplicationLifecycle
-from longtian_api.services.monitoring_rules import MonitoringRuleService
+from opinion_workbench_api import launcher as launcher_module
+from opinion_workbench_api.launcher import LauncherConfig, LaunchError, LocalApplication
+from opinion_workbench_api.main import create_app
+from opinion_workbench_api.services.application_lifecycle import ApplicationLifecycle
+from opinion_workbench_api.services.monitoring_rules import MonitoringRuleService
 
 
 def test_empty_page_shutdown_waits_for_grace_and_refresh_keeps_process_alive():
@@ -59,7 +59,7 @@ def test_multiple_pages_only_expire_after_the_last_page_releases():
 def test_packaged_entry_serves_static_api_and_requires_local_same_origin(tmp_path):
     static = tmp_path / "static"
     static.mkdir()
-    (static / "index.html").write_text("<!doctype html><title>Longtian</title>")
+    (static / "index.html").write_text("<!doctype html><title>OpinionWorkbench</title>")
     (static / "assets").mkdir()
     app = create_app(
         static_dir=static,

@@ -8,11 +8,13 @@ from initial_analysis_fixtures import UNDERSTANDING
 from test_content_analysis_api import body, saved
 from topic_report_fixtures import api_environment, finish
 
-from longtian_api.repositories.analysis_shared import source_snapshot
-from longtian_api.repositories.content_materials import ContentMaterialRepository
-from longtian_api.schemas.report_generations import GenerationCreate
-from longtian_api.services import topic_report_engine
-from longtian_api.services.enrichment_models import EnrichedContent
+from opinion_workbench_api.repositories.analysis_shared import source_snapshot
+from opinion_workbench_api.repositories.content_materials import (
+    ContentMaterialRepository,
+)
+from opinion_workbench_api.schemas.report_generations import GenerationCreate
+from opinion_workbench_api.services import topic_report_engine
+from opinion_workbench_api.services.enrichment_models import EnrichedContent
 
 
 def generation_request(ids):

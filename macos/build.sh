@@ -17,21 +17,21 @@ mise x -- pnpm install --frozen-lockfile
 VITE_LIFECYCLE_ENABLED=1 mise x -- pnpm build
 cd "$ROOT/backend"
 mise x -- uv sync --locked
-mise x -- uv run --locked --python 3.11 --with pyinstaller==6.16.0 pyinstaller "$ROOT/windows/longtian.spec" --noconfirm --clean --distpath "$BUILD/app" --workpath "$BUILD/pyinstaller"
-APP="$BUILD/app/Longtian"
-test -x "$APP/Longtian"
-test -x "$APP/LongtianGalleryWorker"
+mise x -- uv run --locked --python 3.11 --with pyinstaller==6.16.0 pyinstaller "$ROOT/windows/opinion-workbench.spec" --noconfirm --clean --distpath "$BUILD/app" --workpath "$BUILD/pyinstaller"
+APP="$BUILD/app/OpinionWorkbench"
+test -x "$APP/OpinionWorkbench"
+test -x "$APP/OpinionWorkbenchGalleryWorker"
 test -f "$APP/_internal/resources/static/index.html"
 cp "$ROOT/macos/启动.command" "$APP/启动.command"
 cp "$ROOT/macos/README.txt" "$APP/README.txt"
-chmod +x "$APP/启动.command" "$APP/Longtian" "$APP/LongtianGalleryWorker"
+chmod +x "$APP/启动.command" "$APP/OpinionWorkbench" "$APP/OpinionWorkbenchGalleryWorker"
 ARCH=$(uname -m)
 test "$ARCH" = arm64
-for executable in "$APP/Longtian" "$APP/LongtianGalleryWorker"; do
+for executable in "$APP/OpinionWorkbench" "$APP/OpinionWorkbenchGalleryWorker"; do
   [[ "$(lipo -archs "$executable")" == arm64 ]] || { echo 'wrong executable architecture' >&2; exit 1; }
 done
 printf 'version=%s\nsource=%s\narchitecture=arm64\nminimum_macos=14.0\n' "$VERSION" "$SOURCE" > "$APP/BUILD-METADATA.txt"
-ZIP="$OUT/Longtian-${VERSION}-macOS-arm64.zip"
+ZIP="$OUT/OpinionWorkbench-${VERSION}-macOS-arm64.zip"
 mise x -- uv run --locked python "$ROOT/scripts/package_portable_zip.py" "$APP" "$ZIP"
 shasum -a 256 "$ZIP" | awk -v f="$(basename "$ZIP")" '{print $1 "  " f}' > "$ZIP.sha256"
 printf 'macOS arm64 artifact: %s\n' "$ZIP"

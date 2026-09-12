@@ -7,37 +7,43 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from fixture_support import (
+    create_test_rule,
+    initialize_database,
+    initialize_monitoring_rules,
+    initialize_repository,
+)
 
-import longtian_api.database as database_module
-from longtian_api.database import (
+import opinion_workbench_api.database as database_module
+from opinion_workbench_api.database import (
     CURRENT_DATABASE_VERSION,
     Database,
     _migrate_to_version_1,
 )
-from longtian_api.main import create_app
-from longtian_api.repositories.search_runs import (
+from opinion_workbench_api.main import create_app
+from opinion_workbench_api.repositories.search_runs import (
     SearchContentInput,
     SearchResultNotFoundError,
     SearchRunNotActiveError,
     SearchRunRepository,
     SearchRunRepositoryUnavailableError,
 )
-from longtian_api.schemas.search_runs import SearchRunCreate, SearchRunSummary
-from longtian_api.services.browser_operations import (
+from opinion_workbench_api.schemas.search_runs import SearchRunCreate, SearchRunSummary
+from opinion_workbench_api.services.browser_operations import (
     BrowserOperationCoordinator,
     BrowserOperationOwner,
 )
-from longtian_api.services.collector_contracts import (
+from opinion_workbench_api.services.collector_contracts import (
     OpenResultWorkerResult,
     SearchWorkerItem,
     SearchWorkerResult,
 )
-from longtian_api.services.monitoring_rules import MonitoringRuleService
-from longtian_api.services.platform_connections import (
+from opinion_workbench_api.services.monitoring_rules import MonitoringRuleService
+from opinion_workbench_api.services.platform_connections import (
     PlatformConnectionError,
     PlatformConnectionService,
 )
-from longtian_api.services.search_runs import SearchRunError, SearchRunService
+from opinion_workbench_api.services.search_runs import SearchRunError, SearchRunService
 
 
 def _content(
@@ -96,7 +102,7 @@ def test_repository_open_target_proves_relation_and_original_term_order(
     tmp_path: Path,
 ) -> None:
     repository = SearchRunRepository(Database(tmp_path / "open-target.sqlite3"))
-    repository.initialize()
+    initialize_repository(repository)
     run = repository.create_run(
         monitoring_rule_id=1,
         platform="wb",
@@ -131,7 +137,7 @@ def test_repository_finish_persists_failure_reason_with_terminal_state(
 ) -> None:
     database = Database(tmp_path / "failure-reason.sqlite3")
     repository = SearchRunRepository(database)
-    repository.initialize()
+    initialize_repository(repository)
     run = repository.create_run(
         monitoring_rule_id=1,
         platform="wb",
@@ -167,7 +173,7 @@ def test_repository_rejects_failure_reason_for_non_structure_status(
 ) -> None:
     database = Database(tmp_path / "invalid-failure-reason.sqlite3")
     repository = SearchRunRepository(database)
-    repository.initialize()
+    initialize_repository(repository)
     run = repository.create_run(
         monitoring_rule_id=1,
         platform="wb",
@@ -191,7 +197,7 @@ def test_repository_rejects_failure_reason_for_non_structure_status(
 
 
 def test_projected_terminal_rejects_failure_reason_for_non_structure_status() -> None:
-    from longtian_api.services.search_runs import ProjectedSearchTerminal
+    from opinion_workbench_api.services.search_runs import ProjectedSearchTerminal
 
     with pytest.raises(ValueError, match="failure_reason"):
         ProjectedSearchTerminal(
@@ -246,7 +252,7 @@ def test_sqlite_check_rejects_invalid_failure_reason_pair(
 ) -> None:
     database = Database(tmp_path / f"sqlite-check-{status}.sqlite3")
     repository = SearchRunRepository(database)
-    repository.initialize()
+    initialize_repository(repository)
     run = repository.create_run(
         monitoring_rule_id=1,
         platform="wb",
@@ -272,7 +278,7 @@ def test_repository_preserves_cross_term_and_cross_run_deduplication(
 ) -> None:
     database = Database(tmp_path / "search.sqlite3")
     repository = SearchRunRepository(database)
-    repository.initialize()
+    initialize_repository(repository)
 
     first = repository.create_run(
         monitoring_rule_id=1,
@@ -357,7 +363,7 @@ def test_migration_reconciliation_rule_deletion_and_failed_item_rollback(
 ) -> None:
     database = Database(tmp_path / "migrate.sqlite3")
     repository = SearchRunRepository(database)
-    repository.initialize()
+    initialize_repository(repository)
     queued = repository.create_run(
         monitoring_rule_id=1,
         platform="wb",
@@ -367,7 +373,7 @@ def test_migration_reconciliation_rule_deletion_and_failed_item_rollback(
     )
 
     reopened = SearchRunRepository(database)
-    reopened.initialize()
+    initialize_repository(reopened)
     assert reopened.get(queued.id).status == "internal_error"
     assert reopened.get(queued.id).finished_at is not None
 
@@ -496,7 +502,7 @@ class BlockingOpenWorker(FakeSearchWorker):
 
 def _seed_weibo_result(database_path: Path) -> tuple[int, int]:
     repository = SearchRunRepository(Database(database_path))
-    repository.initialize()
+    initialize_repository(repository)
     run = repository.create_run(
         monitoring_rule_id=1,
         platform="wb",
@@ -519,6 +525,16 @@ def _seed_weibo_result(database_path: Path) -> tuple[int, int]:
 
 
 def _search_app(database_path: Path, worker: FakeSearchWorker):
+    # This fixture preserves historical multi-object search coverage while
+    # keeping the product's fresh-database setup rule-free.
+    database = Database(database_path)
+    database.initialize()
+    create_test_rule(
+        database,
+        name="搜索回归规则",
+        monitoring_objects=("龙田街道", "龙田社区", "老坑社区", "竹坑社区", "南布社区"),
+    )
+
     def search_factory(
         monitoring_rules: MonitoringRuleService,
         platform_connections: PlatformConnectionService,
@@ -830,7 +846,7 @@ def test_search_and_account_checks_share_one_atomic_browser_admission(
     async def scenario() -> None:
         database_path = tmp_path / "admission.sqlite3"
         monitoring_rules = MonitoringRuleService(database_path=database_path)
-        monitoring_rules.initialize()
+        initialize_monitoring_rules(monitoring_rules)
         coordinator = BrowserOperationCoordinator()
         platform_service = PlatformConnectionService(
             browser_operation_coordinator=coordinator
@@ -870,7 +886,7 @@ def test_cancellation_is_durable_and_releases_browser_admission(
     async def scenario() -> None:
         database_path = tmp_path / "cancel.sqlite3"
         monitoring_rules = MonitoringRuleService(database_path=database_path)
-        monitoring_rules.initialize()
+        initialize_monitoring_rules(monitoring_rules)
         coordinator = BrowserOperationCoordinator()
         worker = BlockingSearchWorker()
         service = SearchRunService(
@@ -902,7 +918,7 @@ def test_timeout_is_durable_and_releases_browser_admission(tmp_path: Path) -> No
     async def scenario() -> None:
         database_path = tmp_path / "timeout.sqlite3"
         monitoring_rules = MonitoringRuleService(database_path=database_path)
-        monitoring_rules.initialize()
+        initialize_monitoring_rules(monitoring_rules)
         coordinator = BrowserOperationCoordinator()
         worker = BlockingSearchWorker()
         service = SearchRunService(
@@ -1096,7 +1112,7 @@ def test_worker_terminal_outcomes_are_projected_without_losing_partial_items(
 
 def test_fresh_database_contains_all_search_tables_and_indexes(tmp_path: Path) -> None:
     database = Database(tmp_path / "schema.sqlite3")
-    database.initialize()
+    initialize_database(database)
     with database.connect() as connection:
         tables = {
             row[0]
@@ -1138,6 +1154,17 @@ def test_version_eighteen_migration_preserves_history_relations_and_ids(
         for version in range(1, 19):
             migration = getattr(database_module, f"_migrate_to_version_{version}")
             migration(connection)
+        connection.execute(
+            """INSERT INTO monitoring_rules
+              (id, name, normalized_name, enabled, created_at, updated_at)
+              VALUES (1, '测试采集规则', '测试采集规则', 1, ?, ?)""",
+            (created_at, created_at),
+        )
+        connection.execute(
+            """INSERT INTO monitoring_rule_terms
+              (rule_id, value, normalized_value, position)
+              VALUES (1, '测试对象', '测试对象', 0)"""
+        )
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 18
         assert "failure_reason" not in {
             row[1] for row in connection.execute("PRAGMA table_info(search_runs)")
@@ -1206,7 +1233,7 @@ def test_version_eighteen_migration_preserves_history_relations_and_ids(
         connection.close()
 
     database = Database(database_path)
-    database.initialize()
+    initialize_database(database)
     repository = SearchRunRepository(database)
     migrated = repository.get(41)
     results, total = repository.list_results(run_id=41, kind="all", limit=50, offset=0)
@@ -1250,7 +1277,7 @@ def test_version_eighteen_migration_preserves_history_relations_and_ids(
         ) == (41, 0, "worker_term_completed", 1)
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
 
-    database.initialize()
+    initialize_database(database)
     reopened = repository.get(41)
     assert reopened.status == "structure_changed"
     assert reopened.failure_reason is None
@@ -1268,6 +1295,18 @@ def test_version_nineteen_migration_rolls_back_schema_rows_and_version(
             migration = getattr(database_module, f"_migrate_to_version_{version}")
             migration(connection)
         connection.execute(
+            """INSERT INTO monitoring_rules
+              (id, name, normalized_name, enabled, created_at, updated_at)
+              VALUES (1, '测试采集规则', '测试采集规则', 1,
+                      '2026-09-02T00:00:00+00:00',
+                      '2026-09-02T00:00:00+00:00')"""
+        )
+        connection.execute(
+            """INSERT INTO monitoring_rule_terms
+              (rule_id, value, normalized_value, position)
+              VALUES (1, '测试对象', '测试对象', 0)"""
+        )
+        connection.execute(
             """
             INSERT INTO search_runs (
               id, monitoring_rule_id, platform, rule_name, max_results_per_term,
@@ -1281,7 +1320,7 @@ def test_version_nineteen_migration_rolls_back_schema_rows_and_version(
         )
         before = tuple(connection.execute("SELECT * FROM search_runs").fetchone())
 
-        from longtian_api.migrations import search_runs_v19
+        from opinion_workbench_api.migrations import search_runs_v19
 
         migrate = search_runs_v19.migrate
 
@@ -1311,8 +1350,18 @@ def test_version_one_database_upgrades_without_reseeding_monitoring_rules(
     database = Database(tmp_path / "upgrade.sqlite3")
     with database.connect() as connection:
         _migrate_to_version_1(connection)
+        timestamp = "2026-09-02T00:00:00+00:00"
+        connection.execute(
+            """INSERT INTO monitoring_rules
+              (id, name, normalized_name, enabled, created_at, updated_at)
+              VALUES (1, '待更新规则', '待更新规则', 1, ?, ?)""",
+            (timestamp, timestamp),
+        )
         connection.execute("BEGIN IMMEDIATE")
-        connection.execute("UPDATE monitoring_rules SET name = '保留的旧规则'")
+        connection.execute(
+            """UPDATE monitoring_rules
+            SET name = '保留的旧规则', normalized_name = '保留的旧规则'"""
+        )
         connection.execute("COMMIT")
 
     database.initialize()

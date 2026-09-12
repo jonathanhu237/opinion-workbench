@@ -6,23 +6,26 @@ import inspect
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from fixture_support import initialize_database
 from summary_fixtures import seed_run
 from test_content_analysis_api import saved
 from test_native_weibo_discovery import BrowserFixture, _VirtualPacingClock
 from test_report_generations import generation_request, save_body
 from topic_report_fixtures import TextPipelineClient, finish
 
-from longtian_api.database import Database
-from longtian_api.main import create_app
-from longtian_api.services.ai_settings import AISettingsService
-from longtian_api.services.monitoring_rules import MonitoringRuleService
-from longtian_api.services.native_weibo import NativeWeiboCollector
-from longtian_api.services.platform_access import (
+from opinion_workbench_api.database import Database
+from opinion_workbench_api.main import create_app
+from opinion_workbench_api.services.ai_settings import AISettingsService
+from opinion_workbench_api.services.monitoring_rules import MonitoringRuleService
+from opinion_workbench_api.services.native_weibo import NativeWeiboCollector
+from opinion_workbench_api.services.platform_access import (
     PlatformAccessCoordinator,
     PlatformAccessService,
 )
-from longtian_api.services.platform_connections import PlatformConnectionService
-from longtian_api.services.weibo_enrichment import WeiboEnricher
+from opinion_workbench_api.services.platform_connections import (
+    PlatformConnectionService,
+)
+from opinion_workbench_api.services.weibo_enrichment import WeiboEnricher
 
 
 class OwnedSession(BrowserFixture):
@@ -37,7 +40,9 @@ class OwnedSession(BrowserFixture):
 
 
 def test_browser_unavailable_stops_after_first_acquisition(tmp_path):
-    from longtian_api.services.native_browser_contracts import BrowserUnavailable
+    from opinion_workbench_api.services.native_browser_contracts import (
+        BrowserUnavailable,
+    )
 
     app, browser, model, requests = native_environment(
         tmp_path, response=lambda request: None
@@ -82,7 +87,7 @@ def test_browser_unavailable_stops_after_first_acquisition(tmp_path):
 
 def native_environment(tmp_path, *, response):
     database = Database(tmp_path / "api.sqlite3")
-    database.initialize()
+    initialize_database(database)
     seed_run(database, 1, start=3600375418559878)
     model = TextPipelineClient()
     browser = OwnedSession([])

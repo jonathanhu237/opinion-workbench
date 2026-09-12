@@ -5,14 +5,14 @@ from uuid import uuid4
 
 from test_native_weibo_discovery import BrowserFixture
 
-from longtian_api.services.enrichment_models import EnrichmentBudget
-from longtian_api.services.native_browser_contracts import BrowserUnavailable
-from longtian_api.services.native_weibo import (
+from opinion_workbench_api.services.enrichment_models import EnrichmentBudget
+from opinion_workbench_api.services.native_browser_contracts import BrowserUnavailable
+from opinion_workbench_api.services.native_weibo import (
     NativeWeiboCollector,
     _generic_detail_barrier,
     _generic_detail_text,
 )
-from longtian_api.services.weibo_dom import document
+from opinion_workbench_api.services.weibo_dom import document
 
 
 def test_douyin_waits_for_rendered_caption_and_ignores_other_video_text():

@@ -178,8 +178,8 @@ describe('monitoring rules route', () => {
     await screen.findByText(defaultRule.name)
     await user.click(screen.getByRole('button', { name: '新建规则' }))
     const dialog = screen.getByRole('dialog', { name: '新建监控规则' })
-    const objects = within(dialog).getByLabelText('监控对象')
-    const issues = within(dialog).getByLabelText('舆情关键词（选填）')
+    const objects = within(dialog).getByLabelText('采集对象')
+    const issues = within(dialog).getByLabelText('舆情词（选填）')
 
     expect(objects).toHaveAttribute('placeholder', '对象 1\n对象 2\n对象 3')
     expect(issues).toHaveAttribute(
@@ -212,11 +212,11 @@ describe('monitoring rules route', () => {
 
     await user.click(within(dialog).getByRole('button', { name: '保存' }))
     expect(await within(dialog).findByText('请输入规则名称。')).toBeVisible()
-    expect(within(dialog).getByText('请至少输入一个监控对象。')).toBeVisible()
+    expect(within(dialog).getByText('请至少输入一个采集对象。')).toBeVisible()
 
     await user.type(within(dialog).getByLabelText('规则名称'), ' 重点场所 ')
     await user.type(
-      within(dialog).getByLabelText('监控对象'),
+      within(dialog).getByLabelText('采集对象'),
       ' 龙田学校 \n\n坪山高铁站 ',
     )
     await user.click(within(dialog).getByRole('button', { name: '保存' }))
@@ -245,10 +245,10 @@ describe('monitoring rules route', () => {
     fireEvent.change(screen.getByLabelText('规则名称'), {
       target: { value: '\u0085\ufeff旧名称\ufeff\u001c' },
     })
-    fireEvent.change(screen.getByLabelText('监控对象'), {
+    fireEvent.change(screen.getByLabelText('采集对象'), {
       target: { value: '\u0085A B\u001f\n\ufeff完整短语' },
     })
-    fireEvent.change(screen.getByLabelText('舆情关键词（选填）'), {
+    fireEvent.change(screen.getByLabelText('舆情词（选填）'), {
       target: { value: '\u0085问题\u001c' },
     })
     expect(
@@ -276,13 +276,13 @@ describe('monitoring rules route', () => {
     const dialog = screen.getByRole('dialog', { name: '新建监控规则' })
     await user.type(within(dialog).getByLabelText('规则名称'), '重复词测试')
     await user.type(
-      within(dialog).getByLabelText('监控对象'),
+      within(dialog).getByLabelText('采集对象'),
       '龙田街道\n  龙田街道  ',
     )
     await user.click(within(dialog).getByRole('button', { name: '保存' }))
 
     expect(
-      await within(dialog).findByText('监控对象不能重复，请检查后重试。'),
+      await within(dialog).findByText('采集对象不能重复，请检查后重试。'),
     ).toBeVisible()
     expect(mockedCreateRule).not.toHaveBeenCalled()
   })
@@ -305,11 +305,11 @@ describe('monitoring rules route', () => {
     const dialog = screen.getByRole('dialog')
     await user.type(within(dialog).getByLabelText('规则名称'), composed.name)
     await user.type(
-      within(dialog).getByLabelText('监控对象'),
+      within(dialog).getByLabelText('采集对象'),
       ' 甲  社区 \n乙社区',
     )
     await user.type(
-      within(dialog).getByLabelText('舆情关键词（选填）'),
+      within(dialog).getByLabelText('舆情词（选填）'),
       '噪音\n积水',
     )
     const preview = within(dialog).getByRole('region', {
@@ -337,10 +337,10 @@ describe('monitoring rules route', () => {
     await user.click(
       screen.getByRole('button', { name: `编辑“${composed.name}”` }),
     )
-    expect(screen.getByLabelText('监控对象')).toHaveValue(
+    expect(screen.getByLabelText('采集对象')).toHaveValue(
       composed.monitoring_objects.join('\n'),
     )
-    expect(screen.getByLabelText('舆情关键词（选填）')).toHaveValue(
+    expect(screen.getByLabelText('舆情词（选填）')).toHaveValue(
       composed.issue_keywords.join('\n'),
     )
     await user.click(screen.getByRole('button', { name: '取消' }))
@@ -364,8 +364,8 @@ describe('monitoring rules route', () => {
     await screen.findByText(defaultRule.name)
     await user.click(screen.getByRole('button', { name: '新建规则' }))
     await user.type(screen.getByLabelText('规则名称'), '完整短语')
-    await user.type(screen.getByLabelText('监控对象'), ' A  B \n旧 完整查询 ')
-    await user.type(screen.getByLabelText('舆情关键词（选填）'), ' \n\n ')
+    await user.type(screen.getByLabelText('采集对象'), ' A  B \n旧 完整查询 ')
+    await user.type(screen.getByLabelText('舆情词（选填）'), ' \n\n ')
     expect(
       within(screen.getByRole('region', { name: '生成的搜索词预览' }))
         .getAllByRole('listitem')
@@ -380,8 +380,8 @@ describe('monitoring rules route', () => {
         enabled: true,
       }),
     )
-    expect(screen.getByLabelText('监控对象')).toBeDisabled()
-    expect(screen.getByLabelText('舆情关键词（选填）')).toBeDisabled()
+    expect(screen.getByLabelText('采集对象')).toBeDisabled()
+    expect(screen.getByLabelText('舆情词（选填）')).toBeDisabled()
     expect(screen.getByRole('button', { name: '保存中…' })).toBeDisabled()
     expect(screen.getByRole('button', { name: '取消' })).toBeDisabled()
   })
@@ -397,10 +397,10 @@ describe('monitoring rules route', () => {
       fireEvent.change(screen.getByLabelText('规则名称'), {
         target: { value: '数量边界' },
       })
-      fireEvent.change(screen.getByLabelText('监控对象'), {
+      fireEvent.change(screen.getByLabelText('采集对象'), {
         target: { value: '对象' },
       })
-      fireEvent.change(screen.getByLabelText('舆情关键词（选填）'), {
+      fireEvent.change(screen.getByLabelText('舆情词（选填）'), {
         target: {
           value: Array.from(
             { length: count },
@@ -424,12 +424,12 @@ describe('monitoring rules route', () => {
       await user.click(screen.getByRole('button', { name: '保存' }))
       if (count > 100) {
         expect(mockedCreateRule).not.toHaveBeenCalled()
-        expect(screen.getByLabelText('舆情关键词（选填）')).toHaveAttribute(
+        expect(screen.getByLabelText('舆情词（选填）')).toHaveAttribute(
           'aria-invalid',
           'true',
         )
         await waitFor(() =>
-          expect(screen.getByLabelText('舆情关键词（选填）')).toHaveFocus(),
+          expect(screen.getByLabelText('舆情词（选填）')).toHaveFocus(),
         )
         expect(
           screen.queryByRole('region', { name: '生成的搜索词预览' }),
@@ -441,12 +441,12 @@ describe('monitoring rules route', () => {
   )
 
   it.each([
-    ['A\nA B', 'B C\nC', '生成的搜索词不能重复，请调整监控对象或舆情关键词。'],
-    ['A', 'Ｂ\nb', '舆情关键词不能重复，请检查后重试。'],
+    ['A\nA B', 'B C\nC', '生成的搜索词不能重复，请调整采集对象或舆情词。'],
+    ['A', 'Ｂ\nb', '舆情词不能重复，请检查后重试。'],
     [
       'A'.repeat(99),
       'B',
-      '生成的搜索词不能超过 100 个字符，请缩短监控对象或舆情关键词。',
+      '生成的搜索词不能超过 100 个字符，请缩短采集对象或舆情词。',
     ],
   ])(
     'rejects invalid combinations beside the issue field',
@@ -458,20 +458,20 @@ describe('monitoring rules route', () => {
       fireEvent.change(screen.getByLabelText('规则名称'), {
         target: { value: '组合校验' },
       })
-      fireEvent.change(screen.getByLabelText('监控对象'), {
+      fireEvent.change(screen.getByLabelText('采集对象'), {
         target: { value: objects },
       })
-      fireEvent.change(screen.getByLabelText('舆情关键词（选填）'), {
+      fireEvent.change(screen.getByLabelText('舆情词（选填）'), {
         target: { value: issues },
       })
       await user.click(screen.getByRole('button', { name: '保存' }))
       expect(await screen.findByText(message)).toBeVisible()
-      expect(screen.getByLabelText('舆情关键词（选填）')).toHaveAttribute(
+      expect(screen.getByLabelText('舆情词（选填）')).toHaveAttribute(
         'aria-describedby',
         'rule-issues-description rule-issues-error',
       )
       await waitFor(() =>
-        expect(screen.getByLabelText('舆情关键词（选填）')).toHaveFocus(),
+        expect(screen.getByLabelText('舆情词（选填）')).toHaveFocus(),
       )
       expect(mockedCreateRule).not.toHaveBeenCalled()
     },
@@ -495,7 +495,7 @@ describe('monitoring rules route', () => {
     await user.click(editButton)
     const dialog = screen.getByRole('dialog', { name: '编辑监控规则' })
     const nameInput = within(dialog).getByLabelText('规则名称')
-    const termsInput = within(dialog).getByLabelText('监控对象')
+    const termsInput = within(dialog).getByLabelText('采集对象')
     expect(nameInput).toHaveValue(disabledRule.name)
     expect(termsInput).toHaveValue(disabledRule.terms.join('\n'))
 
@@ -532,7 +532,7 @@ describe('monitoring rules route', () => {
     await user.click(screen.getByRole('button', { name: '新建规则' }))
     const dialog = screen.getByRole('dialog', { name: '新建监控规则' })
     await user.type(within(dialog).getByLabelText('规则名称'), defaultRule.name)
-    await user.type(within(dialog).getByLabelText('监控对象'), '龙田街道')
+    await user.type(within(dialog).getByLabelText('采集对象'), '龙田街道')
     await user.click(within(dialog).getByRole('button', { name: '保存' }))
 
     expect(
@@ -548,7 +548,7 @@ describe('monitoring rules route', () => {
     const user = userEvent.setup()
     mockedCreateRule.mockRejectedValue(
       new MonitoringRuleApiError(
-        '监控对象、舆情关键词或生成的搜索词存在重复，请检查。',
+        '采集对象、舆情词或生成的搜索词存在重复，请检查。',
         'duplicate_monitoring_rule_term',
         422,
       ),
@@ -560,7 +560,7 @@ describe('monitoring rules route', () => {
     const dialog = screen.getByRole('dialog', { name: '新建监控规则' })
     await user.type(within(dialog).getByLabelText('规则名称'), '后端归一化测试')
     await user.type(
-      within(dialog).getByLabelText('监控对象'),
+      within(dialog).getByLabelText('采集对象'),
       'Straße\nSTRASSE',
     )
     await user.click(within(dialog).getByRole('button', { name: '保存' }))
@@ -568,11 +568,11 @@ describe('monitoring rules route', () => {
     expect(mockedCreateRule).toHaveBeenCalled()
     expect(
       await within(dialog).findByText(
-        '监控对象、舆情关键词或生成的搜索词存在重复，请检查。',
+        '采集对象、舆情词或生成的搜索词存在重复，请检查。',
       ),
     ).toBeVisible()
     await waitFor(() =>
-      expect(within(dialog).getByLabelText('监控对象')).toHaveFocus(),
+      expect(within(dialog).getByLabelText('采集对象')).toHaveFocus(),
     )
     expect(screen.getByRole('dialog')).toBeInTheDocument()
   })

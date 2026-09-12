@@ -4,6 +4,7 @@ import json
 from uuid import uuid4
 
 import pytest
+from fixture_support import initialize_database
 from schema_fixtures import (
     create_legacy_schema,
     seed_historical_content,
@@ -11,8 +12,8 @@ from schema_fixtures import (
 )
 from test_content_analysis_repository import old_projection
 
-from longtian_api import database as migrations
-from longtian_api.database import (
+from opinion_workbench_api import database as migrations
+from opinion_workbench_api.database import (
     CURRENT_DATABASE_VERSION,
     Database,
     DatabaseVersionError,
@@ -290,7 +291,7 @@ def test_v16_repairs_historical_v15_report_graph_without_rewriting_rows(tmp_path
             row[1] for row in connection.execute("PRAGMA table_info(topic_report_runs)")
         }
 
-    database.initialize()
+    initialize_database(database)
     after = _historical_report_projection(database)
     assert after == before
     with database.connect() as connection:
@@ -319,7 +320,7 @@ def test_v16_repairs_historical_v15_report_graph_without_rewriting_rows(tmp_path
         )
 
     # Reopening a repaired database must not rebuild it a second time.
-    database.initialize()
+    initialize_database(database)
     assert _historical_report_projection(database) == before
 
 
@@ -336,7 +337,7 @@ def test_v16_repairs_an_empty_historical_v15_database(tmp_path):
             row[1] for row in connection.execute("PRAGMA table_info(topic_report_runs)")
         }
 
-    database.initialize()
+    initialize_database(database)
     with database.connect() as connection:
         assert (
             connection.execute("PRAGMA user_version").fetchone()[0]
@@ -350,7 +351,7 @@ def test_v16_repairs_an_empty_historical_v15_database(tmp_path):
 
 
 def test_v16_failure_rolls_back_historical_report_table_swap(tmp_path, monkeypatch):
-    import longtian_api.migrations.topic_reports_v16 as migration
+    import opinion_workbench_api.migrations.topic_reports_v16 as migration
 
     database = _historical_v15(tmp_path)
     _seed_historical_report_graph(database)
@@ -363,7 +364,7 @@ def test_v16_failure_rolls_back_historical_report_table_swap(tmp_path, monkeypat
 
     monkeypatch.setattr(migration, "migrate", fail)
     with pytest.raises(RuntimeError, match="v16 failure"):
-        database.initialize()
+        initialize_database(database)
     assert _historical_report_projection(database) == before
     with database.connect() as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 15
@@ -384,7 +385,7 @@ def test_v16_accepts_already_new_v15_report_shape_without_rewrite(tmp_path):
     before = _historical_report_projection(database)
     with database.connect() as connection:
         connection.execute("PRAGMA user_version = 15")
-    database.initialize()
+    initialize_database(database)
     assert _historical_report_projection(database) == before
     with database.connect() as connection:
         assert (
@@ -407,7 +408,7 @@ def test_v16_repairs_a_new_column_with_an_old_trigger_shape(tmp_path):
             ON topic_report_runs BEGIN SELECT RAISE(ABORT,'wrong trigger'); END"""
         )
 
-    database.initialize()
+    initialize_database(database)
     assert _historical_report_projection(database) == expected
     with database.connect() as connection:
         assert (
@@ -448,7 +449,7 @@ def test_genuine_populated_v13_adds_only_reports(tmp_path):
 
 
 def test_v14_failure_after_actual_child_insert_rolls_back(tmp_path, monkeypatch):
-    import longtian_api.migrations.topic_reports as migration
+    import opinion_workbench_api.migrations.topic_reports as migration
 
     database = populated_v13(tmp_path)
     before = old_projection(database)
@@ -473,7 +474,7 @@ def test_v14_failure_after_actual_child_insert_rolls_back(tmp_path, monkeypatch)
 
     monkeypatch.setattr(migration, "migrate", fail)
     with pytest.raises(RuntimeError, match="child insert"):
-        database.initialize()
+        initialize_database(database)
     assert old_projection(database) == before
     with database.connect() as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 13
@@ -489,7 +490,7 @@ def test_forward_version_is_rejected_without_changing_any_rows(tmp_path):
         connection.execute(f"PRAGMA user_version={CURRENT_DATABASE_VERSION + 1}")
     before = old_projection(database)
     with pytest.raises(DatabaseVersionError):
-        database.initialize()
+        initialize_database(database)
     assert old_projection(database) == before
     with database.connect() as connection:
         assert (

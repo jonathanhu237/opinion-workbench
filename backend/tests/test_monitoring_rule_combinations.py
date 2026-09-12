@@ -3,13 +3,14 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from fixture_support import initialize_database
 
-from longtian_api import database as migrations
-from longtian_api.database import CURRENT_DATABASE_VERSION, Database
-from longtian_api.main import create_app
-from longtian_api.repositories.search_runs import SearchRunRepository
-from longtian_api.schemas.monitoring_rules import MonitoringRuleCreate
-from longtian_api.services.monitoring_rules import (
+from opinion_workbench_api import database as migrations
+from opinion_workbench_api.database import CURRENT_DATABASE_VERSION, Database
+from opinion_workbench_api.main import create_app
+from opinion_workbench_api.repositories.search_runs import SearchRunRepository
+from opinion_workbench_api.schemas.monitoring_rules import MonitoringRuleCreate
+from opinion_workbench_api.services.monitoring_rules import (
     MonitoringRuleError,
     MonitoringRuleService,
     compose_monitoring_terms,
@@ -31,6 +32,18 @@ def _version_eight_database(path: Path) -> Database:
             migrations._migrate_to_version_8,
         ):
             migrate(connection)
+        timestamp = "2026-08-28T00:00:00+00:00"
+        connection.execute(
+            """INSERT INTO monitoring_rules
+              (id, name, normalized_name, enabled, created_at, updated_at)
+              VALUES (1, '历史默认规则', '历史默认规则', 1, ?, ?)""",
+            (timestamp, timestamp),
+        )
+        connection.execute(
+            """INSERT INTO monitoring_rule_terms
+              (rule_id, value, normalized_value, position)
+              VALUES (1, '历史对象', '历史对象', 0)"""
+        )
     finally:
         connection.close()
     return database
@@ -75,8 +88,8 @@ def test_v8_upgrade_preserves_every_old_row_and_deleted_seed(tmp_path: Path) -> 
         connection.execute(
             "INSERT INTO search_batch_attempts VALUES (1, 0, 1, 2, 'created')"
         )
-    database.initialize()
-    database.initialize()
+    initialize_database(database)
+    initialize_database(database)
 
     with database.connect() as connection:
         assert (
@@ -162,7 +175,7 @@ def test_v9_partial_migration_rolls_back_table_and_version(tmp_path: Path) -> No
         )
     finally:
         connection.close()
-    database.initialize()
+    initialize_database(database)
 
 
 @pytest.mark.parametrize(
@@ -328,7 +341,7 @@ def test_groups_roundtrip_toggle_and_atomic_issue_failure(tmp_path: Path) -> Non
             json={**payload, "name": "创建失败", "issue_keywords": ["failure-input"]},
         )
         assert created_failure.status_code == 503
-        assert len(client.get("/api/v1/monitoring-rules").json()["rules"]) == 2
+        assert len(client.get("/api/v1/monitoring-rules").json()["rules"]) == 1
         assert client.delete(rule_url).status_code == 204
         with sqlite3.connect(path) as connection:
             assert (
@@ -391,7 +404,7 @@ def test_create_defaults_and_replace_requires_both_groups(tmp_path: Path) -> Non
         )
         assert response.status_code == 201
         assert response.json() == {
-            "id": 2,
+            "id": 1,
             "name": "对象搜索",
             "monitoring_objects": ["A B"],
             "issue_keywords": [],
@@ -403,7 +416,7 @@ def test_create_defaults_and_replace_requires_both_groups(tmp_path: Path) -> Non
             {"name": "缺少分组", "monitoring_objects": ["A"], "enabled": True},
         ):
             assert (
-                client.put("/api/v1/monitoring-rules/2", json=payload).status_code
+                client.put("/api/v1/monitoring-rules/1", json=payload).status_code
                 == 422
             )
         document = client.get("/openapi.json").json()["components"]["schemas"]

@@ -300,7 +300,7 @@ function ReportRequestEditor({
             render={({ field, fieldState }) => (
               <PromptChoiceField
                 id="report-prompt"
-                label="相关性判断与报告提示词"
+                label="报告提示词"
                 description={
                   interval
                     ? '默认模板固定不变；也可以只为这份报告填写自定义指令。'

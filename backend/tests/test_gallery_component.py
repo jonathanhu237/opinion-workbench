@@ -4,8 +4,11 @@ import asyncio
 
 from enrichment_fixtures import PNG
 
-from longtian_api.gallery_worker import BridgeResponse, _classify_response
-from longtian_api.services.gallery_component import GalleryComponent, UpstreamResponse
+from opinion_workbench_api.gallery_worker import BridgeResponse, _classify_response
+from opinion_workbench_api.services.gallery_component import (
+    GalleryComponent,
+    UpstreamResponse,
+)
 
 
 def test_upstream_classification_requires_trusted_redirect_or_platform_evidence():

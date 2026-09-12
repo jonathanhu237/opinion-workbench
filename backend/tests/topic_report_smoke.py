@@ -18,27 +18,27 @@ from pydantic import SecretStr
 from summary_fixtures import BASE, KEY, MODEL, USAGE, seed_run
 from topic_report_fixtures import api_environment
 
-from longtian_api.database import Database
-from longtian_api.repositories.ai_summaries import (
+from opinion_workbench_api.database import Database
+from opinion_workbench_api.repositories.ai_summaries import (
     SummaryRepository,
     SummaryVersions,
     fingerprint,
 )
-from longtian_api.schemas.ai_settings import AISettingsUpdate
-from longtian_api.schemas.ai_summaries import (
+from opinion_workbench_api.schemas.ai_settings import AISettingsUpdate
+from opinion_workbench_api.schemas.ai_summaries import (
     SummaryCreate,
     SummaryDocument,
     SummaryParagraph,
 )
-from longtian_api.schemas.analysis_evidence import SavedInput
-from longtian_api.services.ai_analysis import (
+from opinion_workbench_api.schemas.analysis_evidence import SavedInput
+from opinion_workbench_api.services.ai_analysis import (
     ANALYSIS_PROMPT_VERSION,
     MODEL_INPUT_VERSION,
     SUMMARY_PROMPT_VERSION,
 )
-from longtian_api.services.ai_client import AIConfiguration
-from longtian_api.services.enrichment_models import EnrichedContent
-from longtian_api.services.search_runs import SearchRunService
+from opinion_workbench_api.services.ai_client import AIConfiguration
+from opinion_workbench_api.services.enrichment_models import EnrichedContent
+from opinion_workbench_api.services.search_runs import SearchRunService
 
 UI_ORIGIN = "http://127.0.0.1:46081"
 COUNTERS_PATH = "/api/v1/topic-report-smoke/counters"
@@ -127,7 +127,7 @@ def seed_legacy_report(database: Database) -> None:
 
 
 def create_smoke_app() -> FastAPI:
-    temporary = TemporaryDirectory(prefix="longtian-topic-report-smoke-")
+    temporary = TemporaryDirectory(prefix="opinion-workbench-topic-report-smoke-")
     worker = ForbiddenCollectionWorker()
     requests = Counter()
 

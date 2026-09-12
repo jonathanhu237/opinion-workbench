@@ -7,7 +7,7 @@ import App from './App.tsx'
 const rootElement = document.getElementById('root')
 
 if (!rootElement) {
-  throw new Error('Missing Longtian application root element')
+  throw new Error('Missing OpinionWorkbench application root element')
 }
 
 createRoot(rootElement).render(

@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from longtian_api.schemas.topic_report_engine import (
+from opinion_workbench_api.schemas.topic_report_engine import (
     ChildOverview,
     CompletedOutput,
     EngineContext,
@@ -24,17 +24,17 @@ from longtian_api.schemas.topic_report_engine import (
     TextPrompt,
     ValidatedOutput,
 )
-from longtian_api.services import topic_report_engine as engine
-from longtian_api.services.ai_analysis import AIAnalysisError
-from longtian_api.services.ai_client import (
+from opinion_workbench_api.services import topic_report_engine as engine
+from opinion_workbench_api.services.ai_analysis import AIAnalysisError
+from opinion_workbench_api.services.ai_client import (
     AIClient,
     AICompletion,
     AIConfiguration,
     AIUsage,
     encode_completion_request,
 )
-from longtian_api.services.ai_errors import AIError
-from longtian_api.services.topic_report_engine import (
+from opinion_workbench_api.services.ai_errors import AIError
+from opinion_workbench_api.services.topic_report_engine import (
     canonical_hash,
     check_request,
     engine_version,

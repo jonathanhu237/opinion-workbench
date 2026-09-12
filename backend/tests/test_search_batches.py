@@ -8,29 +8,36 @@ from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
-from schema_fixtures import create_legacy_schema
+from fixture_support import (
+    ensure_test_rule,
+    initialize_database,
+    initialize_repository,
+)
+from schema_fixtures import create_legacy_schema, seed_legacy_rule
 
-from longtian_api.database import CURRENT_DATABASE_VERSION, Database
-from longtian_api.main import create_app
-from longtian_api.repositories.search_batches import (
+from opinion_workbench_api.database import CURRENT_DATABASE_VERSION, Database
+from opinion_workbench_api.main import create_app
+from opinion_workbench_api.repositories.search_batches import (
     SearchBatchRepository,
     SearchBatchRepositoryUnavailableError,
 )
-from longtian_api.repositories.search_runs import SearchRunRepository
-from longtian_api.services.browser_operations import (
+from opinion_workbench_api.repositories.search_runs import SearchRunRepository
+from opinion_workbench_api.services.browser_operations import (
     BrowserOperationCoordinator,
     BrowserOperationOwner,
 )
-from longtian_api.services.collector_contracts import (
+from opinion_workbench_api.services.collector_contracts import (
     ManualPageWorkerResult,
     OpenResultWorkerResult,
     SearchWorkerItem,
     SearchWorkerResult,
 )
-from longtian_api.services.monitoring_rules import MonitoringRuleService
-from longtian_api.services.platform_connections import PlatformConnectionService
-from longtian_api.services.search_batches import SearchBatchService
-from longtian_api.services.search_runs import SearchRunService
+from opinion_workbench_api.services.monitoring_rules import MonitoringRuleService
+from opinion_workbench_api.services.platform_connections import (
+    PlatformConnectionService,
+)
+from opinion_workbench_api.services.search_batches import SearchBatchService
+from opinion_workbench_api.services.search_runs import SearchRunService
 
 
 class PlannedSearchWorker:
@@ -96,6 +103,16 @@ class BlockingSearchWorker(PlannedSearchWorker):
 
 
 def _app(database_path: Path, worker: object):
+    # Keep the historical five-term worker scenarios explicit in the fixture;
+    # the product itself still creates fresh databases without rules.
+    database = Database(database_path)
+    database.initialize()
+    ensure_test_rule(
+        database,
+        name="搜索批次回归规则",
+        monitoring_objects=("龙田街道", "龙田社区", "老坑社区", "竹坑社区", "南布社区"),
+    )
+
     def search_factory(
         monitoring_rules: MonitoringRuleService,
         platform_connections: PlatformConnectionService,
@@ -142,7 +159,7 @@ def _control(client, batch_id):
 
 def test_version_seven_migration_and_batch_constraints(tmp_path: Path) -> None:
     database = Database(tmp_path / "batch.sqlite3")
-    database.initialize()
+    initialize_database(database)
     with database.connect() as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == (
             CURRENT_DATABASE_VERSION
@@ -188,6 +205,7 @@ def test_version_six_upgrade_preserves_existing_runs_and_is_idempotent(
 ) -> None:
     database = Database(tmp_path / "version-six.sqlite3")
     create_legacy_schema(database, 6)
+    seed_legacy_rule(database)
     with database.connect() as connection:
         connection.execute("""INSERT INTO search_runs
             (id, monitoring_rule_id, platform, rule_name, max_results_per_term,
@@ -196,8 +214,8 @@ def test_version_six_upgrade_preserves_existing_runs_and_is_idempotent(
                     '2026-08-01T00:00:00Z','2026-08-01T00:00:00Z','2026-08-01T00:00:01Z')""")
         connection.execute("INSERT INTO search_run_terms VALUES (1, 0, '龙田街道')")
 
-    database.initialize()
-    database.initialize()
+    initialize_database(database)
+    initialize_database(database)
 
     assert SearchRunRepository(database).get(1).platform == "wb"
     with database.connect() as connection:
@@ -220,7 +238,7 @@ def test_version_seven_migration_rolls_back_every_partial_schema_change(
         connection.execute("CREATE TABLE search_batch_terms (sentinel TEXT)")
 
     with pytest.raises(sqlite3.Error):
-        database.initialize()
+        initialize_database(database)
 
     with database.connect() as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 6
@@ -239,7 +257,7 @@ def test_attempt_creation_rolls_back_run_terms_and_item_transition(
 ) -> None:
     database = Database(tmp_path / "attempt-rollback.sqlite3")
     repository = SearchBatchRepository(database)
-    repository.initialize()
+    initialize_repository(repository)
     batch = repository.create_batch(
         monitoring_rule_id=1,
         rule_name="重点区域",
@@ -504,7 +522,7 @@ def test_cancel_releases_owner_when_runner_was_cancelled_before_start(
 ) -> None:
     database = Database(tmp_path / "cancel-before-start.sqlite3")
     repository = SearchBatchRepository(database)
-    repository.initialize()
+    initialize_repository(repository)
     batch = repository.create_batch(
         monitoring_rule_id=1,
         rule_name="重点区域",
@@ -528,7 +546,7 @@ def test_cancel_releases_owner_when_runner_was_cancelled_before_start(
         service._active_owner = owner
         service._current_task = runner
 
-        from longtian_api.schemas.search_batches import SearchBatchCancel
+        from opinion_workbench_api.schemas.search_batches import SearchBatchCancel
 
         cancelled = await service.cancel_batch(
             batch.id, SearchBatchCancel(expected_revision=batch.control_revision)

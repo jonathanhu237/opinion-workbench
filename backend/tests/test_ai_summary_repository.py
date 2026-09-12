@@ -5,22 +5,27 @@ import threading
 from uuid import uuid4
 
 import pytest
+from fixture_support import initialize_database
 from pydantic import SecretStr
 from schema_fixtures import create_legacy_schema, seed_historical_content
 from summary_fixtures import BASE, KEY, MODEL, environment, finished
 
-from longtian_api.database import CURRENT_DATABASE_VERSION, Database
-from longtian_api.repositories.ai_summaries import SummaryVersions
-from longtian_api.repositories.search_batches import SearchBatchRepository
-from longtian_api.repositories.search_runs import (
+from opinion_workbench_api.database import CURRENT_DATABASE_VERSION, Database
+from opinion_workbench_api.repositories.ai_summaries import SummaryVersions
+from opinion_workbench_api.repositories.search_batches import SearchBatchRepository
+from opinion_workbench_api.repositories.search_runs import (
     SearchContentInput,
     SearchRunRepository,
 )
-from longtian_api.schemas.ai_summaries import SummaryCreate
-from longtian_api.services.ai_analysis import MODEL_INPUT_VERSION
-from longtian_api.services.ai_client import MAX_USAGE_TOKENS, AIConfiguration, AIUsage
-from longtian_api.services.ai_summaries import SummaryService
-from longtian_api.services.summary_errors import SummaryError
+from opinion_workbench_api.schemas.ai_summaries import SummaryCreate
+from opinion_workbench_api.services.ai_analysis import MODEL_INPUT_VERSION
+from opinion_workbench_api.services.ai_client import (
+    MAX_USAGE_TOKENS,
+    AIConfiguration,
+    AIUsage,
+)
+from opinion_workbench_api.services.ai_summaries import SummaryService
+from opinion_workbench_api.services.summary_errors import SummaryError
 
 
 def request():
@@ -60,8 +65,8 @@ def test_v11_appends_only_summary_tables_preserving_actual_v10_rows(tmp_path):
             ]
             for table in tables
         }
-    database.initialize()
-    database.initialize()
+    initialize_database(database)
+    initialize_database(database)
     with database.connect() as connection:
         assert (
             connection.execute("PRAGMA user_version").fetchone()[0]

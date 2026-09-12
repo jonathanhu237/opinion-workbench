@@ -13,9 +13,9 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from topic_report_fixtures import api_environment
 
-from longtian_api.api.v1.summary_preferences import SummaryPreference
-from longtian_api.application_paths import default_data_root
-from longtian_api.services.summary_preferences import SummaryPreferenceService
+from opinion_workbench_api.api.v1.summary_preferences import SummaryPreference
+from opinion_workbench_api.application_paths import default_data_root
+from opinion_workbench_api.services.summary_preferences import SummaryPreferenceService
 
 ROOT = Path(__file__).resolve().parents[2]
 module_spec = importlib.util.spec_from_file_location(
@@ -67,21 +67,23 @@ def test_preference_persists_at_injected_database_not_global_runtime(tmp_path):
 
 
 def test_frozen_default_data_moves_with_executable_not_cwd(tmp_path, monkeypatch):
-    monkeypatch.delenv("LONGTIAN_DATA_DIR", raising=False)
+    monkeypatch.delenv("OPINION_WORKBENCH_DATA_DIR", raising=False)
     monkeypatch.setattr(sys, "frozen", True, raising=False)
-    monkeypatch.setattr(sys, "executable", str(tmp_path / "folder 中文" / "Longtian"))
+    monkeypatch.setattr(
+        sys, "executable", str(tmp_path / "folder 中文" / "OpinionWorkbench")
+    )
     monkeypatch.chdir(tmp_path)
     assert default_data_root() == tmp_path / "folder 中文" / "data"
 
 
 def make_asset(root, platform, *, source=SHA, extra=None):
     root.mkdir(parents=True, exist_ok=True)
-    path = root / f"Longtian-v1.2.3-{platform}.zip"
-    exe = "Longtian.exe" if platform == "Windows-x64" else "Longtian"
+    path = root / f"OpinionWorkbench-v1.2.3-{platform}.zip"
+    exe = "OpinionWorkbench.exe" if platform == "Windows-x64" else "OpinionWorkbench"
     worker = (
-        "LongtianGalleryWorker.exe"
+        "OpinionWorkbenchGalleryWorker.exe"
         if platform == "Windows-x64"
-        else "LongtianGalleryWorker"
+        else "OpinionWorkbenchGalleryWorker"
     )
     files = {
         "BUILD-METADATA.txt": (
@@ -98,7 +100,7 @@ def make_asset(root, platform, *, source=SHA, extra=None):
         files.update(extra)
     with zipfile.ZipFile(path, "w") as archive:
         for name, text in files.items():
-            info = zipfile.ZipInfo("Longtian/" + name)
+            info = zipfile.ZipInfo("OpinionWorkbench/" + name)
             info.external_attr = 0o100755 << 16
             archive.writestr(info, text)
     path.with_name(path.name + ".sha256").write_text(
@@ -128,7 +130,7 @@ def test_invalid_release_assets_are_rejected(tmp_path, fault):
         if fault == "checksum":
             path.write_bytes(b"corrupt")
         if fault == "wrong_name":
-            path.rename(path.with_name("Longtian-v2.0.0-macOS-arm64.zip"))
+            path.rename(path.with_name("OpinionWorkbench-v2.0.0-macOS-arm64.zip"))
     with pytest.raises(ValueError):
         guard.validate_assets(tmp_path, "v1.2.3", SHA)
 

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from longtian_api.backup_cleanup import move_backup_inventory
+from opinion_workbench_api.backup_cleanup import move_backup_inventory
 
 
 def test_backup_inventory_preserves_paths_moves_sidecars_and_protects_runtime(
@@ -20,7 +20,7 @@ def test_backup_inventory_preserves_paths_moves_sidecars_and_protects_runtime(
     Path(f"{listed[0]}-wal").write_text("wal")
     unlisted = tmp_path / "runtime" / "keep.sqlite3"
     unlisted.write_text("keep")
-    runtime_database = tmp_path / "runtime" / "longtian.sqlite3"
+    runtime_database = tmp_path / "runtime" / "opinion-workbench.sqlite3"
     runtime_database.write_text("live")
     browser_profile = tmp_path / "runtime" / "browser" / "managed-chrome"
     browser_profile.mkdir(parents=True)

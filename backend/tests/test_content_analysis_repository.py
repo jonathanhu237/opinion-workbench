@@ -6,6 +6,7 @@ from threading import Barrier
 from uuid import uuid4
 
 import pytest
+from fixture_support import initialize_database, initialize_repository
 from initial_analysis_fixtures import environment, request
 from schema_fixtures import (
     create_legacy_schema,
@@ -14,21 +15,25 @@ from schema_fixtures import (
 )
 from summary_fixtures import seed_run
 
-from longtian_api import database as migrations
-from longtian_api.database import Database
-from longtian_api.repositories.analysis_settings import AnalysisSettingsRepository
-from longtian_api.repositories.content_analyses import ContentAnalysisRepository
-from longtian_api.repositories.results import ResultsRepository
-from longtian_api.repositories.search_runs import (
+from opinion_workbench_api import database as migrations
+from opinion_workbench_api.database import Database
+from opinion_workbench_api.repositories.analysis_settings import (
+    AnalysisSettingsRepository,
+)
+from opinion_workbench_api.repositories.content_analyses import (
+    ContentAnalysisRepository,
+)
+from opinion_workbench_api.repositories.results import ResultsRepository
+from opinion_workbench_api.repositories.search_runs import (
     SearchContentInput,
     SearchRunRepository,
 )
-from longtian_api.schemas.analysis_settings import (
+from opinion_workbench_api.schemas.analysis_settings import (
     DEFAULT_INITIAL_INSTRUCTIONS,
     DEFAULT_REPORT_INSTRUCTIONS,
     AutomationUpdate,
 )
-from longtian_api.services.analysis_errors import AnalysisError
+from opinion_workbench_api.services.analysis_errors import AnalysisError
 
 
 def old_projection(database):
@@ -79,10 +84,10 @@ def test_genuine_v11_preserves_old_data_and_forward_only_history(tmp_path):
     create_legacy_schema(database, 11)
     seed_historical_content(database, 3)
     before = old_projection(database)
-    database.initialize()
+    initialize_database(database)
     settings = AnalysisSettingsRepository(database)
     original = settings.read()
-    database.initialize()
+    initialize_database(database)
     after = old_projection(database)
     assert all(after[table] == rows for table, rows in before.items())
     assert settings.read() == original
@@ -109,7 +114,7 @@ def test_v12_migration_rolls_back_real_ddl_and_seed_failure(tmp_path, monkeypatc
     create_legacy_schema(database, 11)
     seed_historical_content(database)
     before = old_projection(database)
-    import longtian_api.migrations.initial_analysis as migration
+    import opinion_workbench_api.migrations.initial_analysis as migration
 
     original = migration.migrate
 
@@ -319,7 +324,7 @@ def test_auto_backlog_never_sweeps_history_or_loses_repeat(tmp_path):
     database = Database(tmp_path / "backlog.sqlite3")
     create_legacy_schema(database, 11)
     seed_historical_content(database, 1)
-    database.initialize()
+    initialize_database(database)
     # A storage-only provider row; this test never reads credentials or networks.
     with database.connect() as connection:
         connection.execute(
@@ -379,7 +384,7 @@ def test_genuine_legacy_outcomes_are_markers_not_generic_success(tmp_path):
     source = seed_historical_content(database, 7)
     seed_v11_summaries(database, source)
     before = old_projection(database)
-    database.initialize()
+    initialize_database(database)
     after = old_projection(database)
     assert all(after[table] == rows for table, rows in before.items())
     results = ResultsRepository(database)
@@ -394,7 +399,7 @@ def test_genuine_legacy_outcomes_are_markers_not_generic_success(tmp_path):
     assert len(old) == 2 and old[0].reused_from_item_id == old[1].item_id
     assert all(item.source_run_id == source for item in old)
     assert ContentAnalysisRepository(database).list().jobs == []
-    from longtian_api.repositories.ai_summaries import SummaryRepository
+    from opinion_workbench_api.repositories.ai_summaries import SummaryRepository
 
     SummaryRepository(database).initialize()
     assert results.read(6).analysis_state == "legacy_attempted"
@@ -407,7 +412,7 @@ def test_later_completion_recovers_pre_handoff_crash_not_cancelled_sources(tmp_p
     first = seed_run(database, 1)
     seed_run(database, 1, start=2000, terminal="cancelled")
     # Crash after the terminal collection commit, before its callback.
-    service.repository.initialize()
+    initialize_repository(service.repository)
     assert service.repository.list().jobs == []
     AnalysisSettingsRepository(database).save_automation(
         AutomationUpdate(
@@ -428,7 +433,7 @@ def test_later_completion_recovers_pre_handoff_crash_not_cancelled_sources(tmp_p
 def test_first_entry_filter_preserves_repeat_origins(tmp_path):
     from datetime import UTC, datetime
 
-    from longtian_api.services.results import ResultsService
+    from opinion_workbench_api.services.results import ResultsService
 
     database, source, _, _, _, _, _ = environment(tmp_path, count=1)
     first = ResultsRepository(database).read(1)

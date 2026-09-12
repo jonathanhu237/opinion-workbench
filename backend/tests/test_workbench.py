@@ -8,15 +8,18 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from fixture_support import initialize_database
 from summary_fixtures import seed_run
 from test_content_analysis_api import api_fixture
 from topic_report_fixtures import analyse_all, environment
 
-from longtian_api.database import Database
-from longtian_api.repositories.automation_workflows import AutomationWorkflowRepository
-from longtian_api.repositories.search_batches import SearchBatchRepository
-from longtian_api.services.workbench import WorkbenchService
-from longtian_api.services.workbench_errors import ERRORS, WorkbenchError
+from opinion_workbench_api.database import Database
+from opinion_workbench_api.repositories.automation_workflows import (
+    AutomationWorkflowRepository,
+)
+from opinion_workbench_api.repositories.search_batches import SearchBatchRepository
+from opinion_workbench_api.services.workbench import WorkbenchService
+from opinion_workbench_api.services.workbench_errors import ERRORS, WorkbenchError
 
 NOW = datetime(2026, 8, 29, 8, tzinfo=UTC)
 
@@ -27,7 +30,7 @@ def service(database):
 
 def database(tmp_path):
     owner = Database(tmp_path / "workbench.sqlite3")
-    owner.initialize()
+    initialize_database(owner)
     return owner
 
 
@@ -93,7 +96,7 @@ def test_empty_snapshot_and_global_next_automation(tmp_path):
     next_automation = service(owner).read().next_automation
     assert next_automation is not None
     assert next_automation.name == "最近规则"
-    assert next_automation.rule_name == "龙田街道及四个社区"
+    assert next_automation.rule_name == "测试采集规则"
     assert next_automation.due_at == (NOW + timedelta(minutes=15)).isoformat()
     assert next_automation.schedule.interval_minutes == 30
 

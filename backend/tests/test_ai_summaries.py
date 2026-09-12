@@ -8,11 +8,11 @@ import pytest
 from pydantic import SecretStr
 from summary_fixtures import BASE, KEY, MODEL, environment, finished, seed_run
 
-from longtian_api.schemas.ai_settings import AISettingsUpdate
-from longtian_api.schemas.ai_summaries import SummaryCreate
-from longtian_api.services.ai_errors import AIError
-from longtian_api.services.browser_operations import BrowserOperationOwner
-from longtian_api.services.summary_errors import SummaryError
+from opinion_workbench_api.schemas.ai_settings import AISettingsUpdate
+from opinion_workbench_api.schemas.ai_summaries import SummaryCreate
+from opinion_workbench_api.services.ai_errors import AIError
+from opinion_workbench_api.services.browser_operations import BrowserOperationOwner
+from opinion_workbench_api.services.summary_errors import SummaryError
 
 
 def payload(*, force=False, revision=1, request_id=None):

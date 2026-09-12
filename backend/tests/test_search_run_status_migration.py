@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-import longtian_api.database as migrations
+import opinion_workbench_api.database as migrations
 
 
 def _database_at_v27(path: Path) -> sqlite3.Connection:
@@ -40,10 +40,7 @@ def test_v28_adds_explicit_incomplete_status_without_losing_history(tmp_path: Pa
         )
         migrations._migrate_to_version_28(connection)
 
-        assert (
-            connection.execute("PRAGMA user_version").fetchone()[0]
-            == 28
-        )
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 28
         connection.execute(
             "UPDATE search_runs SET status = 'completed_with_incomplete' WHERE id = ?",
             (run_id,),
@@ -65,8 +62,7 @@ def test_v28_adds_explicit_incomplete_status_without_losing_history(tmp_path: Pa
         assert cursor.lastrowid == 42
         with pytest.raises(sqlite3.IntegrityError):
             connection.execute(
-                "UPDATE search_runs SET execution_start_term_position = 1 "
-                "WHERE id = ?",
+                "UPDATE search_runs SET execution_start_term_position = 1 WHERE id = ?",
                 (run_id,),
             )
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []

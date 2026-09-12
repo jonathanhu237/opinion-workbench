@@ -14,13 +14,16 @@ from test_content_analysis_api import saved
 from test_report_generations import generation_request, save_body
 from topic_report_fixtures import api_environment, environment, finish
 
-import longtian_api.database as migrations
-from longtian_api.schemas.topic_reports import ReportCancel
-from longtian_api.services.ai_analysis import AIAnalysisError
-from longtian_api.services.ai_client import AICompletion, encode_completion_request
-from longtian_api.services.ai_errors import AIError
-from longtian_api.services.content_understanding import parse_understanding
-from longtian_api.services.json_output import decode_answer
+import opinion_workbench_api.database as migrations
+from opinion_workbench_api.schemas.topic_reports import ReportCancel
+from opinion_workbench_api.services.ai_analysis import AIAnalysisError
+from opinion_workbench_api.services.ai_client import (
+    AICompletion,
+    encode_completion_request,
+)
+from opinion_workbench_api.services.ai_errors import AIError
+from opinion_workbench_api.services.content_understanding import parse_understanding
+from opinion_workbench_api.services.json_output import decode_answer
 
 
 @pytest.mark.parametrize(

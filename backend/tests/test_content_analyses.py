@@ -9,19 +9,23 @@ import pytest
 from initial_analysis_fixtures import UNDERSTANDING, environment, finish, request
 from summary_fixtures import seed_run
 
-from longtian_api.repositories.analysis_settings import AnalysisSettingsRepository
-from longtian_api.repositories.content_analyses import ContentAnalysisRepository
-from longtian_api.repositories.results import ResultsRepository
-from longtian_api.schemas.ai_settings import AISettingsUpdate
-from longtian_api.schemas.ai_summaries import SummaryCreate
-from longtian_api.schemas.content_analyses import WorkflowAnalysisCreate
-from longtian_api.services.ai_client import MAX_USAGE_TOKENS, AIUsage
-from longtian_api.services.ai_errors import AIError
-from longtian_api.services.ai_summaries import SummaryService
-from longtian_api.services.analysis_errors import AnalysisError
-from longtian_api.services.browser_operations import BrowserOperationOwner
-from longtian_api.services.collector_contracts import EnrichmentWorkerResult
-from longtian_api.services.summary_errors import failure
+from opinion_workbench_api.repositories.analysis_settings import (
+    AnalysisSettingsRepository,
+)
+from opinion_workbench_api.repositories.content_analyses import (
+    ContentAnalysisRepository,
+)
+from opinion_workbench_api.repositories.results import ResultsRepository
+from opinion_workbench_api.schemas.ai_settings import AISettingsUpdate
+from opinion_workbench_api.schemas.ai_summaries import SummaryCreate
+from opinion_workbench_api.schemas.content_analyses import WorkflowAnalysisCreate
+from opinion_workbench_api.services.ai_client import MAX_USAGE_TOKENS, AIUsage
+from opinion_workbench_api.services.ai_errors import AIError
+from opinion_workbench_api.services.ai_summaries import SummaryService
+from opinion_workbench_api.services.analysis_errors import AnalysisError
+from opinion_workbench_api.services.browser_operations import BrowserOperationOwner
+from opinion_workbench_api.services.collector_contracts import EnrichmentWorkerResult
+from opinion_workbench_api.services.summary_errors import failure
 
 
 def test_independent_neutral_text_understanding_and_unique_settlement(tmp_path):
@@ -189,9 +193,7 @@ def test_search_preview_is_not_analysed_or_reused_without_original_text(tmp_path
         assert len(worker.calls) == 1
         assert not model.calls
 
-        reused = await service.create(
-            request(database, kind="retry", result_ids=[1])
-        )
+        reused = await service.create(request(database, kind="retry", result_ids=[1]))
         await finish(service)
         reused_item = service.repository.items(reused.job.id).items[0]
         assert reused_item.status == "input_incomplete"

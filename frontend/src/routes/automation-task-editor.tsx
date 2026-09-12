@@ -469,7 +469,7 @@ export function AutomationTaskEditor({
                     {...field}
                     id="automation-task-name"
                     maxLength={80}
-                    placeholder="例如：龙田街道公共事务值守"
+                    placeholder="例如：公共事务舆情值守"
                     aria-invalid={fieldState.invalid}
                     aria-describedby="automation-task-name-error"
                     disabled={saveMutation.isPending}
@@ -648,7 +648,7 @@ export function AutomationTaskEditor({
               render={({ field, fieldState }) => (
                 <PromptChoiceField
                   id="automation-initial-prompt"
-                  label="内容理解提示词"
+                  label="总结提示词"
                   description="先理解每条来源，保留地点、时间、文字证据和不确定性。"
                   value={field.value}
                   onChange={field.onChange}
@@ -669,7 +669,7 @@ export function AutomationTaskEditor({
               render={({ field, fieldState }) => (
                 <PromptChoiceField
                   id="automation-report-prompt"
-                  label="相关性判断与报告提示词"
+                  label="报告提示词"
                   description="再根据内容理解判断相关性，并整理文字报告。"
                   value={field.value}
                   onChange={field.onChange}

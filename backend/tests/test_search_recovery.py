@@ -8,28 +8,29 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from fixture_support import initialize_database
 from test_search_batches import _app, _wait_for_batch
 
-import longtian_api.database as migration_module
-from longtian_api.database import Database, _migrate_to_version_10
-from longtian_api.repositories.search_batches import (
+import opinion_workbench_api.database as migration_module
+from opinion_workbench_api.database import Database, _migrate_to_version_10
+from opinion_workbench_api.repositories.search_batches import (
     SearchBatchRecoveryUnavailableError,
     SearchBatchRepository,
     SearchBatchRepositoryUnavailableError,
     SearchBatchStateChangedError,
 )
-from longtian_api.repositories.search_runs import (
+from opinion_workbench_api.repositories.search_runs import (
     SearchContentInput,
     SearchRunNotActiveError,
     SearchRunRepository,
     SearchRunRepositoryUnavailableError,
 )
-from longtian_api.services.collector_contracts import (
+from opinion_workbench_api.services.collector_contracts import (
     ManualPageWorkerResult,
     SearchWorkerResult,
 )
-from longtian_api.services.search_batches import SearchBatchService
-from longtian_api.services.settled_tasks import database_call
+from opinion_workbench_api.services.search_batches import SearchBatchService
+from opinion_workbench_api.services.settled_tasks import database_call
 
 
 def _item(identity):
@@ -48,7 +49,7 @@ def _item(identity):
 
 def setup_batch(tmp_path: Path, terms=("词一", "词二"), platforms=("wb",)):
     database = Database(tmp_path / "recovery.sqlite3")
-    database.initialize()
+    initialize_database(database)
     batches, runs = SearchBatchRepository(database), SearchRunRepository(database)
     batch = batches.create_batch(
         monitoring_rule_id=1,
@@ -508,7 +509,7 @@ def test_runner_fallback_settles_active_attempts_and_preserves_committed_success
 def test_restart_before_attempt_pauses_without_worker_calls(tmp_path):
     path = tmp_path / "restart.sqlite3"
     database = Database(path)
-    database.initialize()
+    initialize_database(database)
     repo = SearchBatchRepository(database)
     batch = repo.create_batch(
         monitoring_rule_id=1,
@@ -557,6 +558,18 @@ def _legacy_database(path):
     with database.connect() as connection:
         for version in range(1, 10):
             getattr(migration_module, f"_migrate_to_version_{version}")(connection)
+        timestamp = "2026-09-05T00:00:00+00:00"
+        connection.execute(
+            """INSERT INTO monitoring_rules
+              (id, name, normalized_name, enabled, created_at, updated_at)
+              VALUES (1, '测试采集规则', '测试采集规则', 1, ?, ?)""",
+            (timestamp, timestamp),
+        )
+        connection.execute(
+            """INSERT INTO monitoring_rule_terms
+              (rule_id, value, normalized_value, position)
+              VALUES (1, '测试对象', '测试对象', 0)"""
+        )
         connection.execute("""INSERT INTO search_batches
           (id, monitoring_rule_id, rule_name, max_results_per_term, status,
            current_item_position, created_at, started_at, finished_at)
@@ -590,8 +603,8 @@ def test_migration_preserves_history_backfills_empty_terms_and_audits_old_recove
     database = _legacy_database(tmp_path / "legacy.sqlite3")
     with database.connect() as connection:
         before = [tuple(row) for row in connection.execute("SELECT * FROM search_runs")]
-    database.initialize()
-    database.initialize()
+    initialize_database(database)
+    initialize_database(database)
     repository = SearchBatchRepository(database)
     old = repository.get(1)
     assert old.items[0].checkpoint.completed == 2
@@ -788,10 +801,10 @@ def test_recovery_controls_strict_shapes_and_stale_identity(tmp_path, action):
 @pytest.mark.parametrize("status", ["completed", "cancelled", "internal_error"])
 def test_historical_recovery_does_not_reopen_ineligible_batches(tmp_path, status):
     database = _legacy_database(tmp_path / "ineligible.sqlite3")
-    database.initialize()
+    initialize_database(database)
     with database.connect() as connection:
         connection.execute("UPDATE search_batches SET status = ?", (status,))
-    from longtian_api.repositories.search_batches import (
+    from opinion_workbench_api.repositories.search_batches import (
         SearchBatchItemNotRecoverableError,
     )
 
@@ -814,7 +827,7 @@ def test_legacy_corrupt_started_position_does_not_abort_migration_or_invent_proo
     database = _legacy_database(tmp_path / "corrupt.sqlite3")
     with database.connect() as connection:
         connection.execute("UPDATE search_runs SET current_term_position = 1.5")
-    database.initialize()
+    initialize_database(database)
     repo = SearchBatchRepository(database)
     recovered = repo.recover_item(1, 0, expected_run_id=1, expected_revision=0)
     assert not recovered.items[0].checkpoint.available

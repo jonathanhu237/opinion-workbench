@@ -14,8 +14,11 @@ from topic_report_fixtures import (
     retry_request,
 )
 
-from longtian_api.services.topic_report_engine import canonical_hash, output_digest
-from longtian_api.services.topic_report_errors import ERRORS, TopicReportError
+from opinion_workbench_api.services.topic_report_engine import (
+    canonical_hash,
+    output_digest,
+)
+from opinion_workbench_api.services.topic_report_errors import ERRORS, TopicReportError
 
 
 @asynccontextmanager

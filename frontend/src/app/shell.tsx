@@ -65,14 +65,14 @@ function healthReducer(_state: HealthState, action: HealthAction): HealthState {
   }
 }
 
-function FourCommunityMark() {
+function WorkbenchMark() {
   return (
-    <span className="community-watch-mark" aria-hidden="true">
-      <span className="community-watch-cell community-watch-cell-a" />
-      <span className="community-watch-cell community-watch-cell-b" />
-      <span className="community-watch-cell community-watch-cell-c" />
-      <span className="community-watch-cell community-watch-cell-d" />
-      <span className="community-watch-core" />
+    <span className="workbench-mark" aria-hidden="true">
+      <span className="workbench-mark-cell workbench-mark-cell-a" />
+      <span className="workbench-mark-cell workbench-mark-cell-b" />
+      <span className="workbench-mark-cell workbench-mark-cell-c" />
+      <span className="workbench-mark-cell workbench-mark-cell-d" />
+      <span className="workbench-mark-core" />
     </span>
   )
 }
@@ -80,10 +80,10 @@ function FourCommunityMark() {
 function ProductIdentity() {
   return (
     <div className="flex min-w-0 items-center gap-3">
-      <FourCommunityMark />
+      <WorkbenchMark />
       <div className="min-w-0">
         <p className="font-display text-lg leading-none font-semibold tracking-[-0.03em] text-sidebar-foreground">
-          舆情分析平台
+          舆情工作台
         </p>
       </div>
     </div>

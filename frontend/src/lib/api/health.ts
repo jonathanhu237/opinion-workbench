@@ -1,6 +1,6 @@
 import { getApiBaseUrl } from '@/lib/api/client'
 
-export const HEALTH_SERVICE = 'longtian-public-opinion-api' as const
+export const HEALTH_SERVICE = 'opinion-workbench-api' as const
 
 export type HealthResponse = {
   status: 'ok'

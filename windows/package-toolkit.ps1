@@ -4,7 +4,7 @@ param()
 $ErrorActionPreference = "Stop"
 $repo = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $stage = Join-Path $PSScriptRoot "build\toolkit"
-$archive = Join-Path $repo "dist\windows\Longtian-Windows-Build-Toolkit.zip"
+$archive = Join-Path $repo "dist\windows\OpinionWorkbench-Windows-Build-Toolkit.zip"
 
 if (Test-Path $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $stage | Out-Null
@@ -35,7 +35,7 @@ $files = @(
     "windows\build.cmd",
     "windows\build.ps1",
     "windows\launcher_entry.py",
-    "windows\longtian.spec",
+    "windows\opinion-workbench.spec",
     "windows\installer.iss",
     "windows\package-toolkit.ps1"
 )

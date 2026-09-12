@@ -215,7 +215,7 @@ it('defaults to eight and only remembers a concurrency after formal submission',
   expect(
     JSON.parse(
       localStorage.getItem(
-        'longtian:report-generation:summary-concurrency:v1',
+        'opinion-workbench:report-generation:summary-concurrency:v1',
       )!,
     ),
   ).toBe(4)
@@ -243,7 +243,9 @@ it('does not remember a concurrency when report submission fails', async () => {
   await user.click(screen.getByRole('button', { name: '确认生成报告' }))
   await waitFor(() => expect(createReportGeneration).toHaveBeenCalled())
   expect(
-    localStorage.getItem('longtian:report-generation:summary-concurrency:v1'),
+    localStorage.getItem(
+      'opinion-workbench:report-generation:summary-concurrency:v1',
+    ),
   ).toBeNull()
   first.unmount()
   sessionStorage.clear()
@@ -257,7 +259,7 @@ it('does not remember a concurrency when report submission fails', async () => {
 
 it('falls back to eight when the saved concurrency preference is corrupt', async () => {
   localStorage.setItem(
-    'longtian:report-generation:summary-concurrency:v1',
+    'opinion-workbench:report-generation:summary-concurrency:v1',
     'nope',
   )
   const user = userEvent.setup()

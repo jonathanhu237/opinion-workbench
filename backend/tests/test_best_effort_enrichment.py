@@ -6,18 +6,18 @@ from dataclasses import replace
 import pytest
 from pydantic import SecretStr
 
-from longtian_api.repositories.search_runs import SearchResultSourceRecord
-from longtian_api.schemas.analysis_evidence import SavedInput
-from longtian_api.services.ai_analysis import (
+from opinion_workbench_api.repositories.search_runs import SearchResultSourceRecord
+from opinion_workbench_api.schemas.analysis_evidence import SavedInput
+from opinion_workbench_api.services.ai_analysis import (
     AIAnalysisError,
     AnalysisContext,
     SummaryEvidence,
     build_analysis_messages,
     build_summary_messages,
 )
-from longtian_api.services.ai_client import AIConfiguration
-from longtian_api.services.content_enrichment import EnrichmentItem
-from longtian_api.services.enrichment_models import (
+from opinion_workbench_api.services.ai_client import AIConfiguration
+from opinion_workbench_api.services.content_enrichment import EnrichmentItem
+from opinion_workbench_api.services.enrichment_models import (
     EnrichedContent,
     evidence_fingerprint,
 )

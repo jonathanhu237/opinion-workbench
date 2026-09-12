@@ -14,11 +14,11 @@ from pydantic import SecretStr
 from summary_fixtures import BASE, KEY, MODEL, seed_run
 from test_content_analysis_api import api_fixture
 
-from longtian_api.schemas.ai_settings import AISettingsUpdate
+from opinion_workbench_api.schemas.ai_settings import AISettingsUpdate
 
 
 def create_smoke_app():
-    temporary = TemporaryDirectory(prefix="longtian-initial-smoke-")
+    temporary = TemporaryDirectory(prefix="opinion-workbench-initial-smoke-")
     app, database, model, media = api_fixture(Path(temporary.name), count=101)
     app.add_middleware(
         CORSMiddleware,

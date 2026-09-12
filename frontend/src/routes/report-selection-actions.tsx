@@ -47,9 +47,9 @@ import {
   isAmbiguousAnalysisError,
 } from '@/lib/api/analysis-shared'
 
-const pendingIntentKey = 'longtian:report-generation:pending-intent:v1'
+const pendingIntentKey = 'opinion-workbench:report-generation:pending-intent:v1'
 const summaryConcurrencyPreferenceKey =
-  'longtian:report-generation:summary-concurrency:v1'
+  'opinion-workbench:report-generation:summary-concurrency:v1'
 const DEFAULT_SUMMARY_CONCURRENCY = 8
 
 function readSummaryConcurrencyPreference(): z.infer<
@@ -408,7 +408,7 @@ export function ReportSelectionActions({
             <div className="grid gap-5">
               <PromptChoiceField
                 id="generation-initial-prompt"
-                label="内容理解提示词"
+                label="总结提示词"
                 description="用于生成单条总结；已有可用总结会复用。修改只影响本次报告。"
                 value={currentIntent?.initial_prompt ?? initialPrompt}
                 onChange={setInitialPrompt}

@@ -2,8 +2,8 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from longtian_api.main import create_app
-from longtian_api.services.monitoring_rules import MonitoringRuleService
+from opinion_workbench_api.main import create_app
+from opinion_workbench_api.services.monitoring_rules import MonitoringRuleService
 
 
 def test_health_returns_stable_contract(tmp_path: Path) -> None:
@@ -19,5 +19,5 @@ def test_health_returns_stable_contract(tmp_path: Path) -> None:
     assert response.status_code == 200
     assert response.json() == {
         "status": "ok",
-        "service": "longtian-public-opinion-api",
+        "service": "opinion-workbench-api",
     }

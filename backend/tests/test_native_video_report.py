@@ -194,7 +194,7 @@ def test_video_challenge_does_not_pause_text_only_report(tmp_path, video_samples
 def test_missing_video_probe_does_not_change_text_only_input(
     tmp_path, video_samples, monkeypatch
 ):
-    from longtian_api.services import video_probe
+    from opinion_workbench_api.services import video_probe
 
     monkeypatch.setattr(video_probe.shutil, "which", lambda name: None)
     app, _, model, requests = native_environment(
@@ -222,8 +222,8 @@ def test_missing_video_probe_does_not_change_text_only_input(
 def test_cancel_waits_for_owned_probe_start_and_exit(video_samples):
     from uuid import uuid4
 
-    from longtian_api.services.media_inventory import MediaCandidate
-    from longtian_api.services.video_probe import VideoProbe
+    from opinion_workbench_api.services.media_inventory import MediaCandidate
+    from opinion_workbench_api.services.video_probe import VideoProbe
 
     processes, arguments = [], []
 

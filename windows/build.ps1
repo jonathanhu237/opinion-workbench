@@ -141,8 +141,8 @@ function Reset-BuildOutputs {
     foreach ($path in @(
         (Join-Path $script:BuildRoot "app"),
         (Join-Path $script:BuildRoot "pyinstaller"),
-        (Join-Path $script:RepoRoot "dist\windows\Longtian-Setup.exe"),
-        (Join-Path $script:RepoRoot "dist\windows\Longtian-Windows.zip")
+        (Join-Path $script:RepoRoot "dist\windows\OpinionWorkbench-Setup.exe"),
+        (Join-Path $script:RepoRoot "dist\windows\OpinionWorkbench-Windows.zip")
     )) {
         if (Test-Path $path) { Remove-Item -LiteralPath $path -Recurse -Force }
     }
@@ -165,9 +165,11 @@ function Assert-CleanInputs {
         (Join-Path $script:RepoRoot "frontend\.env.example"),
         (Join-Path $script:RepoRoot "backend\.env.example")
     )
+    $runtimeRoot = Join-Path $script:RepoRoot "runtime"
     $sensitive = Get-ChildItem -Path $script:RepoRoot -Recurse -Force -File -ErrorAction SilentlyContinue |
         Where-Object {
             $_.FullName -notlike "$script:RepoRoot\.git\*" -and
+            $_.FullName -notlike "$runtimeRoot\*" -and
             ($_.Name -like "*.key" -or $_.Name -like "*.sqlite3" -or
                 ($_.Name -like ".env*" -and $allowedTemplates -notcontains $_.FullName))
         }
@@ -190,7 +192,7 @@ function Build-Backend {
     $backend = Join-Path $script:RepoRoot "backend"
     Invoke-Tool "mise" @("x", "--", "uv", "sync", "--locked") $backend
     Write-Step "生成 Windows 冻结程序"
-    $spec = Join-Path $PSScriptRoot "longtian.spec"
+    $spec = Join-Path $PSScriptRoot "opinion-workbench.spec"
     # Run PyInstaller in the backend project environment so the frozen
     # analysis sees the same locked runtime dependencies that the packaged
     # application will execute.  ``uv tool run`` creates an isolated tool
@@ -201,8 +203,8 @@ function Build-Backend {
 
 function Build-Portable {
     Write-Step "生成 ZIP 免安装版"
-    $app = Join-Path $script:BuildRoot "app\Longtian"
-    foreach ($relative in @("Longtian.exe", "LongtianGalleryWorker.exe", "_internal\resources\static\index.html")) {
+    $app = Join-Path $script:BuildRoot "app\OpinionWorkbench"
+    foreach ($relative in @("OpinionWorkbench.exe", "OpinionWorkbenchGalleryWorker.exe", "_internal\resources\static\index.html")) {
         if (-not (Test-Path (Join-Path $app $relative) -PathType Leaf)) {
             throw "免安装版缺少必要文件：$relative"
         }
@@ -215,7 +217,7 @@ function Build-Portable {
     }
     "version=$version", "source=$source", "architecture=x86_64", "minimum_windows=10" |
         Set-Content -LiteralPath (Join-Path $app "BUILD-METADATA.txt") -Encoding ascii
-    $archive = Join-Path $script:RepoRoot "dist\windows\Longtian-Windows.zip"
+    $archive = Join-Path $script:RepoRoot "dist\windows\OpinionWorkbench-Windows.zip"
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     # Include the entire frozen directory, including hidden files and the worker.
     # Never archive the repository or the user's runtime data.
@@ -225,7 +227,7 @@ function Build-Portable {
         [System.IO.Compression.CompressionLevel]::Optimal,
         $true
     )
-    $versioned = Join-Path $script:RepoRoot "dist\windows\Longtian-$version-Windows-x64.zip"
+    $versioned = Join-Path $script:RepoRoot "dist\windows\OpinionWorkbench-$version-Windows-x64.zip"
     Copy-Item -LiteralPath $archive -Destination $versioned -Force
     (Get-FileHash -Algorithm SHA256 $versioned).Hash.ToLower() + "  " + (Split-Path $versioned -Leaf) |
         Set-Content -LiteralPath "$versioned.sha256" -Encoding ascii
@@ -237,7 +239,7 @@ function Build-Installer {
     $iscc = Find-InnoCompiler
     if (-not $iscc) { throw "找不到 Inno Setup 编译器 ISCC.exe。" }
     Invoke-Tool $iscc @((Join-Path $PSScriptRoot "installer.iss"))
-    $installer = Join-Path $script:RepoRoot "dist\windows\Longtian-Setup.exe"
+    $installer = Join-Path $script:RepoRoot "dist\windows\OpinionWorkbench-Setup.exe"
     if (-not (Test-Path $installer)) {
         throw "Inno Setup 未生成预期产物：$installer"
     }

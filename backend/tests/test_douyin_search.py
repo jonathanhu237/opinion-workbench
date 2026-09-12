@@ -6,12 +6,12 @@ from urllib.parse import unquote, urlsplit
 import pytest
 from test_native_weibo_discovery import BrowserFixture
 
-from longtian_api.services.native_weibo import (
+from opinion_workbench_api.services.native_weibo import (
     _PLATFORM_SEARCH,
     NativeWeiboCollector,
     _read_generic_page,
 )
-from longtian_api.services.search_runs import project_worker_outcome
+from opinion_workbench_api.services.search_runs import project_worker_outcome
 
 URL = _PLATFORM_SEARCH["dy"]("龙田街道 投诉")
 

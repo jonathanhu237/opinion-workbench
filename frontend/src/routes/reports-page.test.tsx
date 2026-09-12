@@ -280,10 +280,10 @@ describe('舆情报告统一页面', () => {
       }),
     )
     await user.click(screen.getByRole('button', { name: '下一步' }))
-    expect(screen.getByText('内容分析提示词')).toBeVisible()
+    expect(screen.getByText('总结提示词')).toBeVisible()
     expect(createReportGeneration).not.toHaveBeenCalled()
     await user.click(screen.getByRole('button', { name: '下一步' }))
-    expect(screen.getByText('报告总结提示词')).toBeVisible()
+    expect(screen.getByText('报告提示词')).toBeVisible()
     await waitFor(() => expect(previewReportSelection).toHaveBeenCalled())
     await user.click(screen.getByRole('button', { name: '开始生成' }))
     await waitFor(() => expect(createReportGeneration).toHaveBeenCalledTimes(1))

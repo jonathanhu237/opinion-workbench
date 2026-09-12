@@ -88,7 +88,7 @@ export function ResultsConfirmation({
         </p>
         <PromptChoiceField
           id="manual-initial-prompt"
-          label="内容理解提示词"
+          label="总结提示词"
           description="本次只提交初步内容理解；相关性判断和报告稍后单独进行。"
           value={confirmation.request.initial_prompt ?? { mode: 'default' }}
           onChange={onPromptChange}

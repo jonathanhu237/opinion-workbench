@@ -7,8 +7,8 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
-from longtian_api.services import ai_client
-from longtian_api.services.ai_client import (
+from opinion_workbench_api.services import ai_client
+from opinion_workbench_api.services.ai_client import (
     MAX_RESPONSE_TEXT_BYTES,
     MAX_STREAM_BYTES,
     TEST_DEADLINE_SECONDS,
@@ -20,7 +20,7 @@ from longtian_api.services.ai_client import (
     encode_completion_request,
     normalize_base_url,
 )
-from longtian_api.services.ai_errors import AIError
+from opinion_workbench_api.services.ai_errors import AIError
 
 KEY = "fake-transport-credential-sentinel"
 CONFIGURATION = AIConfiguration(

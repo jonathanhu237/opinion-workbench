@@ -117,7 +117,7 @@ const productErrorContracts = {
   },
   duplicate_monitoring_rule_term: {
     status: 422,
-    message: '监控对象、舆情关键词或生成的搜索词存在重复，请检查。',
+    message: '采集对象、舆情词或生成的搜索词存在重复，请检查。',
   },
   monitoring_rule_name_conflict: {
     status: 409,

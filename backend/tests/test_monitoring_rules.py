@@ -5,32 +5,24 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from longtian_api.database import (
+from opinion_workbench_api.database import (
     CURRENT_DATABASE_VERSION,
-    DEFAULT_RULE_NAME,
-    DEFAULT_RULE_TERMS,
     Database,
     DatabaseVersionError,
 )
-from longtian_api.main import create_app
-from longtian_api.repositories.monitoring_rules import (
+from opinion_workbench_api.main import create_app
+from opinion_workbench_api.repositories.monitoring_rules import (
     MonitoringRuleRecord,
     MonitoringRuleRepositoryUnavailableError,
     PreparedMonitoringRule,
 )
-from longtian_api.schemas.monitoring_rules import MonitoringRuleCreate
-from longtian_api.services.monitoring_rules import MonitoringRuleService
-from longtian_api.services.platform_connections import PlatformConnectionService
-from longtian_api.services.search_runs import SearchRunService
+from opinion_workbench_api.schemas.monitoring_rules import MonitoringRuleCreate
+from opinion_workbench_api.services.monitoring_rules import MonitoringRuleService
+from opinion_workbench_api.services.platform_connections import (
+    PlatformConnectionService,
+)
+from opinion_workbench_api.services.search_runs import SearchRunService
 
-DEFAULT_RULE = {
-    "id": 1,
-    "terms": list(DEFAULT_RULE_TERMS),
-    "name": DEFAULT_RULE_NAME,
-    "issue_keywords": [],
-    "monitoring_objects": list(DEFAULT_RULE_TERMS),
-    "enabled": True,
-}
 INVALID_REQUEST = {"detail": {"code": "invalid_request", "message": "请求内容不正确。"}}
 
 
@@ -49,7 +41,7 @@ def _create_test_app(
     )
 
 
-def test_fresh_migration_configures_sqlite_and_seeds_exactly_once(
+def test_fresh_migration_configures_sqlite_and_starts_empty(
     tmp_path: Path,
 ) -> None:
     database_path = tmp_path / "nested" / "rules.sqlite3"
@@ -58,7 +50,7 @@ def test_fresh_migration_configures_sqlite_and_seeds_exactly_once(
     service.initialize()
     service.initialize()
 
-    assert service.list_rules().model_dump(mode="json") == {"rules": [DEFAULT_RULE]}
+    assert service.list_rules().model_dump(mode="json") == {"rules": []}
     configured_connection = Database(database_path).connect()
     try:
         assert configured_connection.execute("PRAGMA foreign_keys").fetchone()[0] == 1
@@ -84,11 +76,11 @@ def test_fresh_migration_configures_sqlite_and_seeds_exactly_once(
         } >= {"ix_monitoring_rules_enabled_id"}
 
 
-def test_deleted_migration_seed_is_not_recreated_on_restart(tmp_path: Path) -> None:
+def test_empty_state_is_not_repopulated_on_restart(tmp_path: Path) -> None:
     database_path = tmp_path / "rules.sqlite3"
     first = MonitoringRuleService(database_path=database_path)
     first.initialize()
-    first.delete_rule(1)
+    assert first.list_rules().rules == []
 
     second = MonitoringRuleService(database_path=database_path)
     second.initialize()
@@ -119,7 +111,7 @@ def test_crud_filtering_order_and_persistence_across_restart(tmp_path: Path) -> 
         )
         assert created.status_code == 201
         assert created.json() == {
-            "id": 2,
+            "id": 1,
             "terms": ["坪山大道", "学校"],
             "name": "重点地点",
             "issue_keywords": [],
@@ -128,7 +120,7 @@ def test_crud_filtering_order_and_persistence_across_restart(tmp_path: Path) -> 
         }
 
         replaced = client.put(
-            "/api/v1/monitoring-rules/2",
+            "/api/v1/monitoring-rules/1",
             json={
                 "name": "重点事件",
                 "issue_keywords": [],
@@ -138,7 +130,7 @@ def test_crud_filtering_order_and_persistence_across_restart(tmp_path: Path) -> 
         )
         assert replaced.status_code == 200
         assert replaced.json() == {
-            "id": 2,
+            "id": 1,
             "terms": ["噪音扰民", "交通事故"],
             "name": "重点事件",
             "issue_keywords": [],
@@ -147,25 +139,25 @@ def test_crud_filtering_order_and_persistence_across_restart(tmp_path: Path) -> 
         }
 
         assert client.get("/api/v1/monitoring-rules").json() == {
-            "rules": [DEFAULT_RULE, replaced.json()]
+            "rules": [replaced.json()]
         }
         assert client.get(
             "/api/v1/monitoring-rules", params={"enabled": True}
-        ).json() == {"rules": [DEFAULT_RULE]}
+        ).json() == {"rules": []}
         assert client.get(
             "/api/v1/monitoring-rules", params={"enabled": False}
         ).json() == {"rules": [replaced.json()]}
 
     with TestClient(_create_test_app(database_path)) as client:
         persisted = client.get("/api/v1/monitoring-rules")
-        assert persisted.json() == {"rules": [DEFAULT_RULE, replaced.json()]}
-        deleted = client.delete("/api/v1/monitoring-rules/2")
+        assert persisted.json() == {"rules": [replaced.json()]}
+        deleted = client.delete("/api/v1/monitoring-rules/1")
         assert deleted.status_code == 204
         assert deleted.content == b""
 
     with sqlite3.connect(database_path) as connection:
         assert connection.execute(
-            "SELECT COUNT(*) FROM monitoring_rule_terms WHERE rule_id = 2"
+            "SELECT COUNT(*) FROM monitoring_rule_terms WHERE rule_id = 1"
         ).fetchone() == (0,)
 
 
@@ -188,7 +180,7 @@ def test_crud_filtering_order_and_persistence_across_restart(tmp_path: Path) -> 
                 "monitoring_objects": [],
                 "enabled": True,
             },
-            "请至少输入一个监控对象。",
+            "请至少输入一个采集对象。",
         ),
         (
             {
@@ -197,7 +189,7 @@ def test_crud_filtering_order_and_persistence_across_restart(tmp_path: Path) -> 
                 "monitoring_objects": ["   "],
                 "enabled": True,
             },
-            "监控对象不能为空。",
+            "采集对象不能为空。",
         ),
         (
             {
@@ -215,7 +207,7 @@ def test_crud_filtering_order_and_persistence_across_restart(tmp_path: Path) -> 
                 "monitoring_objects": ["词" * 101],
                 "enabled": True,
             },
-            "监控对象不能超过 100 个字符。",
+            "采集对象不能超过 100 个字符。",
         ),
         (
             {
@@ -223,7 +215,7 @@ def test_crud_filtering_order_and_persistence_across_restart(tmp_path: Path) -> 
                 "issue_keywords": [],
                 "monitoring_objects": [str(index) for index in range(101)],
             },
-            "每条监控规则最多包含 100 个监控对象。",
+            "每条监控规则最多包含 100 个采集对象。",
         ),
     ],
 )
@@ -256,7 +248,7 @@ def test_normalized_duplicate_terms_are_rejected_without_silent_deduplication(
     assert response.json() == {
         "detail": {
             "code": "duplicate_monitoring_rule_term",
-            "message": "监控对象不能重复，请检查后重试。",
+            "message": "采集对象不能重复，请检查后重试。",
         }
     }
 
@@ -432,6 +424,16 @@ def test_failed_term_replacement_rolls_back_entire_rule_and_sanitizes_storage_er
 ) -> None:
     database_path = tmp_path / "private-sentinel" / "rules.sqlite3"
     with TestClient(_create_test_app(database_path)) as client:
+        created = client.post(
+            "/api/v1/monitoring-rules",
+            json={
+                "name": "原始规则",
+                "issue_keywords": [],
+                "monitoring_objects": ["原始对象"],
+                "enabled": True,
+            },
+        )
+        assert created.status_code == 201
         with sqlite3.connect(database_path) as connection:
             connection.execute(
                 """
@@ -466,7 +468,7 @@ def test_failed_term_replacement_rolls_back_entire_rule_and_sanitizes_storage_er
     assert "private-sentinel" not in serialized
     assert "raw sqlite sentinel" not in serialized
     assert "用户输入-sentinel" not in serialized
-    assert after_failure == {"rules": [DEFAULT_RULE]}
+    assert after_failure == {"rules": [created.json()]}
 
 
 class UnavailableRepository:
@@ -525,14 +527,14 @@ def test_enabled_service_boundary_preserves_term_order(tmp_path: Path) -> None:
     service.initialize()
     service.create_rule(
         MonitoringRuleCreate(
-            name="已停用规则", monitoring_objects=["第二", "第一"], enabled=False
+            name="启用规则", monitoring_objects=["第二", "第一"], enabled=True
         )
     )
 
     enabled = service.list_enabled()
 
     assert [rule.id for rule in enabled] == [1]
-    assert enabled[0].terms == DEFAULT_RULE_TERMS
+    assert enabled[0].terms == ("第二", "第一")
 
 
 def test_openapi_documents_monitoring_rule_contracts(tmp_path: Path) -> None:
@@ -574,7 +576,8 @@ def test_rule_crud_never_launches_the_platform_worker(
         raise AssertionError("Monitoring rules must not call a model")
 
     monkeypatch.setattr(
-        "longtian_api.services.ai_client.AIClient.complete_text", fail_if_model_called
+        "opinion_workbench_api.services.ai_client.AIClient.complete_text",
+        fail_if_model_called,
     )
 
     platform_service = PlatformConnectionService()
@@ -598,7 +601,7 @@ def test_rule_crud_never_launches_the_platform_worker(
         )
         assert (
             client.put(
-                "/api/v1/monitoring-rules/2",
+                "/api/v1/monitoring-rules/1",
                 json={
                     "name": "保存规则",
                     "monitoring_objects": ["甲", "乙"],
@@ -614,4 +617,4 @@ def test_rule_crud_never_launches_the_platform_worker(
             "乙 问题一",
             "乙 问题二",
         ]
-        assert client.delete("/api/v1/monitoring-rules/2").status_code == 204
+        assert client.delete("/api/v1/monitoring-rules/1").status_code == 204

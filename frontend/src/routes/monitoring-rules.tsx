@@ -89,13 +89,13 @@ const ruleEditorSchema = z
       context.addIssue({
         code: 'custom',
         path: ['monitoringObjectsText'],
-        message: '请至少输入一个监控对象。',
+        message: '请至少输入一个采集对象。',
       })
       return
     }
     for (const [path, label, terms] of [
-      ['monitoringObjectsText', '监控对象', objects],
-      ['issueKeywordsText', '舆情关键词', issues],
+      ['monitoringObjectsText', '采集对象', objects],
+      ['issueKeywordsText', '舆情词', issues],
     ] as const) {
       if (terms.length > MAX_TERMS_PER_RULE) {
         context.addIssue({
@@ -127,7 +127,7 @@ const ruleEditorSchema = z
       context.addIssue({
         code: 'custom',
         path: [combinationPath],
-        message: `每条规则最多生成 ${MAX_TERMS_PER_RULE} 个搜索词，请减少监控对象或舆情关键词。`,
+        message: `每条规则最多生成 ${MAX_TERMS_PER_RULE} 个搜索词，请减少采集对象或舆情词。`,
       })
     }
     if (
@@ -136,7 +136,7 @@ const ruleEditorSchema = z
       context.addIssue({
         code: 'custom',
         path: [combinationPath],
-        message: `生成的搜索词不能超过 ${MAX_TERM_LENGTH} 个字符，请缩短监控对象或舆情关键词。`,
+        message: `生成的搜索词不能超过 ${MAX_TERM_LENGTH} 个字符，请缩短采集对象或舆情词。`,
       })
     }
     const normalized = generated.terms.map(normalizeForDuplicateCheck)
@@ -144,7 +144,7 @@ const ruleEditorSchema = z
       context.addIssue({
         code: 'custom',
         path: [combinationPath],
-        message: '生成的搜索词不能重复，请调整监控对象或舆情关键词。',
+        message: '生成的搜索词不能重复，请调整采集对象或舆情词。',
       })
     }
   })
@@ -329,7 +329,7 @@ function RuleEditorDialog({ editor, onClose, onSaved }: RuleEditorDialogProps) {
               control={form.control}
               render={({ field, fieldState }) => (
                 <Field data-invalid={fieldState.invalid}>
-                  <FieldLabel htmlFor="rule-objects">监控对象</FieldLabel>
+                  <FieldLabel htmlFor="rule-objects">采集对象</FieldLabel>
                   <Textarea
                     {...field}
                     id="rule-objects"
@@ -360,9 +360,7 @@ function RuleEditorDialog({ editor, onClose, onSaved }: RuleEditorDialogProps) {
               control={form.control}
               render={({ field, fieldState }) => (
                 <Field data-invalid={fieldState.invalid}>
-                  <FieldLabel htmlFor="rule-issues">
-                    舆情关键词（选填）
-                  </FieldLabel>
+                  <FieldLabel htmlFor="rule-issues">舆情词（选填）</FieldLabel>
                   <Textarea
                     {...field}
                     id="rule-issues"
@@ -378,7 +376,7 @@ function RuleEditorDialog({ editor, onClose, onSaved }: RuleEditorDialogProps) {
                     disabled={pending}
                   />
                   <FieldDescription id="rule-issues-description">
-                    每行填写一个；留空时只搜索监控对象，填写后会逐一组合。
+                    每行填写一个；留空时只搜索采集对象，填写后会逐一组合。
                   </FieldDescription>
                   <FieldError
                     id="rule-issues-error"
@@ -405,7 +403,7 @@ function RuleEditorDialog({ editor, onClose, onSaved }: RuleEditorDialogProps) {
                 </p>
               ) : preview.count === 0 ? (
                 <p className="text-sm text-muted-foreground">
-                  填写监控对象后可查看预览。
+                  填写采集对象后可查看预览。
                 </p>
               ) : (
                 <div
@@ -510,13 +508,13 @@ function RuleRow({ rule, onEdit, onDelete, onStatusChanged }: RuleRowProps) {
               共 {rule.terms.length} 个搜索词
             </p>
             {[
-              { label: '监控对象', terms: rule.monitoring_objects },
-              { label: '舆情关键词', terms: rule.issue_keywords },
+              { label: '采集对象', terms: rule.monitoring_objects },
+              { label: '舆情词', terms: rule.issue_keywords },
             ].map((group) => (
               <div key={group.label} className="mt-3 space-y-2">
                 <p className="text-xs text-muted-foreground">
                   {group.label}
-                  {group.terms.length === 0 ? '：未设置，仅搜索监控对象' : ''}
+                  {group.terms.length === 0 ? '：未设置，仅搜索采集对象' : ''}
                 </p>
                 <div className="flex min-w-0 flex-wrap gap-2">
                   {group.terms.map((term) => (
@@ -714,7 +712,7 @@ export function MonitoringRules() {
                   还没有监控规则
                 </p>
                 <p className="mt-2 text-sm text-muted-foreground">
-                  新建一条规则，添加需要持续关注的监控对象。
+                  新建一条规则，添加需要持续关注的采集对象。
                 </p>
                 <Button
                   type="button"

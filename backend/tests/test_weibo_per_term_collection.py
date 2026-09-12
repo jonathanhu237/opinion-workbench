@@ -6,12 +6,13 @@ from urllib.parse import parse_qs, urlsplit
 
 import pytest
 from fastapi.testclient import TestClient
+from fixture_support import initialize_database
 from test_native_weibo_discovery import EMPTY, BrowserFixture, card, environment
 from test_search_batches import _control, _wait_for_batch
 from test_search_runs import _wait_for_terminal
 
-from longtian_api.services.native_weibo import NativeWeiboCollector
-from longtian_api.services.weibo_dom import read_search_page
+from opinion_workbench_api.services.native_weibo import NativeWeiboCollector
+from opinion_workbench_api.services.weibo_dom import read_search_page
 
 A, B = "5012345678901234", "5012345678901235"
 
@@ -296,15 +297,15 @@ def test_repository_enforces_per_term_cap_across_attempts_without_limiting_other
 ):
     from test_search_recovery import _item, control
 
-    from longtian_api.database import Database
-    from longtian_api.repositories.search_batches import SearchBatchRepository
-    from longtian_api.repositories.search_runs import (
+    from opinion_workbench_api.database import Database
+    from opinion_workbench_api.repositories.search_batches import SearchBatchRepository
+    from opinion_workbench_api.repositories.search_runs import (
         SearchRunNotActiveError,
         SearchRunRepository,
     )
 
     database = Database(tmp_path / "cap.sqlite3")
-    database.initialize()
+    initialize_database(database)
     batches, runs = SearchBatchRepository(database), SearchRunRepository(database)
     batch = batches.create_batch(
         monitoring_rule_id=1,

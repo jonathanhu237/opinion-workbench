@@ -5,15 +5,18 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from fixture_support import initialize_database, initialize_repository
 from test_content_analysis_api import saved
 from test_report_generations import generation_request
 from topic_report_fixtures import api_environment
 
-from longtian_api.repositories import analysis_settings
-from longtian_api.repositories.report_generations import ReportGenerationRepository
-from longtian_api.repositories.topic_reports import TopicReportRepository
-from longtian_api.schemas.report_generations import GenerationCreate
-from longtian_api.services.analysis_errors import AnalysisError
+from opinion_workbench_api.repositories import analysis_settings
+from opinion_workbench_api.repositories.report_generations import (
+    ReportGenerationRepository,
+)
+from opinion_workbench_api.repositories.topic_reports import TopicReportRepository
+from opinion_workbench_api.schemas.report_generations import GenerationCreate
+from opinion_workbench_api.services.analysis_errors import AnalysisError
 
 
 def test_upgrade_existing_template_guards_and_preserve_frozen_history(
@@ -54,7 +57,8 @@ def test_upgrade_existing_template_guards_and_preserve_frozen_history(
             lambda stage: old_text if stage == "initial" else original_default(stage),
         )
         prior = repo.create_generation(GenerationCreate(**generation_request([1])))
-        repo.initialize()  # interrupted terminal history, as after an app restart
+        # Simulate an app restart after interrupted terminal history.
+        initialize_repository(repo)
     with database.connect() as connection:
         connection.execute("PRAGMA user_version=36")
     payload = GenerationCreate(**generation_request([1]))
@@ -67,8 +71,8 @@ def test_upgrade_existing_template_guards_and_preserve_frozen_history(
                 "SELECT * FROM content_analysis_jobs ORDER BY id"
             )
         ]
-    database.initialize()
-    database.initialize()  # idempotent restart
+    initialize_database(database)
+    initialize_database(database)  # idempotent restart
     with database.connect() as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 38
         assert [

@@ -23,7 +23,7 @@ def audit_archive(path: Path, version: str, commit: str, platform: str) -> None:
             member = PurePosixPath(name)
             if member.is_absolute() or ".." in member.parts or "\\" in name:
                 raise ValueError("unsafe archive path")
-            if not member.parts or member.parts[0] != "Longtian":
+            if not member.parts or member.parts[0] != "OpinionWorkbench":
                 raise ValueError("unexpected archive root")
             if len(member.parts) > 1 and member.parts[1].lower() in {
                 "data",
@@ -42,7 +42,7 @@ def audit_archive(path: Path, version: str, commit: str, platform: str) -> None:
                 raise ValueError("runtime data in archive")
         metadata = dict(
             line.split("=", 1)
-            for line in archive.read("Longtian/BUILD-METADATA.txt")
+            for line in archive.read("OpinionWorkbench/BUILD-METADATA.txt")
             .decode("utf-8-sig")
             .splitlines()
             if "=" in line
@@ -56,26 +56,26 @@ def audit_archive(path: Path, version: str, commit: str, platform: str) -> None:
             }.items()
         ):
             raise ValueError("archive identity mismatch")
-        executable = "Longtian.exe" if platform == "Windows-x64" else "Longtian"
+        executable = "OpinionWorkbench.exe" if platform == "Windows-x64" else "OpinionWorkbench"
         worker = (
-            "LongtianGalleryWorker.exe"
+            "OpinionWorkbenchGalleryWorker.exe"
             if platform == "Windows-x64"
-            else "LongtianGalleryWorker"
+            else "OpinionWorkbenchGalleryWorker"
         )
         for required in (executable, worker, "_internal/resources/static/index.html"):
-            if f"Longtian/{required}" not in names:
+            if f"OpinionWorkbench/{required}" not in names:
                 raise ValueError("missing runtime resource")
         if platform == "macOS-arm64":
             for executable in (executable, worker, "启动.command"):
                 if (
-                    not (archive.getinfo(f"Longtian/{executable}").external_attr >> 16)
+                    not (archive.getinfo(f"OpinionWorkbench/{executable}").external_attr >> 16)
                     & 0o111
                 ):
                     raise ValueError("missing executable permission")
 
 
 def validate_assets(root: Path, tag: str, commit: str) -> None:
-    expected = {f"Longtian-{tag}-{p}.zip" for p in PLATFORMS}
+    expected = {f"OpinionWorkbench-{tag}-{p}.zip" for p in PLATFORMS}
     files = [p for p in root.rglob("*") if p.is_file()]
     if sorted(p.name for p in files) != sorted(
         expected | {n + ".sha256" for n in expected}

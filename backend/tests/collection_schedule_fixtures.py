@@ -2,19 +2,24 @@
 
 from datetime import UTC, datetime, timedelta
 
+from fixture_support import initialize_database
 from test_initial_analysis_handoff import IdentityConsistentWorker
 
-from longtian_api.database import Database
-from longtian_api.schemas.collection_schedules import (
+from opinion_workbench_api.database import Database
+from opinion_workbench_api.schemas.collection_schedules import (
     CollectionScheduleCreate,
     CollectionScheduleReplace,
 )
-from longtian_api.services.browser_operations import BrowserOperationCoordinator
-from longtian_api.services.collection_schedules import CollectionScheduleService
-from longtian_api.services.collector_contracts import ManualPageWorkerResult
-from longtian_api.services.monitoring_rules import MonitoringRuleService
-from longtian_api.services.search_batches import SearchBatchService
-from longtian_api.services.search_runs import SearchRunService
+from opinion_workbench_api.services.browser_operations import (
+    BrowserOperationCoordinator,
+)
+from opinion_workbench_api.services.collection_schedules import (
+    CollectionScheduleService,
+)
+from opinion_workbench_api.services.collector_contracts import ManualPageWorkerResult
+from opinion_workbench_api.services.monitoring_rules import MonitoringRuleService
+from opinion_workbench_api.services.search_batches import SearchBatchService
+from opinion_workbench_api.services.search_runs import SearchRunService
 
 
 class FakeClock:
@@ -69,7 +74,7 @@ def enabled(service, **changes):
 
 def environment(tmp_path, *, outcome="completed_empty", worker=None, available=True):
     database = Database(tmp_path / "schedules.sqlite3")
-    database.initialize()
+    initialize_database(database)
     rules = MonitoringRuleService(database_path=database.path)
     clock = FakeClock()
     coordinator = BrowserOperationCoordinator()

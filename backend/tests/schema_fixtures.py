@@ -3,8 +3,10 @@
 import json
 from uuid import uuid4
 
-from longtian_api import database as migrations
-from longtian_api.database import Database
+from opinion_workbench_api import database as migrations
+from opinion_workbench_api.database import Database
+from opinion_workbench_api.schemas.monitoring_rules import MonitoringRuleCreate
+from opinion_workbench_api.services.monitoring_rules import MonitoringRuleService
 
 
 def create_legacy_schema(database: Database, version: int) -> None:
@@ -13,9 +15,42 @@ def create_legacy_schema(database: Database, version: int) -> None:
             getattr(migrations, f"_migrate_to_version_{number}")(connection)
 
 
+def seed_legacy_rule(
+    database: Database,
+    *,
+    name: str = "测试采集规则",
+    value: str = "测试对象",
+) -> None:
+    """Create the minimal v1-compatible rule used by historical fixtures."""
+    timestamp = "2026-08-28T00:00:00+00:00"
+    with database.connect() as connection:
+        connection.execute(
+            """INSERT INTO monitoring_rules
+              (id, name, normalized_name, enabled, created_at, updated_at)
+              VALUES (1, ?, ?, 1, ?, ?)""",
+            (name, name, timestamp, timestamp),
+        )
+        connection.execute(
+            """INSERT INTO monitoring_rule_terms
+              (rule_id, value, normalized_value, position)
+              VALUES (1, ?, ?, 0)""",
+            (value, value),
+        )
+
+
 def seed_historical_content(database: Database, count: int = 2) -> int:
     """Frozen v10/v11 SQL, not current repositories against an old schema."""
     timestamp = "2026-08-28T00:00:00+00:00"
+    rule_service = MonitoringRuleService(database_path=database.path)
+    if not rule_service.list_rules().rules:
+        rule_service.create_rule(
+            MonitoringRuleCreate(
+                name="历史规则",
+                monitoring_objects=["历史对象"],
+                issue_keywords=[],
+                enabled=True,
+            )
+        )
     with database.connect() as connection:
         connection.execute("BEGIN IMMEDIATE")
         run_id = connection.execute(

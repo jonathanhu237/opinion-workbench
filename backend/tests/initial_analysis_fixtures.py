@@ -3,18 +3,21 @@
 import asyncio
 from uuid import uuid4
 
+from fixture_support import initialize_database
 from pydantic import SecretStr
 from summary_fixtures import BASE, KEY, MODEL, MediaWorker, ModelClient, seed_run
 
-from longtian_api.database import Database
-from longtian_api.repositories.search_runs import SearchRunRepository
-from longtian_api.schemas.ai_settings import AISettingsUpdate
-from longtian_api.schemas.content_analyses import AnalysisCreate
-from longtian_api.services.ai_settings import AISettingsService
-from longtian_api.services.browser_operations import BrowserOperationCoordinator
-from longtian_api.services.content_analyses import ContentAnalysisService
-from longtian_api.services.content_enrichment import ContentEnrichmentService
-from longtian_api.services.enrichment_staging import MediaSpool
+from opinion_workbench_api.database import Database
+from opinion_workbench_api.repositories.search_runs import SearchRunRepository
+from opinion_workbench_api.schemas.ai_settings import AISettingsUpdate
+from opinion_workbench_api.schemas.content_analyses import AnalysisCreate
+from opinion_workbench_api.services.ai_settings import AISettingsService
+from opinion_workbench_api.services.browser_operations import (
+    BrowserOperationCoordinator,
+)
+from opinion_workbench_api.services.content_analyses import ContentAnalysisService
+from opinion_workbench_api.services.content_enrichment import ContentEnrichmentService
+from opinion_workbench_api.services.enrichment_staging import MediaSpool
 
 UNDERSTANDING = {
     "summary": "来源反映一处路段积水，陈述尚未核实。",
@@ -53,7 +56,7 @@ def request(database, *, kind="all_never_started", result_ids=None, **overrides)
 
 def environment(tmp_path, *, count=2, media=True, available=False):
     database = Database(tmp_path / "initial.sqlite3")
-    database.initialize()
+    initialize_database(database)
     source = seed_run(database, count) if count else None
     model = UnderstandingClient()
     ai = AISettingsService(database, client=model)

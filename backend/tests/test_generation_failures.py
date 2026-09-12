@@ -11,9 +11,11 @@ from test_content_analysis_api import body, saved
 from test_report_generations import generation_request, save_body
 from topic_report_fixtures import api_environment, finish
 
-from longtian_api.repositories.content_materials import ContentMaterialRepository
-from longtian_api.services.ai_errors import AIError
-from longtian_api.services.enrichment_models import EnrichedContent
+from opinion_workbench_api.repositories.content_materials import (
+    ContentMaterialRepository,
+)
+from opinion_workbench_api.services.ai_errors import AIError
+from opinion_workbench_api.services.enrichment_models import EnrichedContent
 
 
 @pytest.mark.parametrize("report_failure", [False, True])

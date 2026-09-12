@@ -5,10 +5,13 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from fixture_support import initialize_database
 
-from longtian_api import database as migrations
-from longtian_api.database import CURRENT_DATABASE_VERSION, Database
-from longtian_api.repositories.automation_workflows import AutomationWorkflowRepository
+from opinion_workbench_api import database as migrations
+from opinion_workbench_api.database import CURRENT_DATABASE_VERSION, Database
+from opinion_workbench_api.repositories.automation_workflows import (
+    AutomationWorkflowRepository,
+)
 
 
 def _version_25_database(path: Path) -> Database:
@@ -16,6 +19,18 @@ def _version_25_database(path: Path) -> Database:
     with database.connect() as connection:
         for version in range(1, 26):
             getattr(migrations, f"_migrate_to_version_{version}")(connection)
+        timestamp = "2026-09-05T00:00:00+00:00"
+        connection.execute(
+            """INSERT INTO monitoring_rules
+              (id, name, normalized_name, enabled, created_at, updated_at)
+              VALUES (1, '测试采集规则', '测试采集规则', 1, ?, ?)""",
+            (timestamp, timestamp),
+        )
+        connection.execute(
+            """INSERT INTO monitoring_rule_terms
+              (rule_id, value, normalized_value, position)
+              VALUES (1, '测试对象', '测试对象', 0)"""
+        )
     return database
 
 
@@ -211,7 +226,7 @@ def _seed_mixed_batch(database: Database) -> None:
 
 def test_fresh_database_has_the_supported_platform_constraints(tmp_path: Path) -> None:
     database = Database(tmp_path / "fresh.sqlite3")
-    database.initialize()
+    initialize_database(database)
 
     with database.connect() as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == (
@@ -248,8 +263,8 @@ def test_v26_removes_obsolete_graph_preserves_valid_data_and_is_idempotent(
     database = _version_25_database(tmp_path / "v25.sqlite3")
     _seed_v25(database)
 
-    database.initialize()
-    database.initialize()
+    initialize_database(database)
+    initialize_database(database)
 
     with database.connect() as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == (
@@ -331,7 +346,7 @@ def test_v26_refuses_to_delete_obsolete_task_history(tmp_path: Path) -> None:
     with pytest.raises(
         sqlite3.DatabaseError, match="Cannot remove obsolete automation tasks"
     ):
-        database.initialize()
+        initialize_database(database)
 
     with database.connect() as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 25
@@ -356,7 +371,7 @@ def test_v26_does_not_delete_same_name_weibo_only_task(tmp_path: Path) -> None:
     database = _version_25_database(tmp_path / "same-name-task.sqlite3")
     _seed_v25(database, with_same_name_enabled_task=True)
 
-    database.initialize()
+    initialize_database(database)
 
     with database.connect() as connection:
         assert [
@@ -399,7 +414,7 @@ def test_v26_keeps_unknown_enabled_task_readable_but_disables_it(
         )
         connection.execute("INSERT INTO automation_task_platforms VALUES (3, 0, 'xhs')")
 
-    database.initialize()
+    initialize_database(database)
 
     with database.connect() as connection:
         assert tuple(
@@ -496,7 +511,7 @@ def test_v26_preserves_weibo_attempts_in_a_mixed_analysis_job(
             WHERE content_id=2"""
         )
 
-    database.initialize()
+    initialize_database(database)
 
     with database.connect() as connection:
         assert [
@@ -526,7 +541,7 @@ def test_v26_preserves_weibo_side_of_mixed_batch(tmp_path: Path) -> None:
     _seed_v25(database)
     _seed_mixed_batch(database)
 
-    database.initialize()
+    initialize_database(database)
 
     with database.connect() as connection:
         assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
@@ -621,7 +636,7 @@ def test_v26_removes_completed_obsolete_report_graph(tmp_path: Path) -> None:
             (node_id, timestamp, report_id),
         )
 
-    database.initialize()
+    initialize_database(database)
 
     with database.connect() as connection:
         assert [

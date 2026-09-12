@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from longtian_api.services.gallery_component import (
+from opinion_workbench_api.services.gallery_component import (
     GalleryComponent,
     _gallery_worker_command,
 )
@@ -51,14 +51,16 @@ def test_windows_zip_is_default_and_installer_is_opt_in():
     assert "if ($Installer -and -not (Find-InnoCompiler))" in build
     assert "if ($Installer -and $null -eq (Find-InnoCompiler))" in build
     assert "    Build-Backend\n    Build-Portable\n" in build
-    assert '"dist\\windows\\Longtian-Windows.zip"' in build
+    assert '"dist\\windows\\OpinionWorkbench-Windows.zip"' in build
     portable = build.split("function Build-Portable {", 1)[1].split(
         "function Build-Installer {", 1
     )[0]
-    assert '"app\\Longtian"' in portable
-    assert "LongtianGalleryWorker.exe" in portable
+    assert '"app\\OpinionWorkbench"' in portable
+    assert "OpinionWorkbenchGalleryWorker.exe" in portable
     assert "[System.IO.Compression.ZipFile]::CreateFromDirectory(" in portable
-    assert "$true" in portable  # Keep a containing Longtian directory in the ZIP.
+    assert (
+        "$true" in portable
+    )  # Keep a containing OpinionWorkbench directory in the ZIP.
     assert '"windows\\portable-readme.txt"' in toolkit
     assert (REPO_ROOT / "windows" / "portable-readme.txt").is_file()
 
@@ -172,19 +174,21 @@ def test_pinned_mise_runtime_resolves_the_build_toolchain():
 
 
 def test_frozen_distribution_contains_a_console_worker_and_hidden_launch_contract():
-    spec = (REPO_ROOT / "windows" / "longtian.spec").read_text(encoding="utf-8")
+    spec = (REPO_ROOT / "windows" / "opinion-workbench.spec").read_text(
+        encoding="utf-8"
+    )
     component = (
         REPO_ROOT
         / "backend"
         / "src"
-        / "longtian_api"
+        / "opinion_workbench_api"
         / "services"
         / "gallery_component.py"
     ).read_text(encoding="utf-8")
 
-    assert 'name="LongtianGalleryWorker"' in spec
+    assert 'name="OpinionWorkbenchGalleryWorker"' in spec
     assert "console=True" in spec
-    assert "LongtianGalleryWorker.exe" in component
+    assert "OpinionWorkbenchGalleryWorker.exe" in component
     assert "CREATE_NO_WINDOW" in component
 
 
@@ -201,7 +205,7 @@ def test_gallery_worker_receives_only_runtime_environment(monkeypatch):
         "TEMP": r"C:\Temp",
         "TMP": r"C:\Temp",
         "LANG": "zh_CN.UTF-8",
-        "LONGTIAN_UNRELATED_SECRET": "must-not-cross-process-boundary",
+        "OPINION_WORKBENCH_UNRELATED_SECRET": "must-not-cross-process-boundary",
     }.items():
         monkeypatch.setenv(key, value)
 
@@ -213,13 +217,13 @@ def test_gallery_worker_receives_only_runtime_environment(monkeypatch):
     assert environment["WINDIR"] == r"C:\Windows"
     assert environment["TEMP"] == r"C:\Temp"
     assert environment["TMP"] == r"C:\Temp"
-    assert "LONGTIAN_UNRELATED_SECRET" not in environment
+    assert "OPINION_WORKBENCH_UNRELATED_SECRET" not in environment
 
 
 def test_gallery_worker_line_protocol_reaches_the_broker_before_returning():
     environment = os.environ.copy()
     process = subprocess.Popen(
-        [sys.executable, "-I", "-u", "-m", "longtian_api.gallery_worker"],
+        [sys.executable, "-I", "-u", "-m", "opinion_workbench_api.gallery_worker"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
@@ -264,20 +268,23 @@ def test_gallery_worker_line_protocol_reaches_the_broker_before_returning():
 def test_frozen_worker_command_selects_the_sidecar_console_executable(
     tmp_path, monkeypatch
 ):
-    from longtian_api.services import gallery_component
+    from opinion_workbench_api.services import gallery_component
 
-    executable = tmp_path / "Longtian"
+    executable = tmp_path / "OpinionWorkbench"
     executable.write_text("")
-    worker = executable.with_name("LongtianGalleryWorker")
+    worker = executable.with_name("OpinionWorkbenchGalleryWorker")
     worker.write_text("")
     monkeypatch.setattr(gallery_component.sys, "frozen", True, raising=False)
     monkeypatch.setattr(gallery_component.sys, "executable", str(executable))
 
-    assert _gallery_worker_command() == (str(worker), "--longtian-gallery-worker")
+    assert _gallery_worker_command() == (
+        str(worker),
+        "--opinion-workbench-gallery-worker",
+    )
 
 
 def test_development_worker_command_keeps_json_pipe_arguments():
     command = _gallery_worker_command()
 
     assert command[0] == sys.executable
-    assert command[1:] == ("-I", "-u", "-m", "longtian_api.gallery_worker")
+    assert command[1:] == ("-I", "-u", "-m", "opinion_workbench_api.gallery_worker")

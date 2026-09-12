@@ -198,7 +198,7 @@ describe('报告生成页面', () => {
         .value,
     ).toContain('舆情分析报告')
     expect(
-      screen.getByRole('note', { name: '内容理解提示词默认模板预览' }),
+      screen.getByRole('note', { name: '总结提示词默认模板预览' }),
     ).toHaveTextContent(analysisSettingsFixture().initial_prompt.instructions)
 
     await user.click(screen.getByRole('button', { name: '确认生成报告' }))
@@ -281,7 +281,7 @@ describe('报告生成页面', () => {
 
   it('persists the selection draft for a remount in the same browser session', async () => {
     sessionStorage.setItem(
-      'longtian:report-selection-draft:v1',
+      'opinion-workbench:report-selection-draft:v1',
       JSON.stringify([11]),
     )
     renderResults()

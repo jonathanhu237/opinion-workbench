@@ -9,19 +9,22 @@ from uuid import uuid4
 import pytest
 from enrichment_fixtures import content_payload
 from fastapi.testclient import TestClient
+from fixture_support import initialize_database
 from summary_fixtures import seed_run
 
-from longtian_api.database import Database, DatabaseVersionError
-from longtian_api.main import create_app
-from longtian_api.repositories.content_materials import ContentMaterialRepository
-from longtian_api.repositories.search_runs import SearchRunRepository
-from longtian_api.services import media_cleanup
-from longtian_api.services.enrichment_models import (
+from opinion_workbench_api.database import Database, DatabaseVersionError
+from opinion_workbench_api.main import create_app
+from opinion_workbench_api.repositories.content_materials import (
+    ContentMaterialRepository,
+)
+from opinion_workbench_api.repositories.search_runs import SearchRunRepository
+from opinion_workbench_api.services import media_cleanup
+from opinion_workbench_api.services.enrichment_models import (
     EnrichedContent,
     evidence_fingerprint,
 )
-from longtian_api.services.media_cleanup import purge_managed_media
-from longtian_api.services.monitoring_rules import MonitoringRuleService
+from opinion_workbench_api.services.media_cleanup import purge_managed_media
+from opinion_workbench_api.services.monitoring_rules import MonitoringRuleService
 
 
 def _cache_tables(connection: sqlite3.Connection) -> None:
@@ -89,15 +92,13 @@ def _owned_original(database: Database, data: bytes = b"media") -> Path:
 
 def test_v37_upgrade_removes_cache_tables_but_keeps_text_and_history(tmp_path):
     database = Database(tmp_path / "legacy.sqlite3")
-    database.initialize()
+    initialize_database(database)
     source_run_id = seed_run(database, 1)
     source = SearchRunRepository(database).get_result_source(
         run_id=source_run_id, result_id=1
     )
     content = EnrichedContent.model_validate(
-        content_payload(
-            identity=source.platform_content_id, url=source.content_url
-        )
+        content_payload(identity=source.platform_content_id, url=source.content_url)
     )
     ContentMaterialRepository(database).save(1, content)
 
@@ -106,26 +107,33 @@ def test_v37_upgrade_removes_cache_tables_but_keeps_text_and_history(tmp_path):
         original = _owned_original(database)
         connection.execute("PRAGMA user_version = 37")
 
-    database.initialize()
-    database.initialize()
+    initialize_database(database)
+    initialize_database(database)
 
     with database.connect() as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 38
         assert connection.execute(
             "SELECT content_json FROM content_materials WHERE content_id=1"
         ).fetchone()[0]
-        assert connection.execute(
-            "SELECT id FROM search_contents WHERE id=1"
-        ).fetchone()[0] == 1
+        assert (
+            connection.execute("SELECT id FROM search_contents WHERE id=1").fetchone()[
+                0
+            ]
+            == 1
+        )
         for table in (
             "media_cache_owner",
             "media_cache_policy",
             "media_cache_entries",
             "media_cache_bindings",
         ):
-            assert connection.execute(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
-            ).fetchone() is None
+            assert (
+                connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+                    (table,),
+                ).fetchone()
+                is None
+            )
     assert not original.exists()
 
     material = ContentMaterialRepository(database).material(
@@ -139,7 +147,7 @@ def test_v37_upgrade_removes_cache_tables_but_keeps_text_and_history(tmp_path):
 
 def test_cleanup_removes_owned_files_and_preserves_mixed_entries(tmp_path):
     database = Database(tmp_path / "cleanup.sqlite3")
-    database.initialize()
+    initialize_database(database)
     with database.connect() as connection:
         _cache_tables(connection)
     managed = _owned_original(database)
@@ -195,7 +203,7 @@ def test_cleanup_removes_owned_files_and_preserves_mixed_entries(tmp_path):
 
 def test_v37_upgrade_keeps_unmanaged_mixed_entries_without_blocking(tmp_path):
     database = Database(tmp_path / "mixed-upgrade.sqlite3")
-    database.initialize()
+    initialize_database(database)
     with database.connect() as connection:
         _cache_tables(connection)
         managed = _owned_original(database)
@@ -204,13 +212,16 @@ def test_v37_upgrade_keeps_unmanaged_mixed_entries_without_blocking(tmp_path):
         note.chmod(0o600)
         connection.execute("PRAGMA user_version = 37")
 
-    database.initialize()
+    initialize_database(database)
 
     with database.connect() as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 38
-        assert connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE name='media_cache_entries'"
-        ).fetchone() is None
+        assert (
+            connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE name='media_cache_entries'"
+            ).fetchone()
+            is None
+        )
     assert not managed.exists()
     assert note.exists()
 
@@ -219,7 +230,7 @@ def test_v37_upgrade_retries_owned_delete_after_transient_failure(
     tmp_path, monkeypatch
 ):
     database = Database(tmp_path / "retry-upgrade.sqlite3")
-    database.initialize()
+    initialize_database(database)
     with database.connect() as connection:
         _cache_tables(connection)
         managed = _owned_original(database)
@@ -232,27 +243,33 @@ def test_v37_upgrade_retries_owned_delete_after_transient_failure(
 
     monkeypatch.setattr(media_cleanup.os, "unlink", fail_unlink)
     with pytest.raises(DatabaseVersionError, match="media cleanup"):
-        database.initialize()
+        initialize_database(database)
     with database.connect() as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 37
-        assert connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE name='media_cache_entries'"
-        ).fetchone() is not None
+        assert (
+            connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE name='media_cache_entries'"
+            ).fetchone()
+            is not None
+        )
     assert managed.exists()
 
     monkeypatch.setattr(media_cleanup.os, "unlink", real_unlink)
-    database.initialize()
+    initialize_database(database)
     with database.connect() as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 38
-        assert connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE name='media_cache_entries'"
-        ).fetchone() is None
+        assert (
+            connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE name='media_cache_entries'"
+            ).fetchone()
+            is None
+        )
     assert not managed.exists()
 
 
 def test_v37_upgrade_retries_owned_delete_after_scan_failure(tmp_path, monkeypatch):
     database = Database(tmp_path / "scan-retry-upgrade.sqlite3")
-    database.initialize()
+    initialize_database(database)
     with database.connect() as connection:
         _cache_tables(connection)
         managed = _owned_original(database)
@@ -266,21 +283,27 @@ def test_v37_upgrade_retries_owned_delete_after_scan_failure(tmp_path, monkeypat
 
     monkeypatch.setattr(media_cleanup.os, "scandir", fail_scandir)
     with pytest.raises(DatabaseVersionError, match="media cleanup"):
-        database.initialize()
+        initialize_database(database)
     with database.connect() as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 37
-        assert connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE name='media_cache_entries'"
-        ).fetchone() is not None
+        assert (
+            connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE name='media_cache_entries'"
+            ).fetchone()
+            is not None
+        )
     assert managed.exists()
 
     monkeypatch.setattr(media_cleanup.os, "scandir", real_scandir)
-    database.initialize()
+    initialize_database(database)
     with database.connect() as connection:
         assert connection.execute("PRAGMA user_version").fetchone()[0] == 38
-        assert connection.execute(
-            "SELECT 1 FROM sqlite_master WHERE name='media_cache_entries'"
-        ).fetchone() is None
+        assert (
+            connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE name='media_cache_entries'"
+            ).fetchone()
+            is None
+        )
     assert not managed.exists()
 
 

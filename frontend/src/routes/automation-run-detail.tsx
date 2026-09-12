@@ -306,7 +306,7 @@ function SnapshotCard({ run }: { run: AutomationRun }) {
         </div>
         <div className="grid gap-3 sm:col-span-2 sm:grid-cols-2">
           <div>
-            <p className="text-muted-foreground">内容理解提示词</p>
+            <p className="text-muted-foreground">总结提示词</p>
             <p className="mt-1 rounded-lg border bg-muted/25 p-3 leading-6">
               {run.snapshot.initial_prompt?.mode === 'default'
                 ? '系统默认模板'
@@ -314,7 +314,7 @@ function SnapshotCard({ run }: { run: AutomationRun }) {
             </p>
           </div>
           <div>
-            <p className="text-muted-foreground">相关性判断与报告提示词</p>
+            <p className="text-muted-foreground">报告提示词</p>
             <p className="mt-1 rounded-lg border bg-muted/25 p-3 leading-6">
               {run.snapshot.report_prompt?.mode === 'default'
                 ? '系统默认模板'

@@ -11,15 +11,18 @@ from fastapi.testclient import TestClient
 from pydantic import SecretStr
 from schema_fixtures import create_legacy_schema
 
-from longtian_api.database import CURRENT_DATABASE_VERSION, Database
-from longtian_api.main import create_app
-from longtian_api.repositories.ai_settings import AISettingsRepository
-from longtian_api.schemas.ai_settings import AISettingsUpdate
-from longtian_api.services.ai_client import AIConfiguration
-from longtian_api.services.ai_credentials import AICredentialError, AICredentialStore
-from longtian_api.services.ai_errors import AI_ERROR_CONTRACTS, AIError
-from longtian_api.services.ai_settings import AISettingsService
-from longtian_api.services.monitoring_rules import MonitoringRuleService
+from opinion_workbench_api.database import CURRENT_DATABASE_VERSION, Database
+from opinion_workbench_api.main import create_app
+from opinion_workbench_api.repositories.ai_settings import AISettingsRepository
+from opinion_workbench_api.schemas.ai_settings import AISettingsUpdate
+from opinion_workbench_api.services.ai_client import AIConfiguration
+from opinion_workbench_api.services.ai_credentials import (
+    AICredentialError,
+    AICredentialStore,
+)
+from opinion_workbench_api.services.ai_errors import AI_ERROR_CONTRACTS, AIError
+from opinion_workbench_api.services.ai_settings import AISettingsService
+from opinion_workbench_api.services.monitoring_rules import MonitoringRuleService
 
 KEY = "fake-only-credential-sentinel"
 URL = "https://api.example.com/v1"

@@ -112,11 +112,11 @@ import { searchPlatformPresenters } from '@/routes/search-run-presenters'
 import { cn } from '@/lib/utils'
 import { saveSummaryPreference } from '@/lib/api/summary-preferences'
 
-const selectionDraftKey = 'longtian:report-selection-draft:v1'
+const selectionDraftKey = 'opinion-workbench:report-selection-draft:v1'
 const selectionPageSize = 5
-const pendingIntentKey = 'longtian:report-generation:pending-intent:v1'
+const pendingIntentKey = 'opinion-workbench:report-generation:pending-intent:v1'
 const summaryConcurrencyPreferenceKey =
-  'longtian:report-generation:summary-concurrency:v1'
+  'opinion-workbench:report-generation:summary-concurrency:v1'
 const DEFAULT_SUMMARY_CONCURRENCY = 8
 
 type SummaryConcurrency = z.infer<typeof summaryConcurrencySchema>
@@ -831,7 +831,7 @@ function ReportGenerationWizard({
               {step === 2 && settings.data && (
                 <PromptChoiceField
                   id="report-wizard-initial-prompt"
-                  label="内容分析提示词"
+                  label="总结提示词"
                   description="用于理解每条内容并生成单条总结；已有可用总结会复用，修改只影响本次生成。"
                   value={initialPrompt}
                   onChange={setInitialPrompt}
@@ -873,7 +873,7 @@ function ReportGenerationWizard({
                   {settings.data ? (
                     <PromptChoiceField
                       id="report-wizard-report-prompt"
-                      label="报告总结提示词"
+                      label="报告提示词"
                       description="用于汇总已选内容并组织整份报告；修改只影响本次生成。"
                       value={reportPrompt}
                       onChange={setReportPrompt}

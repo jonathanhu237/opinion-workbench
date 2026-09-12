@@ -3,10 +3,12 @@
 from fastapi.testclient import TestClient
 from test_native_weibo_discovery import environment
 
-from longtian_api.schemas.automation_workflows import AutomationTaskCreateRequest
-from longtian_api.schemas.search_batches import SearchBatchCreate
-from longtian_api.schemas.search_runs import SearchRunCreate
-from longtian_api.search_platforms import SEARCH_PLATFORMS
+from opinion_workbench_api.schemas.automation_workflows import (
+    AutomationTaskCreateRequest,
+)
+from opinion_workbench_api.schemas.search_batches import SearchBatchCreate
+from opinion_workbench_api.schemas.search_runs import SearchRunCreate
+from opinion_workbench_api.search_platforms import SEARCH_PLATFORMS
 
 
 def test_platform_catalog_contains_all_supported_platforms(tmp_path):
