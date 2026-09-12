@@ -85,5 +85,5 @@ jobs:
           files: |
             assets/windows-portable/Longtian-*-Windows-x64.zip
             assets/windows-portable/Longtian-*-Windows-x64.zip.sha256
-            assets/macos-portable/Longtian-macOS-arm64.zip
-            assets/macos-portable/Longtian-macOS-arm64.zip.sha256
+            assets/macos-portable/Longtian-*-macOS-arm64.zip
+            assets/macos-portable/Longtian-*-macOS-arm64.zip.sha256
