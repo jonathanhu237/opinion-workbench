@@ -1,6 +1,6 @@
 # 舆情工作台改名验证记录
 
-状态：代码与本机验证完成；未提交、未推送，未创建或上传 Release。
+状态：待用户验收（代码与本机验证及 v0.2.0 GitHub Actions 发行草稿已完成）。
 
 ## 已完成
 
@@ -29,8 +29,29 @@
 - macOS ZIP 发行审计：包内 478 个成员，无 `data`、`runtime`、`logs`、`secrets`、`browser`、数据库或日志成员；`BUILD-METADATA.txt` 为 `version=dev`、固定基线 `bf4b6ba964d8fabdcc1a711e6abca46a11d192ef`、`architecture=arm64`。当前本机 SHA-256：`e0e9a2aab7bec809a9ffcf178a3b43cb28d8b3c429d2c066ec9d92fbde515748`。
 - 独立临时目录隔离检查：模拟旧 `longtian.sqlite3`、凭据和 Chrome Cookie 后启动新应用，新规则列表为空，旧文件内容未改变；同一场景已有 `test_new_data_root_keeps_synthetic_legacy_material_isolated` 可复现。
 
-## 尚未执行
+## 发布前未执行项（已由下述发布记录更新）
 
-- Windows x64 原生构建与解压启动需要 Windows runner；工作流和命名契约已更新，但本机未冒充 Windows 验收。
-- 未创建标签、未推送提交、未上传或公开 Release 草稿；这些发布动作留给父会话审核。
+- Windows x64 原生构建与解压启动需要 Windows runner；工作流和命名契约已更新，但本机当时未冒充 Windows 验收。
+- 发布前未创建标签、未推送提交、未上传或公开 Release 草稿；这些状态已由下述 v0.2.0 发布执行记录更新。
 - 未验证 Finder/Explorer 双击和系统安全提示。
+
+## v0.2.0 发布执行记录（2026-09-12）
+
+当前发布状态：**待用户验收**。草稿保持未公开，未执行 Finder/Explorer 双击或系统安全提示验收。
+
+- 标签 `v0.2.0` 指向提交 `fc2ca91a3ec1b66e7be9e1337f09bee68bfde353`；GitHub Actions 运行：[34704345345](https://github.com/jonathanhu237/opinion-workbench/actions/runs/34704345345)，Windows、macOS、draft 三个作业均成功。
+- Release 草稿：[v0.2.0](https://github.com/jonathanhu237/opinion-workbench/releases/tag/untagged-487e9801ff745d8c1af3)，`draft=true`，目标提交为上述 SHA，`published_at=null`。
+- 从草稿下载的四个资产存放于临时目录 `/tmp/opinion-workbench-v0.2.0.In3cPo`；资产名称、大小和下载文件 SHA-256：
+
+  | 资产 | 字节数 | 下载文件 SHA-256 |
+  | --- | ---: | --- |
+  | `OpinionWorkbench-v0.2.0-Windows-x64.zip` | 88,788,755 | `f94a1436abfb9be22bb1b420dd0f5ef9a842ea3655e0ff3b30db7320fc1386d6` |
+  | `OpinionWorkbench-v0.2.0-Windows-x64.zip.sha256` | 107 | `04a5fd1dd5a742209897875b3c86a75a85278a387f5f43bccedf24376f9970b1` |
+  | `OpinionWorkbench-v0.2.0-macOS-arm64.zip` | 89,513,168 | `4db8822ae69c8a8a678be537e652920b180991fbc3a0a471f9062924638e9c34` |
+  | `OpinionWorkbench-v0.2.0-macOS-arm64.zip.sha256` | 106 | `75f68dd167ff0b3d87b847388f8349b30294cf73eaef49a32c434b38cd32fd17` |
+
+- 运行 `python3 scripts/validate_portable_release.py v0.2.0 fc2ca91a3ec1b66e7be9e1337f09bee68bfde353 --assets /tmp/opinion-workbench-v0.2.0.In3cPo`：`Portable assets verified; draft-only upload permitted.`
+- 直接调用现有 `audit_archive`：Windows `383` 个成员、元数据 `version=v0.2.0` / `source=fc2ca91a3ec1b66e7be9e1337f09bee68bfde353` / `architecture=x86_64`，macOS `407` 个成员、元数据 `version=v0.2.0` / `source=fc2ca91a3ec1b66e7be9e1337f09bee68bfde353` / `architecture=arm64`；两项均通过。
+- 通过现有 `validate_assets`：`VALIDATE_ASSETS: passed`。解压后二进制识别为 Windows PE32+ x86-64 与 macOS Mach-O arm64；未执行真实采集、登录或付费模型调用。
+
+未完成项：需要用户人工检查并决定是否公开 Release；Finder/Explorer 双击、系统安全提示、真实平台采集、登录和付费模型仍未验收。CI 仅有 GitHub Actions 的 Node.js 20 弃用提示，不影响本次成功结论。
